@@ -1,30 +1,32 @@
-"""Vector search over chunks."""
+"""Vector search over chunks — now with computed access resolution."""
 
 from uuid import UUID
 
-from sqlalchemy import select, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.engine.access import get_accessible_source_ids, log_access
 from backend.engine.embeddings import embed_text
-from backend.models.schemas import AgentPermission, Chunk, Source
+from backend.models.schemas import Agent, Chunk, Source
 
 
 async def search_context(
     db: AsyncSession,
     query: str,
-    agent_id: UUID,
+    agent: Agent,
     top_k: int = 5,
 ) -> list[dict]:
     """
-    Search for relevant context chunks scoped to the agent's permissions.
+    Search for relevant context chunks using computed access resolution.
 
-    Returns ranked results with content, source info, and similarity score.
+    Access is determined by:
+    1. Manual overrides (grant/deny)
+    2. Clearance check (agent clearance >= source classification)
+    3. Semantic relevance (agent purpose vs source summary)
+    4. Domain overlap
     """
-    # Get sources this agent can access
-    perm_result = await db.execute(
-        select(AgentPermission.source_id).where(AgentPermission.agent_id == agent_id)
-    )
-    allowed_source_ids = [row[0] for row in perm_result.fetchall()]
+    # Compute accessible sources for this agent
+    allowed_source_ids = await get_accessible_source_ids(db, agent)
 
     if not allowed_source_ids:
         return []
@@ -33,7 +35,6 @@ async def search_context(
     query_embedding = embed_text(query)
 
     # Vector similarity search with pgvector
-    # Using cosine distance (<=> operator)
     stmt = (
         select(
             Chunk.id,
@@ -42,6 +43,7 @@ async def search_context(
             Chunk.source_id,
             Source.name.label("source_name"),
             Source.source_type,
+            Source.classification.label("source_classification"),
             Chunk.embedding.cosine_distance(query_embedding).label("distance"),
         )
         .join(Source, Chunk.source_id == Source.id)
@@ -53,6 +55,23 @@ async def search_context(
     result = await db.execute(stmt)
     rows = result.fetchall()
 
+    # Log access for audit
+    accessed_source_ids = set()
+    for row in rows:
+        if row.source_id not in accessed_source_ids:
+            await log_access(
+                db=db,
+                agent_id=agent.id,
+                source_id=row.source_id,
+                query=query,
+                decision="granted",
+                reason="Computed access — search result returned",
+                relevance_score=round(1 - row.distance, 4),
+            )
+            accessed_source_ids.add(row.source_id)
+
+    await db.commit()
+
     return [
         {
             "chunk_id": str(row.id),
@@ -61,7 +80,8 @@ async def search_context(
             "source_id": str(row.source_id),
             "source_name": row.source_name,
             "source_type": row.source_type,
-            "relevance_score": round(1 - row.distance, 4),  # Convert distance to similarity
+            "source_classification": row.source_classification,
+            "relevance_score": round(1 - row.distance, 4),
         }
         for row in rows
     ]
