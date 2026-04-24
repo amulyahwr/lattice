@@ -22,6 +22,7 @@ class AgentResponse(BaseModel):
     id: str
     name: str
     api_key: str
+    source_ids: list[str] = []
 
 
 class GrantAccessRequest(BaseModel):
@@ -43,18 +44,23 @@ async def create_agent(
     db.add(agent)
     await db.commit()
 
-    return AgentResponse(id=str(agent.id), name=agent.name, api_key=agent.api_key)
+    return AgentResponse(id=str(agent.id), name=agent.name, api_key=agent.api_key, source_ids=[])
 
 
 @router.get("/", response_model=list[AgentResponse])
 async def list_agents(db: AsyncSession = Depends(get_db)):
-    """List all agents."""
+    """List all agents with their granted source IDs."""
     result = await db.execute(select(Agent))
     agents = result.scalars().all()
-    return [
-        AgentResponse(id=str(a.id), name=a.name, api_key=a.api_key)
-        for a in agents
-    ]
+
+    responses = []
+    for agent in agents:
+        perm_result = await db.execute(
+            select(AgentPermission.source_id).where(AgentPermission.agent_id == agent.id)
+        )
+        source_ids = [str(row[0]) for row in perm_result.fetchall()]
+        responses.append(AgentResponse(id=str(agent.id), name=agent.name, api_key=agent.api_key, source_ids=source_ids))
+    return responses
 
 
 @router.post("/{agent_id}/grant")
@@ -73,6 +79,15 @@ async def grant_access(
     source_result = await db.execute(select(Source).where(Source.id == uuid.UUID(request.source_id)))
     if not source_result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Source not found")
+
+    existing = await db.execute(
+        select(AgentPermission).where(
+            AgentPermission.agent_id == uuid.UUID(agent_id),
+            AgentPermission.source_id == uuid.UUID(request.source_id),
+        )
+    )
+    if existing.scalar_one_or_none():
+        return {"status": "already_granted", "agent_id": agent_id, "source_id": request.source_id}
 
     permission = AgentPermission(
         id=uuid.uuid4(),

@@ -21,7 +21,7 @@ class Source(Base):
     name = Column(String(255), nullable=False)
     source_type = Column(String(50), nullable=False)  # "pdf", "postgres", etc.
     metadata_ = Column("metadata", Text, nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     chunks = relationship("Chunk", back_populates="source", cascade="all, delete-orphan")
 
@@ -37,7 +37,7 @@ class Chunk(Base):
     chunk_index = Column(Integer, nullable=False)
     embedding = Column(Vector(settings.embedding_dim))
     metadata_ = Column("metadata", Text, nullable=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     source = relationship("Source", back_populates="chunks")
 
@@ -50,7 +50,7 @@ class Agent(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String(255), nullable=False, unique=True)
     api_key = Column(String(255), nullable=False, unique=True)
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     permissions = relationship("AgentPermission", back_populates="agent", cascade="all, delete-orphan")
 

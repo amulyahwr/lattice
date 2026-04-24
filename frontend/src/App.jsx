@@ -12,6 +12,7 @@ function App() {
   const [selectedAgent, setSelectedAgent] = useState(null);
   const [searching, setSearching] = useState(false);
   const [newAgentName, setNewAgentName] = useState("");
+  const [creatingAgent, setCreatingAgent] = useState(false);
   const [error, setError] = useState(null);
 
   const refresh = async () => {
@@ -56,6 +57,7 @@ function App() {
 
   const handleCreateAgent = async () => {
     if (!newAgentName.trim()) return;
+    setCreatingAgent(true);
     setError(null);
     try {
       const agent = await api.createAgent(newAgentName);
@@ -63,16 +65,29 @@ function App() {
       await refresh();
       setSelectedAgent(agent);
     } catch (e) {
-      setError(e.message);
+      setError(e.message || String(e));
+    } finally {
+      setCreatingAgent(false);
     }
   };
 
   const handleGrant = async (agentId, sourceId) => {
     try {
       await api.grantAccess(agentId, sourceId);
+      await refresh();
       setError(null);
     } catch (e) {
-      setError(e.message);
+      setError(e.message || String(e));
+    }
+  };
+
+  const handleRevoke = async (agentId, sourceId) => {
+    try {
+      await api.revokeAccess(agentId, sourceId);
+      await refresh();
+      setError(null);
+    } catch (e) {
+      setError(e.message || String(e));
     }
   };
 
@@ -134,6 +149,11 @@ function App() {
         {/* Search Tab */}
         {tab === "search" && (
           <div className="space-y-6">
+            {selectedAgent && agents.find(a => a.id === selectedAgent.id)?.source_ids?.length === 0 && (
+              <div className="p-3 bg-yellow-900/20 border border-yellow-800 rounded-lg text-yellow-300 text-sm">
+                This agent has no source access — go to the <button onClick={() => setTab("agents")} className="underline">Agents tab</button> to grant access.
+              </div>
+            )}
             <div className="flex gap-3">
               <select
                 value={selectedAgent?.id || ""}
@@ -253,9 +273,10 @@ function App() {
               />
               <button
                 onClick={handleCreateAgent}
-                className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 px-4 py-2.5 rounded-lg text-sm font-medium transition-colors"
+                disabled={creatingAgent || !newAgentName.trim()}
+                className="flex items-center gap-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed px-4 py-2.5 rounded-lg text-sm font-medium transition-colors"
               >
-                <Plus size={16} /> Create Agent
+                <Plus size={16} /> {creatingAgent ? "Creating..." : "Create Agent"}
               </button>
             </div>
 
@@ -268,18 +289,30 @@ function App() {
                     <code className="bg-gray-800 px-2 py-0.5 rounded">{agent.api_key.slice(0, 12)}...</code>
                   </div>
                 </div>
-                {sources.length > 0 && (
-                  <div className="flex flex-wrap gap-2">
-                    {sources.map((s) => (
-                      <button
-                        key={s.id}
-                        onClick={() => handleGrant(agent.id, s.id)}
-                        className="text-xs bg-gray-800 hover:bg-indigo-600 px-3 py-1.5 rounded-md transition-colors"
-                      >
-                        + Grant: {s.name}
-                      </button>
-                    ))}
+                {sources.length > 0 ? (
+                  <div className="space-y-1.5">
+                    <p className="text-xs text-gray-500">Source access</p>
+                    <div className="flex flex-wrap gap-2">
+                      {sources.map((s) => {
+                        const granted = agent.source_ids?.includes(s.id);
+                        return (
+                          <button
+                            key={s.id}
+                            onClick={() => granted ? handleRevoke(agent.id, s.id) : handleGrant(agent.id, s.id)}
+                            className={`text-xs px-3 py-1.5 rounded-md transition-colors border ${
+                              granted
+                                ? "bg-indigo-900/40 border-indigo-700 text-indigo-300 hover:bg-red-900/30 hover:border-red-700 hover:text-red-300"
+                                : "bg-gray-800 border-gray-700 text-gray-400 hover:bg-indigo-600 hover:border-indigo-600 hover:text-white"
+                            }`}
+                          >
+                            {granted ? `✓ ${s.name}` : `+ ${s.name}`}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
+                ) : (
+                  <p className="text-xs text-gray-600">No sources uploaded yet.</p>
                 )}
               </div>
             ))}
