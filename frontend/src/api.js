@@ -104,6 +104,11 @@ export async function denyAccess(agentId, sourceId) {
   return throwIfError(res);
 }
 
+export async function deleteAgent(agentId) {
+  const res = await fetch(`${BASE}/agents/${agentId}`, { method: "DELETE" });
+  return throwIfError(res);
+}
+
 export async function revokeAccess(agentId, sourceId) {
   const res = await fetch(`${BASE}/agents/${agentId}/revoke/${sourceId}`, {
     method: "DELETE",

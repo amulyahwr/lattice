@@ -1,13 +1,32 @@
-"""Vector search over chunks — now with computed access resolution."""
+"""Vector search over chunks — access via explicit grants only.
+
+Computed access is used for RECOMMENDATIONS, not search.
+An agent can only search sources it has been explicitly granted access to
+(via human-approved grants in the agent_permissions table).
+"""
 
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.engine.access import get_accessible_source_ids, log_access
+from backend.engine.access import log_access
 from backend.engine.embeddings import embed_text
-from backend.models.schemas import Agent, Chunk, Source
+from backend.models.schemas import Agent, AgentPermission, Chunk, Source
+
+
+async def get_granted_source_ids(
+    db: AsyncSession,
+    agent: Agent,
+) -> list[UUID]:
+    """Get source IDs this agent has been explicitly granted access to."""
+    result = await db.execute(
+        select(AgentPermission.source_id).where(
+            AgentPermission.agent_id == agent.id,
+            AgentPermission.permission_type == "grant",
+        )
+    )
+    return [row[0] for row in result.fetchall()]
 
 
 async def search_context(
@@ -17,16 +36,14 @@ async def search_context(
     top_k: int = 5,
 ) -> list[dict]:
     """
-    Search for relevant context chunks using computed access resolution.
+    Search for relevant context chunks.
 
-    Access is determined by:
-    1. Manual overrides (grant/deny)
-    2. Clearance check (agent clearance >= source classification)
-    3. Semantic relevance (agent purpose vs source summary)
-    4. Domain overlap
+    Access is determined ONLY by explicit grants in the permissions table.
+    Computed access (semantic match, clearance, domains) is used for
+    recommendations — not here. A human must approve before an agent gets access.
     """
-    # Compute accessible sources for this agent
-    allowed_source_ids = await get_accessible_source_ids(db, agent)
+    # Only use explicitly granted sources
+    allowed_source_ids = await get_granted_source_ids(db, agent)
 
     if not allowed_source_ids:
         return []
@@ -65,7 +82,7 @@ async def search_context(
                 source_id=row.source_id,
                 query=query,
                 decision="granted",
-                reason="Computed access — search result returned",
+                reason="Explicit grant — search result returned",
                 relevance_score=round(1 - row.distance, 4),
             )
             accessed_source_ids.add(row.source_id)

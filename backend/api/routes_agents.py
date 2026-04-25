@@ -274,6 +274,22 @@ async def deny_access(
     return {"status": "denied", "agent_id": agent_id, "source_id": request.source_id}
 
 
+@router.delete("/{agent_id}")
+async def delete_agent(
+    agent_id: str,
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete an agent and all its permissions."""
+    result = await db.execute(select(Agent).where(Agent.id == uuid.UUID(agent_id)))
+    agent = result.scalar_one_or_none()
+    if not agent:
+        raise HTTPException(status_code=404, detail="Agent not found")
+
+    await db.delete(agent)
+    await db.commit()
+    return {"status": "deleted", "agent_id": agent_id}
+
+
 @router.delete("/{agent_id}/revoke/{source_id}")
 async def revoke_override(
     agent_id: str,
