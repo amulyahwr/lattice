@@ -1,10 +1,11 @@
 import { useState, useEffect } from "react";
 import {
   Upload, Search, Shield, Database, Trash2, Plus, Key, Sparkles,
-  ChevronDown, ChevronUp, AlertTriangle, Check, X, Zap, Save, Pencil, Map,
+  ChevronDown, ChevronUp, AlertTriangle, Check, X, Zap, Save, Pencil, Map, GitFork,
 } from "lucide-react";
 import * as api from "./api";
 import LatticeMap from "./components/LatticeMap";
+import GraphExplorer from "./components/GraphExplorer";
 
 const CLASSIFICATIONS = ["public", "internal", "confidential", "restricted"];
 
@@ -26,7 +27,7 @@ function classificationColor(c) {
 }
 
 function App() {
-  const [tab, setTab] = useState("map");
+  const [tab, setTab] = useState("graph");
   const [sources, setSources] = useState([]);
   const [agents, setAgents] = useState([]);
   const [uploading, setUploading] = useState(false);
@@ -58,12 +59,23 @@ function App() {
   const [agentEdit, setAgentEdit] = useState({});
   const [savingAgent, setSavingAgent] = useState(false);
 
+  // Graph stats
+  const [graphStats, setGraphStats] = useState(null);
+
+  // Upload result (graph extraction info)
+  const [lastUploadResult, setLastUploadResult] = useState(null);
+
   const refresh = async () => {
     try {
       const [s, a] = await Promise.all([api.listSources(), api.listAgents()]);
       setSources(s);
       setAgents(a);
       if (!selectedAgent && a.length > 0) setSelectedAgent(a[0]);
+      // Refresh graph stats
+      try {
+        const stats = await api.getGraphStats();
+        setGraphStats(stats);
+      } catch {}
     } catch (e) {
       setError(e.message);
     }
@@ -78,6 +90,7 @@ function App() {
     setError(null);
     try {
       const source = await api.uploadPDF(file);
+      setLastUploadResult(source.graph_stats);
       await refresh();
       const recs = await api.getSourceRecommendations(source.id);
       if (recs.length > 0) {
@@ -294,6 +307,7 @@ function App() {
   };
 
   const tabs = [
+    { id: "graph", label: "Graph", icon: GitFork },
     { id: "map", label: "Map", icon: Map },
     { id: "search", label: "Search", icon: Search },
     { id: "sources", label: "Sources", icon: Database },
@@ -308,8 +322,15 @@ function App() {
           <div className="flex items-center gap-3">
             <div className="w-8 h-8 bg-indigo-600 rounded-lg flex items-center justify-center font-bold text-sm text-white">L</div>
             <h1 className="text-xl font-semibold tracking-tight text-stone-800">Lattice</h1>
-            <Badge color="indigo">Trust Broker</Badge>
+            <Badge color="indigo">Context Engine</Badge>
           </div>
+          {graphStats && graphStats.total_entities > 0 && (
+            <div className="flex items-center gap-3 text-xs text-stone-500">
+              <span><span className="font-semibold text-stone-700">{graphStats.total_entities}</span> entities</span>
+              <span><span className="font-semibold text-stone-700">{graphStats.total_relationships}</span> relationships</span>
+              <span><span className="font-semibold text-stone-700">{sources.length}</span> sources</span>
+            </div>
+          )}
         </div>
       </header>
 
@@ -440,6 +461,11 @@ function App() {
           ))}
         </div>
 
+        {/* ── Graph Tab ── */}
+        {tab === "graph" && (
+          <GraphExplorer graphStats={graphStats} />
+        )}
+
         {/* ── Map Tab ── */}
         {tab === "map" && (
           <div className="-mx-6 -mt-2" style={{ height: "calc(100vh - 200px)" }}>
@@ -557,6 +583,25 @@ function App() {
                 <input type="file" accept=".pdf" onChange={handleUpload} className="hidden" disabled={uploading} />
               </label>
             </div>
+
+            {/* Upload extraction result */}
+            {lastUploadResult && (
+              <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <GitFork size={16} className="text-emerald-600" />
+                  <span className="text-sm text-emerald-700">
+                    Extracted <span className="font-semibold">{lastUploadResult.total_entities} entities</span> and{" "}
+                    <span className="font-semibold">{lastUploadResult.total_relationships} relationships</span> into the knowledge graph
+                  </span>
+                </div>
+                <button
+                  onClick={() => { setLastUploadResult(null); setTab("graph"); }}
+                  className="text-xs text-emerald-600 hover:text-emerald-700 underline"
+                >
+                  Explore graph →
+                </button>
+              </div>
+            )}
 
             {sources.length === 0 ? (
               <div className="text-center py-16 text-stone-400">

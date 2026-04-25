@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.connectors.pdf import PDFConnector
 from backend.engine.embeddings import embed_text, embed_texts
+from backend.engine.graph import ingest_to_graph
 from backend.engine.recommendations import recommend_agents_for_source
 from backend.engine.summarize import extractive_summary, suggest_domains
 from backend.models.database import get_db
@@ -27,6 +28,7 @@ class SourceResponse(BaseModel):
     domains: list[str] = []
     owner: str | None = None
     org_scope: list[str] = []
+    graph_stats: dict | None = None  # entities/relationships extracted
 
 
 class RecommendationResponse(BaseModel):
@@ -92,15 +94,28 @@ async def upload_pdf(
     # Embed all chunks in batch
     embeddings = embed_texts(chunk_texts)
 
+    chunk_ids = []
     for ingested, embedding in zip(ingested_chunks, embeddings):
+        chunk_id = uuid.uuid4()
         chunk = Chunk(
-            id=uuid.uuid4(),
+            id=chunk_id,
             source_id=source.id,
             content=ingested.content,
             chunk_index=ingested.chunk_index,
             embedding=embedding,
         )
         db.add(chunk)
+        chunk_ids.append(chunk_id)
+
+    await db.flush()  # Ensure chunks exist before graph extraction
+
+    # Extract entities and relationships into the knowledge graph
+    graph_stats = await ingest_to_graph(
+        db=db,
+        chunks_text=chunk_texts,
+        source_id=source.id,
+        chunk_ids=chunk_ids,
+    )
 
     await db.commit()
 
@@ -112,6 +127,7 @@ async def upload_pdf(
         summary=source.summary,
         classification=source.classification,
         domains=source.domains or [],
+        graph_stats=graph_stats,
     )
 
 

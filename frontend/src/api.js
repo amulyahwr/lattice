@@ -115,3 +115,22 @@ export async function revokeAccess(agentId, sourceId) {
   });
   return throwIfError(res);
 }
+
+// Graph
+
+export async function getGraphStats() {
+  const res = await fetch(`${BASE}/graph/stats`);
+  return throwIfError(res);
+}
+
+export async function searchEntities(query, entityType = null, limit = 20) {
+  const params = new URLSearchParams({ q: query, limit: String(limit) });
+  if (entityType) params.set("entity_type", entityType);
+  const res = await fetch(`${BASE}/graph/search?${params}`);
+  return throwIfError(res);
+}
+
+export async function getEntityNeighborhood(entityId, depth = 1) {
+  const res = await fetch(`${BASE}/graph/entity/${entityId}?depth=${depth}`);
+  return throwIfError(res);
+}
