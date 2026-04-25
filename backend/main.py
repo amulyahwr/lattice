@@ -1,14 +1,14 @@
-"""Lattice — Enterprise Contextual Layer."""
+"""Lattice — Enterprise Context Engine."""
 
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from backend.api.routes_admin import router as admin_router
 from backend.api.routes_agents import router as agents_router
-from backend.api.routes_graph import router as graph_router
-from backend.api.routes_search import router as search_router
-from backend.api.routes_sources import router as sources_router
+from backend.api.routes_context import router as context_router
+from backend.api.routes_ingest import router as ingest_router
 from backend.config import settings
 from backend.models.database import init_db
 
@@ -22,8 +22,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Lattice",
-    description="Enterprise contextual layer for unifying structured, unstructured, and multi-modal data sources.",
-    version="0.1.0",
+    description="Enterprise Context Engine — right context, right time, right agent.",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
@@ -37,12 +37,12 @@ app.add_middleware(
 )
 
 # Routes
-app.include_router(sources_router, prefix="/api/v1")
-app.include_router(search_router, prefix="/api/v1")
+app.include_router(ingest_router, prefix="/api/v1")
+app.include_router(context_router, prefix="/api/v1")
 app.include_router(agents_router, prefix="/api/v1")
-app.include_router(graph_router, prefix="/api/v1")
+app.include_router(admin_router, prefix="/api/v1")
 
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "service": "lattice"}
+    return {"status": "ok", "service": "lattice", "version": "0.2.0"}

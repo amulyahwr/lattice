@@ -19,10 +19,19 @@ class Settings(BaseSettings):
 
     # API
     api_host: str = "0.0.0.0"
-    api_port: int = 8000
+    api_port: int = 8001
 
     # CORS
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
+
+    # Compiler
+    compiler_llm_model: str = ""  # Empty = extractive only (no LLM for MVP)
+
+    # Access control
+    atom_access_bits: int = 64  # 64-bit bitmask for MVP
+
+    # Cache
+    cache_backend: str = "memory"  # "memory" for MVP, "redis" later
 
     class Config:
         env_prefix = "LATTICE_"
