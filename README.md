@@ -8,13 +8,13 @@ Lattice is a context broker for AI agents. It sits between your enterprise knowl
 
 Every enterprise deploying AI agents hits the same wall: agents are either **context-starved** (hallucinate, give generic answers) or **context-flooded** (slow, expensive, no access control). Lattice solves this.
 
-| Problem | How Lattice Solves It |
-|---------|----------------------|
-| Agents get raw document chunks | Lattice compiles knowledge into **atomic facts** — concise, typed, linked |
-| Every query does expensive retrieval | Lattice compiles at ingest, serves from **tiered cache** (90%+ cache hits, <5ms) |
-| No access control on context | **Bitmask access control** — every atom tagged, every agent profiled, checked in nanoseconds |
-| Every team builds their own RAG | **Single context layer** for all agents across the enterprise |
-| No visibility into what agents see | **Full audit trail** — every access decision logged for compliance |
+| Problem                              | How Lattice Solves It                                                                        |
+| ------------------------------------ | -------------------------------------------------------------------------------------------- |
+| Agents get raw document chunks       | Lattice compiles knowledge into **atomic facts** — concise, typed, linked                    |
+| Every query does expensive retrieval | Lattice compiles at ingest, serves from **tiered cache** (90%+ cache hits, <5ms)             |
+| No access control on context         | **Bitmask access control** — every atom tagged, every agent profiled, checked in nanoseconds |
+| Every team builds their own RAG      | **Single context layer** for all agents across the enterprise                                |
+| No visibility into what agents see   | **Full audit trail** — every access decision logged for complianc                            |
 
 ## Architecture
 
@@ -94,14 +94,14 @@ The frontend includes mock data for standalone demos. Just run `npm run dev` —
 
 ### The Killer Demo: Context Playground
 
-Type a query like *"What's our Q2 outlook?"* and run it as two different agents:
+Type a query like _"What's our Q2 outlook?"_ and run it as two different agents:
 
-| Sales Assistant | Engineering Bot |
-|----------------|-----------------|
-| EMEA Q2 pipeline: $4.2M, up 12% | Platform uptime Q2: 99.97% |
-| Board approved EMEA expansion | 3 P1 incidents, all resolved <4h |
+| Sales Assistant                     | Engineering Bot                  |
+| ----------------------------------- | -------------------------------- |
+| EMEA Q2 pipeline: $4.2M, up 12%     | Platform uptime Q2: 99.97%       |
+| Board approved EMEA expansion       | 3 P1 incidents, all resolved <4h |
 | Top deals: Acme $800K, Globex $650K | K8s migration prioritized for Q3 |
-| ⚡ L2 cache, **3ms**, 8 atoms | 🔍 L3 search, **41ms**, 6 atoms |
+| ⚡ L2 cache, **3ms**, 8 atoms       | 🔍 L3 search, **41ms**, 6 atoms  |
 
 **Same question. Completely different — and appropriate — context.** Each agent only sees what it's allowed to see.
 
@@ -110,40 +110,45 @@ Type a query like *"What's our Q2 outlook?"* and run it as two different agents:
 All endpoints at `/api/v1/`:
 
 ### Ingestion
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/sources/ingest` | Upload and compile a document into atoms |
-| GET | `/sources/` | List all sources with atom counts |
-| GET | `/sources/{id}/atoms` | List atoms from a source |
-| DELETE | `/sources/{id}` | Delete a source and its atoms |
+
+| Method | Endpoint              | Description                              |
+| ------ | --------------------- | ---------------------------------------- |
+| POST   | `/sources/ingest`     | Upload and compile a document into atoms |
+| GET    | `/sources/`           | List all sources with atom counts        |
+| GET    | `/sources/{id}/atoms` | List atoms from a source                 |
+| DELETE | `/sources/{id}`       | Delete a source and its atoms            |
 
 ### Context Query
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/context/query` | Query context as an agent (routed through L2→L3) |
-| POST | `/context/compare` | Same query, multiple agents — side-by-side results |
+
+| Method | Endpoint           | Description                                        |
+| ------ | ------------------ | -------------------------------------------------- |
+| POST   | `/context/query`   | Query context as an agent (routed through L2→L3)   |
+| POST   | `/context/compare` | Same query, multiple agents — side-by-side results |
 
 ### Agents
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/agents/` | Register an agent with profile + role mask |
-| GET | `/agents/` | List agents with stats |
-| PATCH | `/agents/{id}` | Update agent profile |
-| GET | `/agents/{id}/stats` | Per-agent performance stats |
-| DELETE | `/agents/{id}` | Delete an agent |
+
+| Method | Endpoint             | Description                                |
+| ------ | -------------------- | ------------------------------------------ |
+| POST   | `/agents/`           | Register an agent with profile + role mask |
+| GET    | `/agents/`           | List agents with stats                     |
+| PATCH  | `/agents/{id}`       | Update agent profile                       |
+| GET    | `/agents/{id}/stats` | Per-agent performance stats                |
+| DELETE | `/agents/{id}`       | Delete an agent                            |
 
 ### Admin & Audit
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/admin/stats` | Atom/frame/agent counts, cache hit rate |
-| GET | `/admin/activity` | Recent queries, compilations, access events |
-| GET | `/admin/frames` | List all context frames |
-| GET | `/audit/log` | Paginated access audit log |
-| GET | `/audit/stats` | Access denied breakdown |
+
+| Method | Endpoint          | Description                                 |
+| ------ | ----------------- | ------------------------------------------- |
+| GET    | `/admin/stats`    | Atom/frame/agent counts, cache hit rate     |
+| GET    | `/admin/activity` | Recent queries, compilations, access events |
+| GET    | `/admin/frames`   | List all context frames                     |
+| GET    | `/audit/log`      | Paginated access audit log                  |
+| GET    | `/audit/stats`    | Access denied breakdown                     |
 
 ## Tech Stack
 
 ### Backend
+
 - **FastAPI** — async Python API framework
 - **PostgreSQL + pgvector** — atom storage + vector similarity search
 - **SQLAlchemy** (async) — ORM
@@ -151,6 +156,7 @@ All endpoints at `/api/v1/`:
 - **tiktoken** — accurate token counting
 
 ### Frontend
+
 - **React 19** + TypeScript + Vite
 - **Tailwind CSS** + shadcn/ui
 - **Recharts** — charts and visualizations
@@ -184,13 +190,13 @@ lattice/
 
 ## Roadmap
 
-| Phase | Focus | Status |
-|-------|-------|--------|
-| **1: MVP** | Atom model, compiler, tiered serving, bitmask access, demo UI | 🔨 Building |
-| **2: Production** | L1/L4 cache tiers, async compiler, LLM atomization, lattice hierarchy | 📋 Planned |
-| **3: Enterprise** | Push/streaming, SDR vectors, event bus, Confluence/Slack/Jira connectors | 📋 Planned |
-| **4: Scale** | Multi-tenancy, distributed store, gRPC, Python/TS SDKs, GDPR controls | 📋 Planned |
-| **5: Intelligence** | Feedback loops, predictive pre-warming, cross-domain insights | 💡 Vision |
+| Phase               | Focus                                                                    | Status      |
+| ------------------- | ------------------------------------------------------------------------ | ----------- |
+| **1: MVP**          | Atom model, compiler, tiered serving, bitmask access, demo UI            | 🔨 Building |
+| **2: Production**   | L1/L4 cache tiers, async compiler, LLM atomization, lattice hierarchy    | 📋 Planned  |
+| **3: Enterprise**   | Push/streaming, SDR vectors, event bus, Confluence/Slack/Jira connectors | 📋 Planned  |
+| **4: Scale**        | Multi-tenancy, distributed store, gRPC, Python/TS SDKs, GDPR controls    | 📋 Planned  |
+| **5: Intelligence** | Feedback loops, predictive pre-warming, cross-domain insights            | 💡 Vision   |
 
 See [ROADMAP.md](./ROADMAP.md) for details.
 
