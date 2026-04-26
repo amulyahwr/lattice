@@ -1,77 +1,73 @@
-"""Distiller — generate concise, token-efficient text per atom.
+"""Distiller — rewrite each proposition concisely and extract canonical form.
 
-Evolved from engine/summarize.py. For MVP, uses extractive methods
-(no external LLM dependency). The raw_content is preserved; content
-gets the distilled version.
+A single batched LLM call handles all atoms from a compilation run.
+Returns distilled content (≤25 words) and a structured canonical form used
+for cross-source dedup of metrics and facts.
 """
 
-import re
-from collections import Counter
+from __future__ import annotations
+
+import json
+
+from backend.compiler.atomizer import RawAtom
+from backend.compiler.llm_client import chat
+
+_SYSTEM = """\
+You are a knowledge distillation system.
+
+You receive a JSON array of propositions. For each proposition:
+1. Rewrite it concisely in 25 words or fewer. Preserve all numbers, names, and dates exactly.
+2. Extract a canonical form if the proposition contains a measurable value.
+
+Return a JSON array of the same length and order. Each element must be:
+{
+  "content": "<concise rewrite>",
+  "canonical": {
+    "subject": "<what is being measured or described>",
+    "predicate": "<the relationship or verb>",
+    "object": "<the value, outcome, or target>",
+    "value": <numeric value as a number, or null>,
+    "unit": "<USD / % / count / etc., or null>",
+    "period": "<time period like Q2-2026, or null>"
+  }
+}
+
+Set "canonical" to null for events and procedures where no
+measurable value exists.
+
+Output ONLY valid JSON — no explanation, no markdown, no code fences.
+"""
+
+_BATCH_SIZE = 25  # atoms per LLM call
 
 
-def distill(text: str, max_length: int = 300) -> str:
-    """Distill a piece of text into a concise version.
-
-    For MVP this is extractive — removes boilerplate and noise,
-    keeps signal. LLM-based distillation comes later.
-    """
-    # Clean whitespace
-    text = re.sub(r"\s+", " ", text).strip()
-
-    if len(text) <= max_length:
-        return text
-
-    # Remove common filler phrases
-    fillers = [
-        r"\b(?:it is worth noting that|it should be noted that)\b",
-        r"\b(?:as mentioned (?:earlier|above|before|previously))\b",
-        r"\b(?:in this (?:regard|context|case))\b",
-        r"\b(?:please note that|note that)\b",
-        r"\b(?:basically|essentially|fundamentally)\b",
-    ]
-    cleaned = text
-    for filler in fillers:
-        cleaned = re.sub(filler, "", cleaned, flags=re.IGNORECASE)
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-
-    if len(cleaned) <= max_length:
-        return cleaned
-
-    # Truncate at a sentence boundary
-    truncated = cleaned[:max_length]
-    last_period = truncated.rfind(".")
-    if last_period > max_length * 0.5:
-        return truncated[: last_period + 1].strip()
-
-    return truncated.strip()
+def _extract_json_array(text: str) -> str:
+    """Strip any surrounding prose and extract the JSON array."""
+    start = text.find("[")
+    end = text.rfind("]")
+    if start == -1 or end == -1:
+        raise ValueError(f"Distiller: no JSON array in output: {text[:300]!r}")
+    return text[start : end + 1]
 
 
-def distill_batch(texts: list[str], max_length: int = 300) -> list[str]:
-    """Distill a batch of texts."""
-    return [distill(t, max_length) for t in texts]
+async def distill_atoms(atoms: list[RawAtom]) -> list[dict]:
+    """Distill all atoms, returning [{content, canonical}] parallel to input."""
+    results: list[dict] = []
 
+    for i in range(0, len(atoms), _BATCH_SIZE):
+        batch = atoms[i : i + _BATCH_SIZE]
+        payload = json.dumps(
+            [{"kind": a.kind, "proposition": a.content} for a in batch],
+            ensure_ascii=False,
+        )
+        output = await chat(_SYSTEM, payload)
+        parsed: list[dict] = json.loads(_extract_json_array(output))
 
-def extract_key_phrases(text: str, top_n: int = 5) -> list[str]:
-    """Extract the most frequent meaningful phrases (bigrams).
+        if len(parsed) != len(batch):
+            raise ValueError(
+                f"Distiller returned {len(parsed)} items for {len(batch)} atoms in batch {i}"
+            )
 
-    Carried forward from summarize.py for domain suggestion support.
-    """
-    words = re.findall(r"[a-zA-Z]{3,}", text.lower())
+        results.extend(parsed)
 
-    stop_words = {
-        "the", "and", "for", "are", "but", "not", "you", "all",
-        "can", "has", "her", "was", "one", "our", "out", "his",
-        "had", "how", "its", "may", "new", "now", "old", "see",
-        "way", "who", "did", "get", "let", "say", "she", "too",
-        "use", "this", "that", "with", "have", "from", "they",
-        "been", "will", "more", "when", "what", "your", "than",
-        "them", "some", "other", "into", "also", "each", "which",
-        "their", "there", "about", "would", "these", "could",
-        "should", "being", "after", "before", "between", "through",
-    }
-    words = [w for w in words if w not in stop_words]
-
-    bigrams = [f"{words[i]} {words[i + 1]}" for i in range(len(words) - 1)]
-    counter = Counter(bigrams)
-
-    return [phrase.title() for phrase, _ in counter.most_common(top_n)]
+    return results

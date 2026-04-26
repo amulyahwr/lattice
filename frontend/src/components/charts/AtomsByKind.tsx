@@ -10,8 +10,8 @@ export default function AtomsByKind({ data }: AtomsByKindProps) {
   const chartData = Object.entries(data).map(([kind, count]) => ({ kind, count }))
 
   return (
-    <div className="rounded-xl border border-zinc-800 bg-zinc-900/50 p-5">
-      <h3 className="mb-4 text-sm font-semibold text-white">Atoms by Kind</h3>
+    <div className="rounded-xl border border-[#D4BFA8] bg-[#FFF5E6]/50 p-5">
+      <h3 className="mb-4 text-sm font-semibold text-[#3D2817]">Atoms by Kind</h3>
       <ResponsiveContainer width="100%" height={220}>
         <BarChart data={chartData} margin={{ left: -10 }}>
           <XAxis

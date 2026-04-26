@@ -7,6 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.routes_admin import router as admin_router
 from backend.api.routes_agents import router as agents_router
+from backend.api.routes_atoms import router as atoms_router
 from backend.api.routes_context import router as context_router
 from backend.api.routes_ingest import router as ingest_router
 from backend.config import settings
@@ -40,6 +41,7 @@ app.add_middleware(
 app.include_router(ingest_router, prefix="/api/v1")
 app.include_router(context_router, prefix="/api/v1")
 app.include_router(agents_router, prefix="/api/v1")
+app.include_router(atoms_router, prefix="/api/v1")
 app.include_router(admin_router, prefix="/api/v1")
 
 

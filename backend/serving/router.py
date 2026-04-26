@@ -1,20 +1,22 @@
-"""Query Router — L2 check → L3 fallback → access filter → token trim.
+"""Query Router — L3 pgvector search with access filter and token trim.
 
-The serving hot path. Routes queries through the cache tiers and applies
-access control via bitmask AND operations.
+Simplified serving path: query → embed → pgvector search → bitmask filter → token budget trim.
 """
 
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
 
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import func, select
 
-from backend.models.atoms import AccessLog, AgentProfile, Frame
-from backend.serving.frame_builder import count_tokens
-from backend.serving.l2_cache import l2_cache
+from backend.models.atoms import AccessLog, AgentProfile, Atom
 from backend.serving.l3_search import search_atoms
+
+
+def count_tokens(text: str) -> int:
+    """Estimate token count (rough approximation: 1 token ≈ 4 chars)."""
+    return len(text) // 4
 
 
 async def query_context(
@@ -23,19 +25,17 @@ async def query_context(
     agent: AgentProfile,
     top_k: int = 10,
 ) -> dict:
-    """Route a context query through the cache tiers.
+    """Route a context query through L3 search with access control.
 
     Flow:
-    1. Check L2 frame cache (domain match + role_mask)
-    2. Fall through to L3 pgvector search
-    3. Filter atoms by access_mask
-    4. Trim to agent's max_tokens budget
-    5. Log access
+    1. L3 pgvector search with bitmask pre-filter
+    2. Trim to agent's max_tokens budget
+    3. Log access
 
     Returns:
         {
             "atoms": [...],
-            "cache_tier": "L2" | "L3",
+            "cache_tier": str,
             "latency_ms": float,
             "atoms_served": int,
             "atoms_filtered": int,
@@ -47,52 +47,39 @@ async def query_context(
     role_mask = agent.role_mask or 0
     max_tokens = agent.max_tokens or 4000
 
-    # ── L2: Frame Cache ──
-    for domain in agent_domains:
-        cached = l2_cache.get_by_domain(domain, role_mask)
-        if cached:
-            # Filter individual atoms by access_mask
-            atoms = []
-            filtered = 0
-            token_budget = max_tokens
+    # ── Pre-flight: skip expensive search if agent has no accessible atoms ──
+    domain_filter = list(set(agent_domains)) if agent_domains else None
 
-            for i, (content, mask) in enumerate(
-                zip(cached.atom_contents, cached.atom_access_masks)
-            ):
-                if mask & role_mask:
-                    atom_tokens = count_tokens(content)
-                    if token_budget - atom_tokens >= 0:
-                        atoms.append({
-                            "atom_id": str(cached.atom_ids[i]),
-                            "content": content,
-                            "access_mask": mask,
-                        })
-                        token_budget -= atom_tokens
-                else:
-                    filtered += 1
+    preflight_stmt = (
+        select(func.count())
+        .select_from(Atom)
+        .where(Atom.access_mask.bitwise_and(role_mask) != 0)
+    )
+    if domain_filter:
+        preflight_stmt = preflight_stmt.where(Atom.domain.overlap(domain_filter))
 
-            # Update frame access stats
-            await _update_frame_access(db, cached.frame_id)
+    has_accessible = (await db.execute(preflight_stmt.limit(1))).scalar()
 
-            latency = (time.monotonic() - start) * 1000
-            total_tokens = max_tokens - token_budget
-
-            await _log_access(
-                db, agent, query, "granted", len(atoms), filtered, "L2", latency
-            )
-
-            return {
-                "atoms": atoms,
-                "cache_tier": "L2",
-                "latency_ms": round(latency, 2),
-                "atoms_served": len(atoms),
-                "atoms_filtered": filtered,
-                "total_tokens": total_tokens,
-            }
+    if not has_accessible:
+        latency = (time.monotonic() - start) * 1000
+        await _log_access(db, agent, query, "granted", 0, 0, latency)
+        return {
+            "atoms": [],
+            "cache_tier": "L3",
+            "latency_ms": round(latency, 2),
+            "atoms_served": 0,
+            "atoms_filtered": 0,
+            "total_tokens": 0,
+        }
 
     # ── L3: pgvector Search ──
     raw_results = await search_atoms(
-        db=db, query=query, role_mask=role_mask, top_k=top_k * 2  # Fetch extra for token trimming
+        db=db,
+        query=query,
+        role_mask=role_mask,
+        top_k=top_k * 2,  # fetch extra for token trimming
+        domain_filter=domain_filter,
+        min_relevance=0.3,
     )
 
     # Trim to token budget
@@ -113,9 +100,7 @@ async def query_context(
     total_tokens = max_tokens - token_budget
 
     # Count filtered (atoms that existed but agent couldn't see — already filtered in L3)
-    await _log_access(
-        db, agent, query, "granted", len(atoms), filtered, "L3", latency
-    )
+    await _log_access(db, agent, query, "granted", len(atoms), filtered, latency)
 
     return {
         "atoms": atoms,
@@ -147,17 +132,6 @@ async def compare_context(
     return results
 
 
-async def _update_frame_access(db: AsyncSession, frame_id) -> None:
-    """Update frame access stats on cache hit."""
-    from sqlalchemy import select
-
-    result = await db.execute(select(Frame).where(Frame.id == frame_id))
-    frame = result.scalar_one_or_none()
-    if frame:
-        frame.access_count = (frame.access_count or 0) + 1
-        frame.last_accessed = datetime.now(timezone.utc)
-
-
 async def _log_access(
     db: AsyncSession,
     agent: AgentProfile,
@@ -165,7 +139,6 @@ async def _log_access(
     decision: str,
     atoms_served: int,
     atoms_filtered: int,
-    cache_tier: str,
     latency_ms: float,
 ) -> None:
     """Log an access event for audit."""
@@ -175,7 +148,7 @@ async def _log_access(
         decision=decision,
         atoms_served=atoms_served,
         atoms_filtered=atoms_filtered,
-        cache_tier=cache_tier,
+        cache_tier="L3",  # Always L3 in simplified architecture
         latency_ms=round(latency_ms, 2),
     )
     db.add(log)

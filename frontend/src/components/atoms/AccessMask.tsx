@@ -20,11 +20,11 @@ export default function AccessMask({ mask, compact }: AccessMaskProps) {
                 compact ? 'h-3 w-3' : 'h-4 w-5',
                 active
                   ? 'opacity-90'
-                  : 'bg-zinc-800 opacity-40',
+                  : 'bg-[#E8D4BC] opacity-40',
               )}
               style={active ? { backgroundColor: ROLE_COLORS[role] } : undefined}
             />
-            <div className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-zinc-800 px-2 py-1 text-[10px] text-zinc-300 opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
+            <div className="pointer-events-none absolute -top-8 left-1/2 -translate-x-1/2 whitespace-nowrap rounded bg-[#E8D4BC] px-2 py-1 text-[10px] text-[#5A4530] opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
               {role}
             </div>
           </div>

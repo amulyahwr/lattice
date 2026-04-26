@@ -1,7 +1,7 @@
-"""Admin and audit routes — stats, frames, activity, access logs.
+"""Admin and audit routes — stats, activity, access logs.
 
-Evolved from routes_graph.py. Provides dashboard stats, frame listing,
-activity feed, and audit log for the frontend.
+Evolved from routes_graph.py. Provides dashboard stats, activity feed,
+and audit log for the frontend.
 """
 
 import uuid
@@ -11,11 +11,79 @@ from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.models.atoms import AccessLog, AgentProfile, Atom, Frame, Source
+from backend.compiler.linker import cross_link_atoms
+from backend.compiler.pipeline import fetch_cross_link_candidates
+from backend.models.atoms import AccessLog, AgentProfile, Atom, AtomSource, Source
 from backend.models.database import get_db
-from backend.serving.l2_cache import l2_cache
 
 router = APIRouter(tags=["admin"])
+
+
+# ── Cross-source Relink ──
+
+
+class RelinkResponse(BaseModel):
+    sources_processed: int
+    cross_links_added: int
+
+
+@router.post("/admin/relink", response_model=RelinkResponse)
+async def admin_relink(db: AsyncSession = Depends(get_db)):
+    """Re-run cross-source linking across all existing atoms.
+
+    For each source, treats its atoms as "new" and fetches domain-aware
+    candidates from all other sources. Appends cross-links without
+    overwriting existing within-source links.
+    """
+    sources_result = await db.execute(select(Source))
+    sources = sources_result.scalars().all()
+
+    total_links_added = 0
+    sources_processed = 0
+
+    for source in sources:
+        atoms_result = await db.execute(
+            select(Atom)
+            .join(AtomSource, Atom.id == AtomSource.atom_id)
+            .where(AtomSource.source_id == source.id)
+        )
+        source_atoms = [a for a in atoms_result.scalars().all() if a.dense_vec is not None]
+
+        if not source_atoms:
+            continue
+
+        candidates = await fetch_cross_link_candidates(
+            db=db,
+            new_atom_ids=[a.id for a in source_atoms],
+            new_embeddings=[a.dense_vec for a in source_atoms],
+            new_domains=[a.domain or [] for a in source_atoms],
+        )
+
+        if candidates:
+            cl_sets = await cross_link_atoms(
+                new_contents=[a.content for a in source_atoms],
+                existing_contents=[c.content for c in candidates],
+            )
+
+            for atom, atom_cl in zip(source_atoms, cl_sets):
+                existing_targets = {lnk["target_id"] for lnk in (atom.links or [])}
+                for cl in atom_cl:
+                    target_id = str(candidates[cl["existing_index"]].id)
+                    if target_id not in existing_targets:
+                        atom.links = (atom.links or []) + [
+                            {"target_id": target_id, "relation": cl["relation"]}
+                        ]
+                        existing_targets.add(target_id)
+                        total_links_added += 1
+
+        sources_processed += 1
+
+    await db.flush()
+
+    return RelinkResponse(
+        sources_processed=sources_processed,
+        cross_links_added=total_links_added,
+    )
 
 
 # ── Admin Stats ──
@@ -23,11 +91,9 @@ router = APIRouter(tags=["admin"])
 
 class AdminStatsResponse(BaseModel):
     total_atoms: int
-    total_frames: int
     total_agents: int
     total_sources: int
     atoms_by_kind: dict[str, int] = {}
-    cache_hit_rate: float = 0.0
     total_queries: int = 0
 
 
@@ -35,7 +101,6 @@ class AdminStatsResponse(BaseModel):
 async def admin_stats(db: AsyncSession = Depends(get_db)):
     """High-level system stats for dashboard."""
     atom_count = (await db.execute(select(func.count(Atom.id)))).scalar() or 0
-    frame_count = (await db.execute(select(func.count(Frame.id)))).scalar() or 0
     agent_count = (await db.execute(select(func.count(AgentProfile.id)))).scalar() or 0
     source_count = (await db.execute(select(func.count(Source.id)))).scalar() or 0
 
@@ -48,16 +113,11 @@ async def admin_stats(db: AsyncSession = Depends(get_db)):
     # Total queries from access log
     query_count = (await db.execute(select(func.count(AccessLog.id)))).scalar() or 0
 
-    # Cache stats from L2
-    cache_stats = l2_cache.stats
-
     return AdminStatsResponse(
         total_atoms=atom_count,
-        total_frames=frame_count,
         total_agents=agent_count,
         total_sources=source_count,
         atoms_by_kind=atoms_by_kind,
-        cache_hit_rate=cache_stats["hit_rate"],
         total_queries=query_count,
     )
 
@@ -115,41 +175,6 @@ async def admin_activity(
     total = (await db.execute(select(func.count(AccessLog.id)))).scalar() or 0
 
     return ActivityResponse(events=events, total=total)
-
-
-# ── Frames ──
-
-
-class FrameResponse(BaseModel):
-    id: str
-    name: str
-    domain: str
-    atom_count: int
-    token_count: int
-    access_mask: int
-    access_count: int
-    last_accessed: str | None = None
-
-
-@router.get("/admin/frames", response_model=list[FrameResponse])
-async def list_frames(db: AsyncSession = Depends(get_db)):
-    """List all frames."""
-    result = await db.execute(select(Frame).order_by(Frame.access_count.desc()))
-    frames = result.scalars().all()
-
-    return [
-        FrameResponse(
-            id=str(f.id),
-            name=f.name,
-            domain=f.domain,
-            atom_count=len(f.atom_ids) if f.atom_ids else 0,
-            token_count=f.token_count or 0,
-            access_mask=f.access_mask or 0,
-            access_count=f.access_count or 0,
-            last_accessed=f.last_accessed.isoformat() if f.last_accessed else None,
-        )
-        for f in frames
-    ]
 
 
 # ── Audit Log ──

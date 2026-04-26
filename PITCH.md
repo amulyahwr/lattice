@@ -1,6 +1,6 @@
 # Lattice — The Pitch
 
-*For executive audiences. No jargon, all business.*
+_For executive audiences. No jargon, all business._
 
 ---
 
@@ -44,14 +44,14 @@ It's the difference between Google searching the web live every time vs. having 
 
 ### 2. Access control is built into the data, not bolted on.
 
-Every piece of knowledge carries a label: *"who can see this."*
-Every agent carries an identity: *"what am I allowed to see."*
+Every piece of knowledge carries a label: _"who can see this."_
+Every agent carries an identity: _"what am I allowed to see."_
 
 Checking access takes **nanoseconds**, not seconds. This is how you give 100 agents access to company knowledge without losing control.
 
 ### 3. Same question, different context — automatically.
 
-When the sales bot asks *"How are we doing this quarter?"*, it gets revenue numbers.
+When the sales bot asks _"How are we doing this quarter?"_, it gets revenue numbers.
 When the engineering bot asks the same question, it gets uptime metrics.
 
 Lattice knows what's relevant based on who's asking. No manual configuration needed.
@@ -60,21 +60,34 @@ Lattice knows what's relevant based on who's asking. No manual configuration nee
 
 ## The Demo
 
-One screen says it all: the **Context Playground.**
+Two screens that tell the whole story:
 
-Type a question — *"What's our Q2 outlook?"* — and run it as two different agents:
+### 1. The Knowledge Graph
 
-| | Sales Assistant | Engineering Bot |
-|---|---|---|
-| **Result 1** | EMEA Q2 pipeline: $4.2M, up 12% from Q1 | Platform uptime Q2: 99.97% |
-| **Result 2** | Board approved EMEA enterprise expansion | 3 P1 incidents, all resolved under 4h MTTR |
-| **Result 3** | Top deals: Acme ($800K), Globex ($650K) | Infra team prioritizing K8s migration for Q3 |
-| **Speed** | ⚡ 3ms (cache hit) | 🔍 41ms (index search) |
-| **Access** | 8 atoms served, 2 filtered | 6 atoms served, 5 filtered |
+Open the **Atom Explorer** and see your entire enterprise knowledge visualized as an interactive network:
+
+- **Every atom** is a node (facts, decisions, metrics, relationships)
+- **Every connection** is a purple line showing how knowledge relates
+- **Click any atom** to see full details in a modal overlay
+- **Navigate the graph** by clicking linked atoms
+
+**What you see:** Your company's knowledge structure at a glance. Sales data connects to revenue metrics. Engineering decisions link to system events. Everything is visible, everything is connected.
+
+### 2. The Context Playground
+
+Type a question — _"What's our Q2 outlook?"_ — and run it as two different agents:
+
+|              | Sales Assistant                          | Engineering Bot                              |
+| ------------ | ---------------------------------------- | -------------------------------------------- |
+| **Result 1** | EMEA Q2 pipeline: $4.2M, up 12% from Q1  | Platform uptime Q2: 99.97%                   |
+| **Result 2** | Board approved EMEA enterprise expansion | 3 P1 incidents, all resolved under 4h MTTR   |
+| **Result 3** | Top deals: Acme ($800K), Globex ($650K)  | Infra team prioritizing K8s migration for Q3 |
+| **Speed**    | 🔍 45ms (vector search)                  | 🔍 52ms (vector search)                      |
+| **Access**   | 8 atoms served, 2 filtered               | 6 atoms served, 5 filtered                   |
 
 **Same question. Completely different — and completely appropriate — answers.**
 
-The sales bot never sees engineering incidents. The engineering bot never sees deal values. And it all happens in single-digit milliseconds.
+The sales bot never sees engineering incidents. The engineering bot never sees deal values. And it all happens in ~50 milliseconds via pgvector search with bitmask filtering.
 
 ---
 
@@ -132,4 +145,4 @@ Data doesn't move regions — Lattice runs where you need it. Full audit trail f
 
 ---
 
-*See [ARCHITECTURE.md](./ARCHITECTURE.md) for the technical deep dive.*
+_See [ARCHITECTURE.md](./ARCHITECTURE.md) for the technical deep dive._

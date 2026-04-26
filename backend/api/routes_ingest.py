@@ -1,14 +1,10 @@
-"""Source ingestion routes — upload files, run compiler, return stats.
-
-Evolved from routes_sources.py. Upload flow becomes:
-receive file → choose connector → run compiler pipeline → return atom/frame stats.
-"""
+"""Source ingestion routes — upload files, run compiler, return stats."""
 
 import uuid
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.compiler.pipeline import compile_source
@@ -25,18 +21,16 @@ class IngestResponse(BaseModel):
     id: str
     name: str
     source_type: str
-    classification: str
-    domains: list[str] = []
-    compilation: dict  # atoms_created, frames_created, kinds, domains
+    compilation: dict
 
 
 class SourceResponse(BaseModel):
     id: str
     name: str
     source_type: str
-    classification: str
     domains: list[str] = []
     atom_count: int = 0
+    created_at: str | None = None
 
 
 class AtomResponse(BaseModel):
@@ -55,8 +49,6 @@ class AtomResponse(BaseModel):
 @router.post("/ingest", response_model=IngestResponse)
 async def ingest_file(
     file: UploadFile = File(...),
-    classification: str = Query(default="internal", description="public|internal|confidential|restricted"),
-    domains: str = Query(default="", description="Comma-separated domain tags"),
     db: AsyncSession = Depends(get_db),
 ):
     """Upload a file, run the compiler pipeline, return compilation stats."""
@@ -66,7 +58,6 @@ async def ingest_file(
     file_bytes = await file.read()
     filename = file.filename.lower()
 
-    # Choose connector
     if filename.endswith(".pdf"):
         connector = PDFConnector()
         source_type = "pdf"
@@ -77,27 +68,23 @@ async def ingest_file(
         connector = TextConnector()
         source_type = "text"
 
-    # Ingest via connector to get chunks
     chunks = await connector.ingest(file_bytes=file_bytes)
     if not chunks:
         raise HTTPException(status_code=400, detail="No content could be extracted")
 
-    domain_list = [d.strip() for d in domains.split(",") if d.strip()] if domains else []
-
-    # Create source record
     source = Source(
         id=uuid.uuid4(),
         name=file.filename,
         source_type=source_type,
-        classification=classification,
-        domains=domain_list,
     )
     db.add(source)
     await db.flush()
 
-    # Run compiler pipeline
     chunk_texts = [c.content for c in chunks]
     compilation_stats = await compile_source(db, source, chunk_texts)
+
+    # Write detected domains back to the source record for display
+    source.domains = compilation_stats.get("domains", [])
 
     await db.commit()
 
@@ -105,15 +92,12 @@ async def ingest_file(
         id=str(source.id),
         name=source.name,
         source_type=source.source_type,
-        classification=source.classification or "internal",
-        domains=source.domains or [],
         compilation=compilation_stats,
     )
 
 
 @router.get("/", response_model=list[SourceResponse])
 async def list_sources(db: AsyncSession = Depends(get_db)):
-    """List all sources with atom counts."""
     result = await db.execute(select(Source).order_by(Source.created_at.desc()))
     sources = result.scalars().all()
 
@@ -125,9 +109,9 @@ async def list_sources(db: AsyncSession = Depends(get_db)):
                 id=str(source.id),
                 name=source.name,
                 source_type=source.source_type,
-                classification=source.classification or "internal",
                 domains=source.domains or [],
                 atom_count=atom_count,
+                created_at=source.created_at.isoformat() if source.created_at else None,
             )
         )
 
@@ -141,11 +125,7 @@ async def list_source_atoms(
     offset: int = Query(default=0, ge=0),
     db: AsyncSession = Depends(get_db),
 ):
-    """List atoms from a specific source."""
-    # Verify source exists
-    result = await db.execute(
-        select(Source).where(Source.id == uuid.UUID(source_id))
-    )
+    result = await db.execute(select(Source).where(Source.id == uuid.UUID(source_id)))
     if not result.scalar_one_or_none():
         raise HTTPException(status_code=404, detail="Source not found")
 
@@ -155,22 +135,33 @@ async def list_source_atoms(
 
 @router.delete("/{source_id}")
 async def delete_source(source_id: str, db: AsyncSession = Depends(get_db)):
-    """Delete a source and all its atoms."""
-    from backend.models.atoms import Atom
+    from backend.models.atoms import Atom, AtomSource
 
-    result = await db.execute(
-        select(Source).where(Source.id == uuid.UUID(source_id))
-    )
+    source_uuid = uuid.UUID(source_id)
+    result = await db.execute(select(Source).where(Source.id == source_uuid))
     source = result.scalar_one_or_none()
     if not source:
         raise HTTPException(status_code=404, detail="Source not found")
 
-    # Delete atoms first
-    atoms_result = await db.execute(
-        select(Atom).where(Atom.source_id == source.id)
-    )
-    for atom in atoms_result.scalars().all():
-        await db.delete(atom)
+    linked = (
+        await db.execute(select(AtomSource.atom_id).where(AtomSource.source_id == source_uuid))
+    ).scalars().all()
+
+    for row in await db.execute(select(AtomSource).where(AtomSource.source_id == source_uuid)):
+        await db.delete(row[0])
+
+    await db.flush()
+
+    for atom_id in linked:
+        remaining = (
+            await db.execute(
+                select(func.count(AtomSource.source_id)).where(AtomSource.atom_id == atom_id)
+            )
+        ).scalar() or 0
+        if remaining == 0:
+            atom = (await db.execute(select(Atom).where(Atom.id == atom_id))).scalar_one_or_none()
+            if atom:
+                await db.delete(atom)
 
     await db.delete(source)
     await db.commit()

@@ -24,17 +24,33 @@ class Settings(BaseSettings):
     # CORS
     cors_origins: list[str] = ["http://localhost:5173", "http://localhost:3000"]
 
-    # Compiler
-    compiler_llm_model: str = ""  # Empty = extractive only (no LLM for MVP)
+    # LM Studio (OpenAI-compatible local server)
+    lm_studio_base_url: str = "http://localhost:1234/v1"
+    lm_studio_model: str = "google/gemma-4-e2b"
+    lm_studio_timeout: int = 120  # seconds — local inference can be slow
 
     # Access control
     atom_access_bits: int = 64  # 64-bit bitmask for MVP
-
-    # Cache
-    cache_backend: str = "memory"  # "memory" for MVP, "redis" later
 
     class Config:
         env_prefix = "LATTICE_"
 
 
 settings = Settings()
+
+# ── Cross-source linking ──
+# Each group defines domains that can have meaningful cross-source relationships.
+# Expansion is one-hop only: a "sales" atom gets candidates from {sales, finance, product}.
+DOMAIN_GROUPS: list[frozenset[str]] = [
+    frozenset({"sales", "finance"}),
+    frozenset({"sales", "product"}),
+    frozenset({"engineering", "product"}),
+    frozenset({"legal", "hr"}),
+    frozenset({"legal", "finance"}),
+]
+
+# Top-K existing atom candidates to fetch per new atom (deduplicated across all new atoms).
+CROSS_LINK_TOP_K: int = 5
+
+# Minimum cosine similarity for a candidate to be considered (0 = any, 1 = identical).
+CROSS_LINK_SIMILARITY_THRESHOLD: float = 0.5

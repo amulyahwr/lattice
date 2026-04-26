@@ -17,6 +17,7 @@ dependencies = [
     "python-multipart>=0.0.20",
     "redis>=5.0.0",
     "tiktoken>=0.7.0",
+    "openai>=1.0.0",
 ]
 
 [project.optional-dependencies]
@@ -24,8 +25,15 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.24",
     "httpx>=0.28",
+    "pytest-mock>=3.14",
     "ruff>=0.8",
 ]
 
 [tool.setuptools.packages.find]
 include = ["backend*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+testpaths = ["tests"]

@@ -1,496 +1,285 @@
-# Lattice Frontend — Demo UI
+# Frontend Specification — Enterprise Context Engine
 
-**Goal:** A polished demo that makes enterprise CTOs and AI leads say *"we need this."*
+**Date:** 2026-04-26  
+**Status:** Implemented with Knowledge Graph Visualization & Warm Theme
+
+## Overview
+
+The Lattice frontend is a React 19 + TypeScript application providing an intuitive interface for exploring enterprise knowledge atoms, managing agents, and visualizing the knowledge graph.
+
+## Recent Major Updates
+
+### 1. Full Knowledge Graph Visualization (2026-04-26)
+
+**New Feature:** Interactive knowledge graph showing all atoms and their relationships
+
+- **Component:** `FullAtomGraph.tsx` - Full graph visualization using React Flow
+- **Endpoint:** `GET /api/v1/atoms/graph` - Fetches all atoms with relationships
+- **Default View:** Atom Explorer now shows complete knowledge graph on load
+- **Modal Detail:** Click any atom to see details in overlay modal (graph stays visible)
+
+**Key Features:**
+
+- Grid layout displaying all atoms
+- Purple animated edges showing relationships
+- Relation type labels on each edge
+- Click nodes to navigate
+- Modal overlay for atom details (doesn't hide graph)
+
+### 2. Warm Skin Tone Theme (2026-04-26)
+
+**Design Update:** Migrated from dark theme to warm, human-friendly color palette
+
+**Color Palette:**
+
+- Base Background: `#F5E6D3` (warm beige)
+- Light Background: `#FFF5E6` (cream)
+- Medium Background: `#E8D4BC` (light tan)
+- Dark Background: `#D4BFA8` (tan)
+- Primary Text: `#3D2817` (dark brown)
+- Secondary Text: `#6B5744` (medium brown)
+- Accent: `#8B5CF6` (purple for relationships)
+
+**Applied To:**
+
+- All layout components (Shell, Sidebar)
+- All page components (Dashboard, Sources, Agents, Playground, Atom Explorer, Audit)
+- All UI components (cards, buttons, inputs, modals)
+- Graph visualization (nodes, backgrounds, edges)
+
+## Page Structure
+
+### 1. Dashboard (`pages/Dashboard.tsx`)
+
+- System statistics overview
+- Recent activity feed
+- Atom count by kind chart
+- Query timeline visualization
+
+### 2. Sources (`pages/Sources.tsx`)
+
+- List of ingested data sources
+- Upload new documents (PDF, text, markdown)
+- View compilation statistics
+- Atom count per source
+
+### 3. Agents (`pages/Agents.tsx`)
+
+- Agent profile management
+- Create/edit/delete agents
+- Configure role masks and token budgets
+- View agent domains and permissions
+
+### 4. Playground (`pages/Playground.tsx`)
+
+- Context query testing interface
+- Compare results across multiple agents
+- Side-by-side result columns
+- Performance metrics display
+
+### 5. Atom Explorer (`pages/AtomExplorer.tsx`) ⭐ NEW
+
+**Primary Interface:** Full knowledge graph visualization
+
+- **Default View:** Interactive graph showing all atoms and relationships
+- **Graph Features:**
+  - Grid layout with all atoms visible
+  - Purple edges with relation labels
+  - Click nodes to select
+  - Pan and zoom controls
+  - Animated relationship flows
+- **Detail Modal:** Overlay panel showing selected atom details
+  - Appears on right side
+  - Semi-transparent backdrop
+  - Graph remains visible underneath
+  - Click backdrop or "Close" to dismiss
+  - Navigate between atoms via links
+
+**Removed:** List view, search bar, kind filters (simplified to focus on graph)
+
+### 6. Audit Log (`pages/AuditLog.tsx`)
+
+- Access control audit trail
+- Paginated log entries
+- Filter by decision type
+- Latency and atom count metrics
+
+## Component Library
+
+### Atoms (`components/atoms/`)
+
+- `AtomCard.tsx` - Compact atom display card
+- `AtomDetail.tsx` - Full atom metadata view
+- `AtomGraph.tsx` - Single atom neighborhood graph (legacy)
+- `FullAtomGraph.tsx` - Full knowledge graph visualization ⭐ NEW
+- `AccessMask.tsx` - Bitmask visualization
+
+### Charts (`components/charts/`)
+
+- `AtomsByKind.tsx` - Pie chart of atom distribution
+- `QueryTimeline.tsx` - Time series of query latency
+
+### Playground (`components/playground/`)
+
+- `QueryBar.tsx` - Query input with agent selection
+- `ResultColumn.tsx` - Single agent result display
+- `PerfComparison.tsx` - Multi-agent comparison view
+
+### Layout (`components/layout/`)
+
+- `Shell.tsx` - Main app container with warm beige background
+- `Sidebar.tsx` - Navigation menu with cream background
+
+### Compiler (`components/compiler/`)
+
+- `PipelineStatus.tsx` - Compilation progress indicator
+
+## Design System
+
+### Color Palette (Warm Skin Tone Theme)
+
+```css
+/* Backgrounds */
+--color-skin-base: #f5e6d3 /* Main background */ --color-skin-light: #fff5e6
+  /* Cards, panels */ --color-skin-medium: #e8d4bc /* Hover states */
+  --color-skin-dark: #d4bfa8 /* Borders */ --color-skin-darker: #c4a888
+  /* Accents */ /* Text */ --text-primary: #3d2817 /* Headings, primary text */
+  --text-secondary: #6b5744 /* Body text */ --text-tertiary: #8b7355
+  /* Muted text */ /* Atom Kind Colors (preserved) */ --color-atom-fact: #3b82f6
+  --color-atom-metric: #10b981 --color-atom-decision: #f59e0b
+  --color-atom-relationship: #8b5cf6 --color-atom-event: #f43f5e
+  --color-atom-procedure: #64748b;
+```
+
+### Typography
+
+- **Font:** Inter (system fallback)
+- **Headings:** Bold, dark brown (#3D2817)
+- **Body:** Regular, medium brown (#6B5744)
+- **Captions:** Small, light brown (#8B7355)
+
+### Spacing
+
+- **Page padding:** 24px (px-6 py-6)
+- **Component gaps:** 12px (gap-3)
+- **Card padding:** 16-20px (p-4, p-5)
+
+### Borders
+
+- **Color:** Tan (#D4BFA8)
+- **Radius:** 8-12px (rounded-lg, rounded-xl)
+- **Width:** 1-2px
+
+## Tech Stack
+
+- **React 19** - Latest React with concurrent features
+- **TypeScript** - Type safety
+- **Vite** - Fast build tool
+- **Tailwind CSS 4** - Utility-first styling
+- **TanStack Query** - Server state management
+- **React Router v7** - Client-side routing
+- **Recharts** - Data visualization
+- **Lucide React** - Icon library
+- **React Flow (@xyflow/react)** - Graph visualization ⭐ NEW
+
+## API Integration
+
+All API calls go through `frontend/src/api/client.ts`:
+
+```typescript
+api.getStats(); // Dashboard stats
+api.getSources(); // Source list
+api.ingestSource(file); // Upload document
+api.getAgents(); // Agent list
+api.createAgent(data); // Create agent
+api.compareContext(q, ids); // Playground queries
+api.getAtoms(params); // Atom search
+api.getAtom(id); // Single atom
+api.getFullGraph(limit); // Full knowledge graph ⭐ NEW
+api.getAtomNeighborhood(id); // Atom neighborhood
+api.getAuditLog(page); // Audit entries
+```
+
+## State Management
+
+- **TanStack Query** for server state (caching, refetching)
+- **React useState** for local UI state
+- **No global state** - each page manages its own state
+- **Query keys** for cache invalidation
+
+## Routing
+
+```
+/                 → Dashboard
+/sources          → Sources
+/agents           → Agents
+/playground       → Playground
+/atoms            → Atom Explorer (Knowledge Graph) ⭐ UPDATED
+/audit            → Audit Log
+```
+
+## Development
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+- **Dev server:** http://localhost:5173
+- **Hot reload:** Enabled
+- **Mock data:** Available for standalone demos
+
+## Build
+
+```bash
+npm run build
+```
+
+Outputs to `frontend/dist/` for production deployment.
+
+## Key UX Patterns
+
+### 1. Knowledge Graph Exploration ⭐ NEW
+
+- Full graph visible on load
+- Click nodes to see details in modal
+- Modal overlays graph (doesn't hide it)
+- Navigate between atoms via links
+- Purple edges show relationships clearly
+
+### 2. Agent-Aware Context
+
+- Same query, different results per agent
+- Side-by-side comparison in Playground
+- Visual distinction of access control
+
+### 3. Real-time Feedback
+
+- Loading states for async operations
+- Error boundaries for graceful failures
+- Toast notifications for actions
+
+### 4. Responsive Design
+
+- Optimized for desktop (1440px+)
+- Sidebar navigation
+- Flexible layouts with Tailwind
+
+## Accessibility
+
+- Semantic HTML elements
+- ARIA labels on interactive elements
+- Keyboard navigation support
+- Color contrast ratios meet WCAG AA
+
+## Performance
+
+- Code splitting by route
+- Lazy loading for heavy components
+- TanStack Query caching (30-60s stale time)
+- Optimized re-renders with React 19
 
 ---
 
-## 1. The Demo Story (5-Minute Flow)
-
-The frontend is designed around a scripted demo narrative:
-
-### Act 1: "Here's your enterprise knowledge" (30s)
-→ **Sources page.** Upload a few PDFs (financial report, engineering runbook, HR policy). Show the compiler atomizing them in real-time — raw doc goes in, typed atoms come out. The audience sees: *this isn't just chunking, it's understanding.*
-
-### Act 2: "Here are your agents" (30s)
-→ **Agents page.** Create two agents: "Sales Assistant" (clearance: sales + finance) and "Engineering Bot" (clearance: engineering). Each gets a role bitmask. The audience sees: *agents have identity, not just API keys.*
-
-### Act 3: "Same question, different context" (60s) ⭐ THE AHA MOMENT
-→ **Context Playground.** Type a query like "What's our Q2 outlook?" Run it as Sales Assistant — gets financial atoms, pipeline metrics. Run it as Engineering Bot — gets infra stability atoms, deployment metrics. Same query, completely different context. Show the latency: L2 cache hit at 3ms vs first-time L3 at 45ms. The audience sees: *right context, right agent, right speed.*
-
-### Act 4: "Full visibility" (60s)
-→ **Dashboard.** Atom counts, frame stats, cache hit rates, access audit trail. Click an atom → see its links, source lineage, which agents accessed it. The audience sees: *enterprise-grade observability, not a black box.*
-
-### Act 5: "The knowledge graph" (30s)
-→ **Graph Explorer.** Interactive visualization of atoms and their relationships. Click a metric atom → see it linked to a decision, a person, a date. The audience sees: *structured knowledge, not a bag of vectors.*
-
----
-
-## 2. Pages
-
-### 2.1 Dashboard (`/`)
-
-The landing page. At-a-glance health of the context engine.
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  LATTICE                                            [dark mode] │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────────┐   │
-│  │  1,247   │ │    38    │ │   12     │ │   94.2%          │   │
-│  │  Atoms   │ │  Frames  │ │  Agents  │ │  Cache Hit Rate  │   │
-│  └──────────┘ └──────────┘ └──────────┘ └──────────────────┘   │
-│                                                                 │
-│  ┌─────────────────────────────┐ ┌─────────────────────────┐   │
-│  │  Atoms by Kind              │ │  Queries (last 24h)     │   │
-│  │  ██████ fact (412)          │ │  ┌─────────────────┐    │   │
-│  │  ████ metric (298)          │ │  │  ╱╲  ╱╲         │    │   │
-│  │  ███ decision (187)         │ │  │ ╱  ╲╱  ╲  ╱╲    │    │   │
-│  │  ██ relationship (156)      │ │  │╱        ╲╱  ╲╱  │    │   │
-│  │  █ event (104)              │ │  └─────────────────┘    │   │
-│  │  █ procedure (90)           │ │  L2: 340  L3: 22       │   │
-│  └─────────────────────────────┘ └─────────────────────────┘   │
-│                                                                 │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │  Recent Activity                                        │   │
-│  │  ● Sales-Bot queried "Q2 pipeline"     L2  3ms    12s  │   │
-│  │  ● Eng-Bot queried "infra incidents"   L3  41ms   45s  │   │
-│  │  ● Compiled: Q2-Report.pdf → 84 atoms         2m ago   │   │
-│  │  ● HR-Bot access filtered: 12 atoms            5m ago  │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-**Stats cards:** Total atoms, frames, agents, cache hit rate
-**Charts:** Atoms by kind (bar), query volume over time (line) with L2/L3 breakdown
-**Activity feed:** Real-time log of queries, compilations, access events
-
-### 2.2 Sources (`/sources`)
-
-Upload and manage data sources. Shows the compiler in action.
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  Sources                                      [+ Upload Source] │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │  📄 Q2-Financial-Report.pdf                             │   │
-│  │  Uploaded: 2m ago  │  84 atoms  │  3 frames             │   │
-│  │  Domains: finance, sales  │  Classification: confidential│   │
-│  │                                                         │   │
-│  │  Compilation Summary:                                   │   │
-│  │  ┌────────┬────────┬─────────┬────────┬──────┬───────┐  │   │
-│  │  │Atomize │Distill │ Embed   │ Link   │ Tag  │ Index │  │   │
-│  │  │  ✅    │  ✅    │   ✅    │  ✅    │  ✅  │  ✅   │  │   │
-│  │  │ 1.2s   │ 3.4s   │  0.8s   │ 1.1s   │0.2s  │ 0.3s │  │   │
-│  │  └────────┴────────┴─────────┴────────┴──────┴───────┘  │   │
-│  │                                                         │   │
-│  │  Atoms extracted:                                       │   │
-│  │  fact(32) metric(28) decision(12) relationship(8) ...   │   │
-│  │                                          [View Atoms →] │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                                                                 │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │  📄 Engineering-Runbook.pdf                             │   │
-│  │  Uploaded: 1h ago  │  156 atoms  │  5 frames            │   │
-│  │  Domains: engineering  │  Classification: internal       │   │
-│  │                                          [View Atoms →] │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-**Upload:** Drag-and-drop zone with progress
-**Compiler pipeline:** Visual stage indicator (atomize → distill → embed → link → tag → index) with per-stage timing
-**Source cards:** Name, atom count, frames generated, domains, classification
-**Atom preview:** Expandable list of atoms generated from each source
-
-### 2.3 Agents (`/agents`)
-
-Register and manage agent profiles.
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  Agents                                       [+ Create Agent]  │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌───────────────────────────┐ ┌───────────────────────────┐   │
-│  │  🤖 Sales Assistant       │ │  🤖 Engineering Bot       │   │
-│  │                           │ │                           │   │
-│  │  Purpose:                 │ │  Purpose:                 │   │
-│  │  Help sales team with     │ │  Assist engineers with    │   │
-│  │  pipeline & forecasting   │ │  oncall & infra questions │   │
-│  │                           │ │                           │   │
-│  │  Domains: sales, finance  │ │  Domains: engineering     │   │
-│  │  Token budget: 4,000      │ │  Token budget: 8,000      │   │
-│  │                           │ │                           │   │
-│  │  Access mask:             │ │  Access mask:             │   │
-│  │  ██████░░ (sales+finance) │ │  ████░░░░ (engineering)   │   │
-│  │                           │ │                           │   │
-│  │  Stats:                   │ │  Stats:                   │   │
-│  │  Queries: 142             │ │  Queries: 89              │   │
-│  │  Avg latency: 4.2ms      │ │  Avg latency: 6.1ms       │   │
-│  │  Cache hit: 96%           │ │  Cache hit: 91%           │   │
-│  │                           │ │                           │   │
-│  │  [Edit] [View Access Log] │ │  [Edit] [View Access Log] │   │
-│  └───────────────────────────┘ └───────────────────────────┘   │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-**Agent cards:** Purpose, domains, access mask visualization, usage stats
-**Create modal:** Name, purpose, domains, role mask (checkboxes for department bits), token budget
-**Access bitmask visualizer:** Shows which bits are set, maps to readable labels (sales, engineering, hr...)
-
-### 2.4 Context Playground (`/playground`) ⭐ HERO PAGE
-
-The demo killer. Side-by-side context comparison across agents.
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  Context Playground                                             │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │  Query: [What's our Q2 outlook?                    ] 🔍 │   │
-│  │                                                         │   │
-│  │  Run as:  [Sales Assistant ▼]  [Engineering Bot ▼]      │   │
-│  │           [+ Add Agent Column]                          │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                                                                 │
-│  ┌────────────────────────┐ ┌──────────────────────────────┐   │
-│  │ 🤖 Sales Assistant     │ │ 🤖 Engineering Bot           │   │
-│  │ ⚡ L2 cache │ 3ms      │ │ ⚡ L3 search │ 41ms          │   │
-│  │ 8 atoms │ 1,840 tokens │ │ 6 atoms │ 1,220 tokens      │   │
-│  │ 2 filtered (no access) │ │ 5 filtered (no access)      │   │
-│  │                        │ │                              │   │
-│  │ ┌────────────────────┐ │ │ ┌──────────────────────────┐ │   │
-│  │ │ 📊 metric          │ │ │ │ 📊 metric                │ │   │
-│  │ │ EMEA Q2 pipeline:  │ │ │ │ Platform uptime Q2:      │ │   │
-│  │ │ $4.2M (up 12%)     │ │ │ │ 99.97% (target: 99.95%) │ │   │
-│  │ │ confidence: 0.94   │ │ │ │ confidence: 0.91         │ │   │
-│  │ └────────────────────┘ │ │ └──────────────────────────┘ │   │
-│  │                        │ │                              │   │
-│  │ ┌────────────────────┐ │ │ ┌──────────────────────────┐ │   │
-│  │ │ 📋 decision        │ │ │ │ 📋 fact                  │ │   │
-│  │ │ Board approved     │ │ │ │ 3 P1 incidents in Q2,    │ │   │
-│  │ │ EMEA expansion     │ │ │ │ all resolved < 4h MTTR   │ │   │
-│  │ │ budget in April    │ │ │ │ confidence: 0.88         │ │   │
-│  │ │ confidence: 0.89   │ │ │ └──────────────────────────┘ │   │
-│  │ └────────────────────┘ │ │                              │   │
-│  │                        │ │ ┌──────────────────────────┐ │   │
-│  │ ┌────────────────────┐ │ │ │ 📋 decision              │ │   │
-│  │ │ 📊 metric          │ │ │ │ Infra team prioritizing  │ │   │
-│  │ │ Top 3 deals: Acme  │ │ │ │ K8s migration over new   │ │   │
-│  │ │ ($800K), Globex    │ │ │ │ feature work in Q3       │ │   │
-│  │ │ ($650K), Initech   │ │ │ │ confidence: 0.85         │ │   │
-│  │ │ ($500K)            │ │ │ └──────────────────────────┘ │   │
-│  │ └────────────────────┘ │ │                              │   │
-│  │         ...            │ │          ...                 │   │
-│  └────────────────────────┘ └──────────────────────────────┘   │
-│                                                                 │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │  Performance Comparison                                 │   │
-│  │  Sales Assistant: L2 hit │ 3ms  │ 8 atoms │ 1,840 tok  │   │
-│  │  Eng Bot:         L3 hit │ 41ms │ 6 atoms │ 1,220 tok  │   │
-│  │  Speedup: 13.6x (L2 vs L3)                             │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-**Query bar:** Natural language input + multi-agent selector
-**Side-by-side columns:** Each agent's context results shown in parallel
-**Atom cards:** Typed (color-coded by kind), show content + confidence + source link
-**Performance bar:** Cache tier, latency, atom count, token count, filtered count per agent
-**The punchline:** Same query, completely different — and appropriate — context
-
-### 2.5 Atom Explorer (`/atoms`)
-
-Browse, search, and inspect individual atoms.
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  Atom Explorer                                                  │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  Search: [revenue growth              ] Kind: [All ▼] 🔍       │
-│                                                                 │
-│  ┌─────────────────────────────────────────────────────────┐   │
-│  │  ATOM-a3f2 │ 📊 metric │ finance │ relevance: 0.94     │   │
-│  │                                                         │   │
-│  │  "EMEA Q2 pipeline stands at $4.2M, representing a     │   │
-│  │   12% increase from Q1 driven by enterprise expansion"  │   │
-│  │                                                         │   │
-│  │  Source: Q2-Financial-Report.pdf                        │   │
-│  │  Freshness: 2h ago │ Version: 3 │ TTL: 24h             │   │
-│  │  Access: ██████░░ (sales, finance, executive)           │   │
-│  │                                                         │   │
-│  │  Links:                                                 │   │
-│  │  → ATOM-b1c4 (decision) "Board approved EMEA expansion"│   │
-│  │  → ATOM-d8e2 (metric) "Enterprise deal count: 14"      │   │
-│  │  ← ATOM-f3a1 (event) "Q1 EMEA review meeting"         │   │
-│  │                                                         │   │
-│  │  Accessed by: Sales-Bot (42x), Exec-Bot (12x)          │   │
-│  └─────────────────────────────────────────────────────────┘   │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-**Search:** Semantic search across atoms with kind filter
-**Atom detail:** Full content, metadata, source lineage, access mask, links to other atoms
-**Link navigation:** Click a linked atom to navigate to it
-
-### 2.6 Graph Explorer (`/graph`)
-
-Interactive visualization of atom relationships.
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  Knowledge Graph                    [Filter: domain ▼] [Depth] │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│              ┌──────────┐                                       │
-│         ┌───►│ $4.2M    │◄────┐                                 │
-│         │    │ (metric) │     │                                  │
-│         │    └──────────┘     │                                  │
-│    has_value              has_value                              │
-│         │                     │                                  │
-│   ┌─────┴──────┐    ┌────────┴───────┐                          │
-│   │ EMEA Q2    │    │ Enterprise     │                          │
-│   │ Pipeline   │───►│ Expansion      │                          │
-│   │ (fact)     │    │ (decision)     │                          │
-│   └────────────┘    └────────┬───────┘                          │
-│                         approved_by                              │
-│                              │                                  │
-│                      ┌───────▼──────┐                           │
-│                      │ April Board  │                           │
-│                      │ Meeting      │                           │
-│                      │ (event)      │                           │
-│                      └──────────────┘                           │
-│                                                                 │
-│  ── Selected: "EMEA Q2 Pipeline" ──────────────────────────┐   │
-│  │ Kind: fact │ Domain: sales, finance                      │   │
-│  │ 3 outgoing links │ 2 incoming links                      │   │
-│  │ Accessed 54 times │ Last: 12m ago                        │   │
-│  └──────────────────────────────────────────────────────────┘   │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-**Interactive graph:** Force-directed layout, nodes colored by atom kind
-**Filters:** By domain, kind, time range, access level
-**Click interaction:** Select node → show detail panel, highlight connections
-**Depth control:** 1-hop, 2-hop, 3-hop neighborhood
-
-### 2.7 Audit Log (`/audit`)
-
-Enterprise compliance view.
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  Audit Trail                    [Agent ▼] [Date Range] [Export] │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  TIME       AGENT            QUERY              RESULT    TIER  │
-│  ─────────────────────────────────────────────────────────────  │
-│  14:32:01   Sales-Bot        "Q2 pipeline"      8/10 ✓   L2    │
-│  14:32:01   Sales-Bot        (2 atoms filtered — no access)     │
-│  14:31:45   Eng-Bot          "infra incidents"   6/11 ✓   L3    │
-│  14:31:45   Eng-Bot          (5 atoms filtered — no access)     │
-│  14:30:12   HR-Bot           "hiring plan"       0/4  ✗   L3    │
-│  14:30:12   HR-Bot           (4 atoms filtered — clearance)     │
-│  ...                                                            │
-│                                                                 │
-│  Access Denied Breakdown (last 24h):                            │
-│  ┌──────────────────────────────────┐                           │
-│  │  Role mismatch:          67%    │                            │
-│  │  Classification level:   28%    │                            │
-│  │  Domain irrelevant:       5%    │                            │
-│  └──────────────────────────────────┘                           │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
-```
-
----
-
-## 3. Tech Stack
-
-| Layer | Choice | Why |
-|-------|--------|-----|
-| Framework | **React 19 + Vite** | Fast dev, ecosystem |
-| Styling | **Tailwind CSS + shadcn/ui** | Clean enterprise look, no design system overhead |
-| Charts | **Recharts** | Simple, React-native charting |
-| Graph Viz | **React Flow** or **D3-force** | Interactive node graphs |
-| State | **TanStack Query (React Query)** | API state management, caching, auto-refresh |
-| Router | **React Router v7** | Standard routing |
-| Icons | **Lucide React** | Clean, consistent iconography |
-
-**No auth for MVP.** Demo assumes single-user / demo mode.
-
----
-
-## 4. Project Structure
-
-```
-lattice/
-├── frontend/
-│   ├── index.html
-│   ├── package.json
-│   ├── vite.config.ts
-│   ├── tailwind.config.ts
-│   ├── tsconfig.json
-│   │
-│   ├── src/
-│   │   ├── main.tsx
-│   │   ├── App.tsx                    # Router + layout
-│   │   │
-│   │   ├── api/
-│   │   │   ├── client.ts             # Axios/fetch wrapper
-│   │   │   ├── sources.ts            # Source API calls
-│   │   │   ├── agents.ts             # Agent API calls
-│   │   │   ├── context.ts            # Context query API calls
-│   │   │   └── admin.ts              # Stats + frames API calls
-│   │   │
-│   │   ├── components/
-│   │   │   ├── layout/
-│   │   │   │   ├── Sidebar.tsx        # Navigation
-│   │   │   │   ├── Header.tsx         # Top bar
-│   │   │   │   └── Shell.tsx          # App shell wrapper
-│   │   │   │
-│   │   │   ├── atoms/
-│   │   │   │   ├── AtomCard.tsx       # Single atom display (kind-colored)
-│   │   │   │   ├── AtomList.tsx       # Scrollable atom list
-│   │   │   │   ├── AtomDetail.tsx     # Full atom with links + metadata
-│   │   │   │   └── AccessMask.tsx     # Bitmask visual (colored bars)
-│   │   │   │
-│   │   │   ├── compiler/
-│   │   │   │   └── PipelineStatus.tsx # Stage progress indicator
-│   │   │   │
-│   │   │   ├── charts/
-│   │   │   │   ├── AtomsByKind.tsx    # Bar chart
-│   │   │   │   ├── QueryTimeline.tsx  # Line chart with L2/L3
-│   │   │   │   └── CacheHitGauge.tsx  # Radial gauge
-│   │   │   │
-│   │   │   ├── graph/
-│   │   │   │   └── GraphView.tsx      # Interactive atom graph
-│   │   │   │
-│   │   │   └── playground/
-│   │   │       ├── QueryBar.tsx       # Search input + agent selector
-│   │   │       ├── ResultColumn.tsx   # Single agent's results
-│   │   │       └── PerfComparison.tsx # Latency/token comparison bar
-│   │   │
-│   │   ├── pages/
-│   │   │   ├── Dashboard.tsx
-│   │   │   ├── Sources.tsx
-│   │   │   ├── Agents.tsx
-│   │   │   ├── Playground.tsx         # ⭐ Hero page
-│   │   │   ├── AtomExplorer.tsx
-│   │   │   ├── GraphExplorer.tsx
-│   │   │   └── AuditLog.tsx
-│   │   │
-│   │   ├── hooks/
-│   │   │   ├── useAtoms.ts
-│   │   │   ├── useAgents.ts
-│   │   │   ├── useSources.ts
-│   │   │   └── useContextQuery.ts
-│   │   │
-│   │   └── lib/
-│   │       ├── constants.ts           # Atom kind colors, labels
-│   │       └── utils.ts               # Formatting helpers
-│   │
-│   └── public/
-│       └── lattice-logo.svg
-│
-├── backend/
-│   └── ...
-```
-
----
-
-## 5. Visual Design Language
-
-### Color Palette
-
-**Atom kind colors** (consistent everywhere — cards, graph nodes, charts):
-| Kind | Color | Hex |
-|------|-------|-----|
-| fact | Blue | `#3B82F6` |
-| metric | Emerald | `#10B981` |
-| decision | Amber | `#F59E0B` |
-| relationship | Purple | `#8B5CF6` |
-| event | Rose | `#F43F5E` |
-| procedure | Slate | `#64748B` |
-
-**Cache tier colors:**
-| Tier | Color | Label |
-|------|-------|-------|
-| L2 | Green | ⚡ Cache hit |
-| L3 | Yellow | 🔍 Index search |
-
-**Access mask:** Green bars for allowed bits, gray for unset. Hoverable to show role labels.
-
-### Design Principles
-- **Dark mode default** — enterprise AI products look better dark
-- **Data-dense but not cluttered** — every pixel earns its place
-- **Numbers front and center** — latency, atom counts, cache rates visible at a glance
-- **Color = meaning** — atom kinds, cache tiers, access status all have consistent colors
-
----
-
-## 6. API Endpoints the Frontend Needs
-
-The frontend drives the backend API surface:
-
-```
-# Dashboard
-GET  /v1/admin/stats              → atom count, frame count, agent count, cache hit rate
-GET  /v1/admin/activity           → recent queries, compilations, access events
-
-# Sources
-POST /v1/sources/ingest           → upload + compile (returns compilation stats)
-GET  /v1/sources                  → list sources with atom counts
-GET  /v1/sources/{id}/atoms       → list atoms from a source
-
-# Agents
-POST /v1/agents                   → create agent with profile
-GET  /v1/agents                   → list agents with stats
-PATCH /v1/agents/{id}             → update profile
-GET  /v1/agents/{id}/stats        → query count, avg latency, cache hit rate
-
-# Context Playground
-POST /v1/context/query            → query as agent → returns atoms + metadata
-POST /v1/context/compare          → same query, multiple agents → parallel results
-
-# Atom Explorer
-GET  /v1/atoms                    → search/list atoms with filters
-GET  /v1/atoms/{id}               → atom detail with links
-GET  /v1/atoms/{id}/neighborhood  → linked atoms for graph view
-
-# Audit
-GET  /v1/audit/log                → paginated access log
-GET  /v1/audit/stats              → access denied breakdown
-```
-
----
-
-## 7. MVP Frontend Scope
-
-### Phase 1 (Demo-Ready)
-- [x] Dashboard with stat cards + charts
-- [x] Sources page (upload + compiler viz)
-- [x] Agents page (create + cards)
-- [x] **Context Playground** (the hero page)
-- [x] Audit log (basic table)
-
-### Phase 2 (Polish)
-- [ ] Atom Explorer (search + detail view)
-- [ ] Graph Explorer (interactive viz)
-- [ ] Real-time activity feed (WebSocket)
-- [ ] Export (PDF report of demo session)
-
----
-
-*The Playground page is the product. Everything else supports it.*
+**Bottom Line:** The frontend provides a clean, intuitive interface for exploring enterprise knowledge through an interactive graph visualization with a warm, human-friendly design aesthetic.

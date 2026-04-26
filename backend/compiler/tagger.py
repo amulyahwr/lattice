@@ -3,126 +3,163 @@
 Evolved from engine/access.py. The core insight: access control is computed
 at compile time (bitmask on atom) rather than query time (policy engine).
 Runtime access check is a single AND: agent.role_mask & atom.access_mask != 0.
+
+Domain suggestion is LLM-based (one batched call for all atoms), replacing
+the old keyword-scoring heuristic.
 """
 
 from __future__ import annotations
 
+import json
+import logging
+import re
+
+from backend.compiler.llm_client import chat
+
+logger = logging.getLogger(__name__)
+
 # ── Bitmask mapping for MVP ──
-# bit 0 = public, bit 1 = sales, bit 2 = finance, bit 3 = engineering,
-# bit 4 = hr, bit 5 = legal, bit 6 = product, bit 7 = executive
+# bit 0 = sales, bit 1 = finance, bit 2 = engineering,
+# bit 3 = hr, bit 4 = legal, bit 5 = product
 
 DOMAIN_BIT_MAP: dict[str, int] = {
-    "public": 0,
-    "sales": 1,
-    "finance": 2,
-    "engineering": 3,
-    "hr": 4,
-    "legal": 5,
-    "product": 6,
-    "executive": 7,
+    "sales": 0,
+    "finance": 1,
+    "engineering": 2,
+    "hr": 3,
+    "legal": 4,
+    "product": 5,
 }
 
-ALL_BITS = (1 << 8) - 1  # 0xFF — all 8 bits set
-INTERNAL_BITS = ALL_BITS & ~1  # bits 1-7 (everything except public-only)
-EXECUTIVE_ONLY = 1 << DOMAIN_BIT_MAP["executive"]  # bit 7
+INTERNAL_BITS = (1 << 6) - 1  # 0x3F fallback — all departments
 
-# Domain keyword detection (carried from summarize.py suggest_domains)
-DOMAIN_KEYWORDS: dict[str, list[str]] = {
-    "finance": [
-        "revenue", "financial", "profit", "budget", "ebitda",
-        "forecast", "earnings", "fiscal", "cost", "margin",
-    ],
-    "engineering": [
-        "api", "architecture", "system", "code", "deploy",
-        "infrastructure", "technical", "database", "software", "pipeline",
-    ],
-    "legal": [
-        "contract", "compliance", "regulation", "liability",
-        "agreement", "policy", "legal", "law",
-    ],
-    "sales": [
-        "customer", "pipeline", "deal", "crm", "prospect",
-        "quota", "sales", "revenue target", "account",
-    ],
-    "hr": [
-        "employee", "hiring", "onboarding", "performance review",
-        "benefits", "compensation", "headcount",
-    ],
-    "product": [
-        "roadmap", "feature", "user experience", "product",
-        "release", "sprint", "backlog",
-    ],
-}
+_VALID_DOMAINS = frozenset(DOMAIN_BIT_MAP.keys())
+
+_BATCH_SIZE = 50  # domain classification is cheap, handle more per call
+
+_SYSTEM_DOMAIN = """\
+You are a domain classifier for enterprise knowledge atoms.
+
+Valid domains: sales, finance, engineering, hr, legal, product
+
+Rules:
+- Choose only from the valid domain list above.
+- An atom may belong to multiple domains (e.g. a budget decision is both finance and sales).
+- If no specific domain applies, return an empty array for that atom.
+- Return ONLY a JSON array of arrays, same length as the input, no explanation, no markdown.
+- CRITICAL: You must return exactly one classification array for each input item, even if items are similar or identical.
+- Do NOT deduplicate or merge similar items - classify each one independently.
+
+Example input:  ["Q2 pipeline hit 120% of quota.", "Deploy the Kubernetes cluster.", "New hire onboarding checklist."]
+Example output: [["sales","finance"],["engineering"],["hr"]]"""
 
 
-def compute_access_mask(classification: str, domains: list[str] | None = None) -> int:
-    """Compute a 64-bit access mask from source classification and domains.
-
-    Mapping:
-    - public: all bits set (everyone can see)
-    - internal: bits 1-7 (all departments, not anonymous public)
-    - confidential: only bits for specified domains
-    - restricted: executive only (bit 7)
-    """
-    if classification == "public":
-        return ALL_BITS
-    elif classification == "internal":
-        return INTERNAL_BITS
-    elif classification == "confidential":
-        if domains:
-            mask = 0
-            for d in domains:
-                bit = DOMAIN_BIT_MAP.get(d.lower())
-                if bit is not None:
-                    mask |= 1 << bit
-            return mask if mask else INTERNAL_BITS
-        return INTERNAL_BITS
-    elif classification == "restricted":
-        return EXECUTIVE_ONLY
-    else:
-        return INTERNAL_BITS
+def _domains_to_mask(domains: list[str]) -> int:
+    """OR together the bit for each named domain. Falls back to INTERNAL_BITS if none match."""
+    mask = 0
+    for d in domains:
+        bit = DOMAIN_BIT_MAP.get(d.lower())
+        if bit is not None:
+            mask |= 1 << bit
+    return mask if mask else INTERNAL_BITS
 
 
-def suggest_domains(text: str) -> list[str]:
-    """Suggest domain tags based on text content.
-
-    Returns a list of matching domain names.
-    """
-    text_lower = text.lower()
-    matched: list[str] = []
-
-    for domain, keywords in DOMAIN_KEYWORDS.items():
-        score = sum(1 for kw in keywords if kw in text_lower)
-        if score >= 2:
-            matched.append(domain)
-
-    return matched if matched else ["general"]
+def mask_to_domains(mask: int) -> list[str]:
+    """Convert an access_mask back to a sorted list of domain names."""
+    return sorted(d for d, bit in DOMAIN_BIT_MAP.items() if (mask >> bit) & 1)
 
 
-def tag_atoms(
+async def suggest_domains(text: str) -> list[str]:
+    """Suggest domain tags for a single text via LLM."""
+    batch = await _suggest_domains_batch([text])
+    return batch[0]
+
+
+async def _suggest_domains_batch(texts: list[str]) -> list[list[str]]:
+    """Classify domains for all texts in as few LLM calls as possible."""
+    results: list[list[str]] = []
+    for i in range(0, len(texts), _BATCH_SIZE):
+        batch = texts[i : i + _BATCH_SIZE]
+        raw = await chat(_SYSTEM_DOMAIN, json.dumps(batch), temperature=0.0)
+        results.extend(_parse_domain_response(raw, expected=len(batch)))
+    return results
+
+
+def _parse_domain_response(raw: str, expected: int) -> list[list[str]]:
+    match = re.search(r"\[.*\]", raw, re.DOTALL)
+    if not match:
+        raise ValueError(f"LLM domain response contains no JSON array: {raw!r}")
+    parsed = json.loads(match.group())
+
+    # Handle size mismatch gracefully: LLM sometimes deduplicates or merges items
+    if len(parsed) != expected:
+        logger.warning(
+            f"Domain classification size mismatch: expected {expected}, got {len(parsed)}. "
+            f"This may indicate the LLM is deduplicating similar content or having context issues. "
+            f"Adjusting response to match expected size."
+        )
+        # If we got fewer results, pad with empty lists (will fall back to INTERNAL_BITS)
+        if len(parsed) < expected:
+            parsed.extend([[]] * (expected - len(parsed)))
+        # If we got more results, truncate to expected size
+        else:
+            parsed = parsed[:expected]
+
+    normalized: list[list[str]] = []
+    for item in parsed:
+        if isinstance(item, str):
+            item = [item]
+        domains = [
+            d.lower()
+            for d in item
+            if isinstance(d, str) and d.lower() in _VALID_DOMAINS
+        ]
+        normalized.append(domains)  # Empty list if no valid domains
+    return normalized
+
+
+async def tag_atoms(
     contents: list[str],
     kinds: list[str],
-    source_classification: str,
-    source_domains: list[str] | None = None,
 ) -> list[dict]:
-    """Tag a batch of atoms with access_mask and refined domains.
+    """Tag a batch of atoms with access_mask and LLM-suggested domains.
 
-    Returns list of dicts: [{"access_mask": int, "domain": list[str], "kind": str}]
+    access_mask is SOURCE-level — every atom in a source gets the same mask,
+    derived by majority-vote across the LLM domain tags for all atoms.
+    This prevents a sales atom that mentions engineering topics from becoming
+    readable by engineering agents.
+
+    Per-atom `domain` tags are kept for content routing (L2 frames, L3 domain
+    filter) but do NOT influence access control.
     """
-    base_mask = compute_access_mask(source_classification, source_domains)
-    results: list[dict] = []
+    llm_domain_lists = await _suggest_domains_batch(contents)
+    source_mask = _source_level_mask(llm_domain_lists)
 
-    for content, kind in zip(contents, kinds):
-        # Refine domains per atom
-        atom_domains = suggest_domains(content)
-        if source_domains:
-            # Merge source-level domains
-            atom_domains = list(set(atom_domains) | set(source_domains))
-
-        results.append({
-            "access_mask": base_mask,
-            "domain": atom_domains,
+    return [
+        {
+            "access_mask": source_mask,  # same for every atom in this source
+            "domain": llm_domains,  # per-atom, for routing only
             "kind": kind,
-        })
+        }
+        for kind, llm_domains in zip(kinds, llm_domain_lists)
+    ]
 
-    return results
+
+def _source_level_mask(llm_domain_lists: list[list[str]]) -> int:
+    """Compute a single access_mask for the whole source via majority vote.
+
+    Tallies all domain tags across every atom. Domains within
+    80% of the top count are all included, to avoid over-narrowing mixed sources.
+    Falls back to INTERNAL_BITS when no domains are found.
+    """
+    from collections import Counter
+
+    tally: Counter[str] = Counter(
+        d for domains in llm_domain_lists for d in domains if d in DOMAIN_BIT_MAP
+    )
+    if not tally:
+        return INTERNAL_BITS
+
+    top_count = tally.most_common(1)[0][1]
+    dominant = [d for d, c in tally.items() if c >= top_count * 0.8]
+    return _domains_to_mask(dominant)

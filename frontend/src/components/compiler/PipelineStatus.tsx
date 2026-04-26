@@ -3,12 +3,12 @@ import { cn } from '../../lib/utils'
 
 interface PipelineStatusProps {
   stats?: {
-    atomize_ms: number
-    distill_ms: number
-    embed_ms: number
-    link_ms: number
-    tag_ms: number
-    index_ms: number
+    atomize_ms?: number
+    distill_ms?: number
+    embed_ms?: number
+    link_ms?: number
+    tag_ms?: number
+    index_ms?: number
   }
 }
 
@@ -33,22 +33,22 @@ export default function PipelineStatus({ stats }: PipelineStatusProps) {
               'flex flex-col items-center rounded-md border px-2.5 py-1.5',
               done
                 ? 'border-emerald-500/30 bg-emerald-500/10'
-                : 'border-zinc-700 bg-zinc-800/50',
+                : 'border-[#C4A888] bg-[#E8D4BC]/50',
             )}>
               <div className="mb-0.5">
                 {done ? (
                   <Check className="h-3 w-3 text-emerald-400" />
                 ) : (
-                  <Loader2 className="h-3 w-3 animate-spin text-zinc-500" />
+                  <Loader2 className="h-3 w-3 animate-spin text-[#8B7355]" />
                 )}
               </div>
-              <span className="text-[10px] font-medium text-zinc-400">{stage.label}</span>
+              <span className="text-[10px] font-medium text-[#6B5744]">{stage.label}</span>
               {done && (
-                <span className="text-[9px] text-zinc-500">{(ms / 1000).toFixed(1)}s</span>
+                <span className="text-[9px] text-[#8B7355]">{(ms / 1000).toFixed(1)}s</span>
               )}
             </div>
             {i < stages.length - 1 && (
-              <div className={cn('mx-0.5 h-px w-2', done ? 'bg-emerald-500/40' : 'bg-zinc-700')} />
+              <div className={cn('mx-0.5 h-px w-2', done ? 'bg-emerald-500/40' : 'bg-[#D4BFA8]')} />
             )}
           </div>
         )

@@ -4,33 +4,41 @@
 
 ---
 
-## Phase 1: MVP ✅ (In Progress)
+## Phase 1: MVP ✅ (Complete - L3-Only)
 
 See [MVP.md](./MVP.md) for full scope.
 
 **Core deliverables:**
-- Context Atom data model (replaces chunks + entities)
-- Compiler pipeline: atomize → distill → embed → link → tag → index (synchronous)
-- Context Frames with domain clustering
-- Two-tier serving: L2 frame cache + L3 pgvector search
-- Bitmask access control (64-bit)
-- Agent profiles with role masks and token budgets
-- PDF + plain text connectors
-- REST API for ingest, query, agents, admin
-- Demo frontend: Dashboard, Sources, Agents, Playground, Audit
+
+- ✅ Context Atom data model (replaces chunks + entities)
+- ✅ Compiler pipeline: atomize → distill → embed → link → tag → index → cross-link (7 stages, synchronous)
+- ✅ Cross-source relationship linking — domain-aware candidate selection (DOMAIN_GROUPS) + LLM link inference, similarity-gated (cosine ≥ 0.5)
+- ✅ L3-only serving: pgvector search with bitmask pre-filtering (~40-60ms)
+- ✅ Bitmask access control (64-bit)
+- ✅ Agent profiles with role masks and token budgets
+- ✅ PDF + plain text connectors
+- ✅ REST API for ingest, query, agents, admin (incl. `POST /admin/relink`)
+- ✅ Demo frontend: Dashboard, Sources, Agents, Playground, Audit
+- ✅ Atom Explorer — search, browse, and inspect individual atoms with full metadata
+- ✅ Graph Explorer — interactive knowledge graph visualization (React Flow, circular nodes, relationship labels)
+
+**Architecture decision:** Started with L3-only (pgvector) instead of L2+L3. Simpler, fast enough for production. L2 frame cache can be added later as optimization.
 
 ---
 
 ## Phase 2: Production Hardening
 
 ### Serving Enhancements
+
+- [ ] **L2 frame cache (optional)** — pre-built context frames for common queries, <5ms lookups
 - [ ] **L1 per-agent session cache** — in-memory atom set per active agent, sub-1ms lookups
 - [ ] **L4 cold semantic search** — full corpus search for rare/new query patterns, <200ms
 - [ ] **Frame lattice hierarchy** — parent/child frame relationships with join (∨) and meet (∧) operations for dynamic frame composition
-- [ ] **Token budget trimming** — intelligent atom prioritization when frame exceeds agent's token budget (rank by relevance, recency, confidence)
-- [ ] **Staleness fallback** — serve stale L2 data immediately while L3/L4 runs in background, return fresher results async
+- [ ] **Token budget trimming improvements** — smarter atom prioritization based on relevance, recency, confidence
+- [ ] **Query result caching** — cache recent query results to avoid re-embedding same queries
 
 ### Compiler Improvements
+
 - [ ] **Async compiler workers** — decouple ingestion from HTTP request lifecycle, queue-based processing
 - [ ] **LLM-powered atomization** — use LLM for higher-quality atom extraction alongside regex patterns
 - [ ] **LLM-powered distillation** — generate better token-efficient summaries vs extractive fallback
@@ -39,13 +47,15 @@ See [MVP.md](./MVP.md) for full scope.
 - [ ] **Multi-format connectors** — Markdown, DOCX, HTML, CSV ingestion
 
 ### Access Control
+
 - [ ] **Hierarchical bitmasks** — support very large orgs (>64 roles) with multi-level bitmask structure
 - [ ] **Dynamic mask recomputation** — when org structure changes, cascade bitmask updates to affected atoms
 - [ ] **Attribute-based policies** — supplement bitmasks with attribute conditions for edge cases
 
 ### Frontend
-- [ ] **Atom Explorer** — search, browse, inspect individual atoms with full metadata
-- [ ] **Graph Explorer** — interactive force-directed visualization of atom relationships (React Flow / D3)
+
+- ✅ **Atom Explorer** — search, browse, inspect individual atoms with full metadata
+- ✅ **Graph Explorer** — interactive knowledge graph visualization of atom relationships (React Flow, circular nodes, relationship labels, auto-fit)
 - [ ] **Real-time activity feed** — WebSocket-powered live updates on dashboard
 - [ ] **Source detail page** — drill into a source, see all atoms, compilation history, recompile button
 
@@ -54,22 +64,26 @@ See [MVP.md](./MVP.md) for full scope.
 ## Phase 3: Enterprise Features
 
 ### Push & Streaming
+
 - [ ] **Subscription model** — agents subscribe to frames/domains, receive push updates on context changes
 - [ ] **Push Gateway** — gRPC streaming + WebSocket transports for real-time context delivery
 - [ ] **Delta protocol** — version-tracked atoms; on re-query, send only what changed since last fetch
 - [ ] **Context Diff API** — `GET /v1/context/query?since=version:42` returns delta, not full payload
 
 ### Sparse Distributed Representations (SDR)
+
 - [ ] **SDR generation** — random projection from dense embeddings to sparse binary vectors (2048-bit)
 - [ ] **SDR matching at L1/L2** — hardware-accelerated bitwise operations for nanosecond similarity
 - [ ] **SDR-based frame lookup** — use sparse vectors for frame cache key matching instead of exact domain match
 
 ### Event-Driven Architecture
+
 - [ ] **Event bus integration** — NATS JetStream or Kafka for frame invalidation events
 - [ ] **Source webhooks** — receive real-time change notifications from source systems
 - [ ] **Compiler event pipeline** — atom create/update/delete events flow from compiler to mesh
 
 ### Advanced Connectors
+
 - [ ] **Confluence connector** — space/page sync with permission mapping
 - [ ] **Slack connector** — channel message ingestion with access inheritance
 - [ ] **Jira connector** — issue/project context with role mapping
@@ -80,12 +94,14 @@ See [MVP.md](./MVP.md) for full scope.
 - [ ] **GitHub connector** — repos, PRs, issues, wiki pages as enterprise knowledge
 
 ### Observability
+
 - [ ] **OpenTelemetry integration** — distributed tracing across compiler + serving
 - [ ] **Prometheus metrics** — standard metric export for enterprise monitoring stacks
 - [ ] **Compliance reporting** — scheduled PDF/CSV reports of access patterns, data residency
 - [ ] **Context quality scoring** — track which atoms agents actually use (feedback loops)
 
 ### Frontend
+
 - [ ] **Admin console** — role/bitmask management, org structure editor, connector config
 - [ ] **Compliance dashboard** — access pattern visualization, data residency map, audit export
 - [ ] **Agent analytics** — per-agent usage trends, most-queried topics, latency percentiles
@@ -96,6 +112,7 @@ See [MVP.md](./MVP.md) for full scope.
 ## Phase 4: Scale & Multi-Tenancy
 
 ### Infrastructure
+
 - [ ] **Multi-tenant deployment** — isolated atom stores per tenant, shared mesh infrastructure
 - [ ] **Distributed atom store** — migrate from single Postgres to sharded store (ScyllaDB / TiKV / FoundationDB)
 - [ ] **Distributed L2 cache** — Redis Cluster or Dragonfly for shared frame cache across mesh nodes
@@ -103,6 +120,7 @@ See [MVP.md](./MVP.md) for full scope.
 - [ ] **Compiler worker pool** — auto-scale compiler workers based on ingestion queue depth
 
 ### Protocol & SDK
+
 - [ ] **gRPC interface** — high-throughput binary protocol for production agent integrations
 - [ ] **Python SDK** — `from lattice import LatticeClient` with query, subscribe, feedback
 - [ ] **TypeScript SDK** — npm package for JS/TS agent frameworks
@@ -110,23 +128,25 @@ See [MVP.md](./MVP.md) for full scope.
 - [ ] **LangChain / LlamaIndex integration** — Lattice as a retrieval backend for popular frameworks
 
 ### Governance
+
 - [ ] **Data residency controls** — per-domain region pinning for compliance (GDPR, CCPA)
 - [ ] **Retention policies** — automated atom expiry based on classification level and age
 - [ ] **Right to deletion** — GDPR delete propagation: source deletion cascades to atoms within SLA
 - [ ] **Cross-tenant isolation audit** — verify no atom leaks between tenants
 
 ### Performance Targets (at scale)
-| Metric | Target |
-|--------|--------|
-| L1 query (p99) | < 1ms |
-| L2 query (p99) | < 5ms |
-| L3 query (p99) | < 50ms |
-| L4 query (p99) | < 200ms |
-| Cache hit rate (L1+L2) | > 90% |
-| Compile throughput | > 1000 atoms/sec/worker |
-| Push notification latency | < 100ms |
-| Concurrent agents | > 10,000 per mesh node |
-| Atom store capacity | > 100M atoms per cluster |
+
+| Metric                    | Target                   |
+| ------------------------- | ------------------------ |
+| L1 query (p99)            | < 1ms                    |
+| L2 query (p99)            | < 5ms                    |
+| L3 query (p99)            | < 50ms                   |
+| L4 query (p99)            | < 200ms                  |
+| Cache hit rate (L1+L2)    | > 90%                    |
+| Compile throughput        | > 1000 atoms/sec/worker  |
+| Push notification latency | < 100ms                  |
+| Concurrent agents         | > 10,000 per mesh node   |
+| Atom store capacity       | > 100M atoms per cluster |
 
 ---
 
@@ -153,14 +173,14 @@ See [MVP.md](./MVP.md) for full scope.
 
 ## Status
 
-| Phase | Status | Target |
-|-------|--------|--------|
-| Phase 1: MVP | 🔨 Building | — |
-| Phase 2: Production | 📋 Planned | — |
-| Phase 3: Enterprise | 📋 Planned | — |
-| Phase 4: Scale | 📋 Planned | — |
-| Phase 5: Intelligence | 💡 Vision | — |
+| Phase                 | Status      | Target |
+| --------------------- | ----------- | ------ |
+| Phase 1: MVP          | ✅ Complete | —      |
+| Phase 2: Production   | 📋 Planned  | —      |
+| Phase 3: Enterprise   | 📋 Planned  | —      |
+| Phase 4: Scale        | 📋 Planned  | —      |
+| Phase 5: Intelligence | 💡 Vision   | —      |
 
 ---
 
-*Last updated: 2026-04-25*
+_Last updated: 2026-04-26_

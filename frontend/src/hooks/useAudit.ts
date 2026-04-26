@@ -1,9 +1,10 @@
 import { useQuery } from '@tanstack/react-query'
-import { mockAuditLog } from '../lib/mock-data'
+import { api } from '../api/client'
 
 export function useAuditLog() {
   return useQuery({
     queryKey: ['audit-log'],
-    queryFn: async () => mockAuditLog,
+    queryFn: () => api.getAuditLog(),
+    refetchInterval: 10_000,
   })
 }

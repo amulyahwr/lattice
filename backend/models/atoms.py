@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     Column,
     DateTime,
     Float,
@@ -33,7 +34,6 @@ class Source(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name = Column(String(255), nullable=False)
     source_type = Column(String(50), nullable=False)  # "pdf", "text", "markdown", etc.
-    classification = Column(String(50), default="internal")  # public | internal | confidential | restricted
     domains = Column(ARRAY(String), default=list)
     metadata_ = Column("metadata", Text, nullable=True)
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
@@ -51,6 +51,9 @@ class Atom(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     content = Column(Text, nullable=False)  # Distilled, token-efficient text
     raw_content = Column(Text, nullable=True)  # Original text before distillation
+    content_hash = Column(String(64), nullable=True, unique=True)   # SHA-256 of distilled content — exact dedup
+    canonical = Column(JSONB, nullable=True)                        # Structured form: {subject, predicate, object, value, unit, period}
+    canonical_hash = Column(String(64), nullable=True, unique=True) # SHA-256 of canonical JSON — cross-source structural dedup
     kind = Column(
         String(50), nullable=False, default="fact"
     )  # fact | decision | metric | relationship | event | procedure
@@ -58,16 +61,39 @@ class Atom(Base):
     domain = Column(ARRAY(String), default=list)
     freshness = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     confidence = Column(Float, default=1.0)
-    access_mask = Column(BigInteger, default=0)  # 64-bit bitmask
+    access_mask = Column(BigInteger, default=0)  # 64-bit bitmask — OR of all source masks
     links = Column(JSONB, default=list)  # [{target_id: str, relation: str}, ...]
-    source_id = Column(UUID(as_uuid=True), ForeignKey("sources.id"), nullable=False)
     compiled_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     version = Column(Integer, default=1)
 
     __table_args__ = (
-        Index("ix_atoms_source", "source_id"),
         Index("ix_atoms_kind", "kind"),
         Index("ix_atoms_domain", "domain", postgresql_using="gin"),
+    )
+
+
+class AtomSource(Base):
+    """Join table — one atom can come from many sources.
+
+    is_primary marks the first source that produced this atom.
+    Subsequent sources that contain the same fact add rows with is_primary=False
+    and cause the atom's access_mask to be OR-widened.
+    """
+
+    __tablename__ = "atom_sources"
+
+    atom_id = Column(
+        UUID(as_uuid=True), ForeignKey("atoms.id", ondelete="CASCADE"), primary_key=True
+    )
+    source_id = Column(
+        UUID(as_uuid=True), ForeignKey("sources.id", ondelete="CASCADE"), primary_key=True
+    )
+    is_primary = Column(Boolean, default=True, nullable=False)
+    added_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+    __table_args__ = (
+        Index("ix_atom_sources_source", "source_id"),
+        Index("ix_atom_sources_atom", "atom_id"),
     )
 
 

@@ -1,4 +1,4 @@
-"""API dependencies — auth, db sessions, cache access."""
+"""API dependencies — auth, db sessions."""
 
 from fastapi import Depends, Header, HTTPException, status
 from sqlalchemy import select
@@ -6,7 +6,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models.atoms import AgentProfile
 from backend.models.database import get_db
-from backend.serving.l2_cache import L2Cache, l2_cache
 
 
 async def get_current_agent(
@@ -24,8 +23,3 @@ async def get_current_agent(
             detail="Invalid API key",
         )
     return agent
-
-
-def get_l2_cache() -> L2Cache:
-    """Dependency to inject L2 cache."""
-    return l2_cache
