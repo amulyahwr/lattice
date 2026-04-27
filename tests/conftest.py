@@ -127,6 +127,13 @@ class _MultiMock:
             m.side_effect = value
 
     @property
+    def call_args(self):
+        for m in self._mocks:
+            if m.call_count > 0:
+                return m.call_args
+        return None
+
+    @property
     def call_count(self) -> int:
         return sum(m.call_count for m in self._mocks)
 
@@ -144,6 +151,8 @@ _CHAT_TARGETS = [
     "backend.compiler.distiller.chat",
     "backend.compiler.linker.chat",
     "backend.compiler.tagger.chat",
+    "backend.compiler.consolidator.chat",
+    "backend.compiler.query_processor.chat",
 ]
 
 
@@ -291,6 +300,11 @@ async def make_atom(db_session: AsyncSession):
         access_mask: int = 0xFF,
         domain: list[str] | None = None,
         dense_vec: list[float] | None = None,
+        confidence: float = 1.0,
+        is_superseded: bool = False,
+        canonical: dict | None = None,
+        canonical_subject: str | None = None,
+        canonical_period: str | None = None,
     ) -> Atom:
         content_hash = hashlib.sha256(content.encode()).hexdigest()
         atom = Atom(
@@ -303,7 +317,11 @@ async def make_atom(db_session: AsyncSession):
             access_mask=access_mask,
             dense_vec=dense_vec or make_vector(0),
             freshness=datetime.now(timezone.utc),
-            confidence=1.0,
+            confidence=confidence,
+            is_superseded=is_superseded,
+            canonical=canonical,
+            canonical_subject=canonical_subject or (canonical.get("subject") if canonical else None),
+            canonical_period=canonical_period or (canonical.get("period") if canonical else None),
             links=[],
             compiled_at=datetime.now(timezone.utc),
             version=1,

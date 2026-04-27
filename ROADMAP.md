@@ -30,25 +30,29 @@ Agent session memory (Phase 2) makes the transmitter dynamic — an agent's iden
 
 Ordered by impact-to-effort ratio and competitive urgency. Items above the line are must-haves before the next funding / customer milestone.
 
-| # | Item | Phase | Why Now |
-|---|------|-------|---------|
-| 1 | **Atom versioning + `atom_versions` table** | 2 | Closes biggest gap vs. HydraDB; foundational for temporal query, state diff, and change tracking |
-| 2 | **Temporal query API (`?as_of=`, `valid_from/until`)** | 2 | Turns Lattice into a temporal knowledge layer, not just a snapshot store; enables "what was true on date X" |
-| 3 | **Graph-traversal serving mode** | 2 | Uses existing `atom.links[]` data with no schema change; directly answers "flat embeddings" criticism |
-| 4 | **`supersedes` link type + state-diff on re-ingest** | 2 | Upgrade planned `contradicts` detection to full state evolution; required for temporal versioning story |
-| 5 | **Contradiction detection** | 2 | Already planned; accelerate — needed alongside supersedes |
-| 6 | **Agent session memory** | 2 | Closes HydraDB's "persistent agent memory" pitch; differentiates Lattice for agent-first customers |
-| 7 | **Async compiler workers** | 2 | Unblocks production ingest throughput; needed before first enterprise pilot |
-| 8 | **Sliding window ingestion** | 2 | Better boundary-spanning relationship extraction; low-risk compiler-only change |
-| 9 | **LongMemEval-S benchmark** | 2 | Gives a competitive accuracy number to cite against HydraDB's 90.79% claim |
-| 10 | **L2 frame cache** | 2 | Performance optimization for hot paths; can defer until latency becomes a complaint |
-| 11 | **Context Diff API** | 2 | Moved up from Phase 3 — shares groundwork with atom versioning |
-| 12 | **Push Gateway + subscription model** | 3 | Real-time context delivery; needed for agentic workflows at scale |
-| 13 | **Confluence / Slack / Jira connectors** | 3 | Expands TAM; enterprise customers need connectors before they can adopt |
-| 14 | **OpenTelemetry + Prometheus** | 3 | Enterprise procurement requirement; often a blocker |
-| 15 | **Multi-tenant deployment** | 4 | Required for SaaS; can serve early customers single-tenant |
-| 16 | **Python + TypeScript SDKs** | 4 | Developer experience; needed for self-serve adoption |
-| 17 | **SOC 2 / HIPAA readiness** | business | Required for FinServ / Healthcare verticals |
+| # | Item | Phase | Status | Why Now |
+|---|------|-------|--------|---------|
+| 1 | **Atom versioning + `atom_versions` table** | 1 | ✅ Done | Closes biggest gap vs. HydraDB; foundational for temporal query, state diff, and change tracking |
+| 2 | **`supersedes` + `contradicts` + `confirms` link types** | 1 | ✅ Done | Stage 8 consolidator classifies near-duplicates via LLM; provenance preserved in `atom_versions` |
+| 3 | **Multi-hypothesis search (HyDE, k=3) + RRF fusion** | 1 | ✅ Done | Eliminates single-hypothesis failure mode; atoms appearing across multiple search lists surface higher |
+| 4 | **Canonical pre-filters (`canonical_subject`, `canonical_period`)** | 1 | ✅ Done | Period/subject extracted at ingest as indexed SQL columns; bidirectional ILIKE match at query time |
+| 5 | **Period + subject normalisation** | 1 | ✅ Done | Consistent format at write and query time; "q2-2024" / "second quarter" → "Q2 2024" |
+| 6 | **Optional LLM re-ranker (`deep_rerank=True`)** | 1 | ✅ Done | Second LLM pass scores candidates 1–10; falls back to heuristic order on any error |
+| 7 | **Temporal query API (`?as_of=`, `valid_from/until`)** | 2 | 📋 Planned | Turns Lattice into a temporal knowledge layer; schema done (`valid_from/until` on atoms + versions table); API endpoint not yet built |
+| 8 | **Graph-traversal serving mode** | 2 | 📋 Planned | Uses existing `atom.links[]` data with no schema change; directly answers "flat embeddings" criticism |
+| 9 | **State-diff events on re-ingest** | 2 | 📋 Planned | Structured state-change events streamed out of consolidator; lays groundwork for event bus in Phase 3 |
+| 10 | **Agent session memory** | 2 | 📋 Planned | Closes HydraDB's "persistent agent memory" pitch; differentiates Lattice for agent-first customers |
+| 11 | **Async compiler workers** | 2 | 📋 Planned | Unblocks production ingest throughput; needed before first enterprise pilot |
+| 12 | **Sliding window ingestion** | 2 | 📋 Planned | Better boundary-spanning relationship extraction; low-risk compiler-only change |
+| 13 | **LongMemEval-S benchmark** | 2 | 📋 Planned | Gives a competitive accuracy number to cite against HydraDB's 90.79% claim |
+| 14 | **L2 frame cache** | 2 | 📋 Planned | Performance optimization for hot paths; can defer until latency becomes a complaint |
+| 15 | **Context Diff API** | 2 | 📋 Planned | Shares groundwork with atom versioning (now done); ready to build |
+| 16 | **Push Gateway + subscription model** | 3 | 📋 Planned | Real-time context delivery; needed for agentic workflows at scale |
+| 17 | **Confluence / Slack / Jira connectors** | 3 | 📋 Planned | Expands TAM; enterprise customers need connectors before they can adopt |
+| 18 | **OpenTelemetry + Prometheus** | 3 | 📋 Planned | Enterprise procurement requirement; often a blocker |
+| 19 | **Multi-tenant deployment** | 4 | 📋 Planned | Required for SaaS; can serve early customers single-tenant |
+| 20 | **Python + TypeScript SDKs** | 4 | 📋 Planned | Developer experience; needed for self-serve adoption |
+| 21 | **SOC 2 / HIPAA readiness** | business | 📋 Planned | Required for FinServ / Healthcare verticals |
 
 ---
 
@@ -59,9 +63,15 @@ See [MVP.md](./MVP.md) for full scope.
 **Core deliverables:**
 
 - ✅ Context Atom data model (replaces chunks + entities)
-- ✅ Compiler pipeline: atomize → distill → embed → link → tag → index → cross-link (7 stages, synchronous)
+- ✅ Compiler pipeline: extract → embed → link+tag (parallel) → index → cross-link → consolidate (8 stages, synchronous)
 - ✅ Cross-source relationship linking — domain-aware candidate selection (DOMAIN_GROUPS) + LLM link inference, similarity-gated (cosine ≥ 0.5)
-- ✅ L3-only serving: pgvector search with bitmask pre-filtering (~40-60ms)
+- ✅ Stage 8 Consolidator — near-duplicate detection (cosine ≥ 0.85) + LLM classification: `confirms`, `subsumes`, `supersedes`, `contradicts`; provenance preserved; replaces silent Tier 2 discard
+- ✅ Atom versioning — `atom_versions` append-only ledger; `valid_from`/`valid_until` on atoms; foundation for temporal queries
+- ✅ Multi-hypothesis search (HyDE, k=3 diverse declarative hypotheses) + Reciprocal Rank Fusion
+- ✅ Canonical pre-filters — `canonical_subject` + `canonical_period` as indexed SQL columns; bidirectional ILIKE matching
+- ✅ Period + subject normalisation — consistent format at write and query time (`normalize_period`, `normalize_subject`)
+- ✅ Optional LLM re-ranker (`deep_rerank=True`) — second pass scores candidates 1–10; falls back gracefully
+- ✅ L3-only serving: multi-hypothesis pgvector search with bitmask pre-filtering (~100–200ms smart, ~50ms fast path)
 - ✅ Bitmask access control (64-bit)
 - ✅ Agent profiles with role masks and token budgets
 - ✅ PDF + plain text connectors
@@ -76,17 +86,21 @@ See [MVP.md](./MVP.md) for full scope.
 
 ## Phase 2: Production Hardening
 
-### Temporal Knowledge Layer _(new — closes gap vs. HydraDB)_
+### Temporal Knowledge Layer
 
-- [ ] **Atom versioning** — `atom_versions` table tracks every change to an atom's content with timestamps; superseded versions are retained with a `superseded_by` link rather than overwritten; enables full audit history of what the system believed at any point in time
-- [ ] **Time-bounded fact modeling** — add `valid_from` / `valid_until` fields to atoms to represent facts with explicit lifetimes (e.g. "CEO was Alice from 2020–2023"); query engine filters by validity window
-- [ ] **Temporal query API** — `?as_of=<ISO-timestamp>` parameter on `/v1/context/query` returns atoms valid at that point in time; complements the existing version-delta `Context Diff API`
-- [ ] **`supersedes` link type** — new typed edge; when re-ingest produces an atom that replaces an existing one, the compiler emits a `supersedes` link and timestamps the transition rather than silently deduping
-- [ ] **State-diff on re-ingest** — when the same fact changes across ingestion runs, detect the delta, emit a structured state-change event, and record the transition in atom history; lays groundwork for event bus in Phase 3
-- [ ] **Context Diff API** — `GET /v1/context/query?since=version:42` returns delta since last fetch, not full payload; moved up from Phase 3 because groundwork is shared with atom versioning
+- ✅ **Atom versioning** — `atom_versions` append-only ledger; every state transition written with `valid_from`/`valid_until`; `reason` field (`initial` | `confirmed` | `superseded`); enables "what did the system believe at time T?"
+- ✅ **Time-bounded fact modeling** — `valid_from` / `valid_until` fields on `Atom`; `is_superseded` flag; `superseded_by` FK; atoms with `is_superseded=True` excluded from live L3 search
+- ✅ **`supersedes` / `contradicts` / `confirms` link types** — Stage 8 consolidator emits typed links; `contradicts` pairs are flagged for review; `confirms` boosts `confidence`
+- [ ] **Temporal query API** — `?as_of=<ISO-timestamp>` on `/v1/context/query`; data already in `atom_versions`; only the API endpoint remains to be built
+- [ ] **State-diff events on re-ingest** — structured state-change events emitted from consolidator to event bus; lays groundwork for Phase 3 streaming
+- [ ] **Context Diff API** — `GET /v1/context/query?since=version:42` returns delta since last fetch; groundwork (versioning, valid_from) now done
 
 ### Serving Enhancements
 
+- ✅ **Multi-hypothesis HyDE search** — k=3 diverse hypotheses, no kind classification, eliminates phrasing mismatch
+- ✅ **RRF fusion** — atoms appearing across multiple hypothesis shortlists surface higher; deduplicates by atom_id
+- ✅ **Canonical pre-filters** — `canonical_subject` + `canonical_period` indexed SQL columns; bidirectional ILIKE pre-filter
+- ✅ **Optional LLM re-ranker** — `deep_rerank=True` flag; 1–10 score per candidate; fallback to heuristic order
 - [ ] **Graph-traversal serving mode** — optional `?hops=1` parameter on `/v1/context/query` seeds via pgvector similarity then expands via `atom.links[]`; hybrid retrieval uses existing data with no schema change; directly answers "flat embeddings" criticism
 - [ ] **L2 frame cache (optional)** — pre-built context frames for common queries, <5ms lookups
 - [ ] **L1 per-agent session cache** — in-memory atom set per active agent, sub-1ms lookups
@@ -104,11 +118,10 @@ See [MVP.md](./MVP.md) for full scope.
 
 ### Compiler Improvements
 
+- ✅ **LLM-powered atomization + distillation** — merged into a single LLM call per chunk (Stage 1+2 extract); parallel link+tag (Stages 4+5)
+- ✅ **Contradiction detection** — Stage 8 consolidator emits `contradicts` links when atoms disagree
 - [ ] **Async compiler workers** — decouple ingestion from HTTP request lifecycle, queue-based processing
 - [ ] **Sliding window ingestion** — replace fixed-chunk atomization with overlapping windows (e.g. 50% overlap) to preserve relationship context at chunk boundaries; compiler-only change, no serving impact
-- [ ] **LLM-powered atomization** — use LLM for higher-quality atom extraction alongside regex patterns
-- [ ] **LLM-powered distillation** — generate better token-efficient summaries vs extractive fallback
-- [ ] **Contradiction detection** — when two sources disagree, flag both atoms with `contradicts` link
 - [ ] **Incremental recompilation** — track source content hashes, only recompile changed atoms
 - [ ] **Multi-format connectors** — Markdown, DOCX, HTML, CSV ingestion
 
@@ -254,4 +267,4 @@ See [MVP.md](./MVP.md) for full scope.
 
 ---
 
-_Last updated: 2026-04-26_
+_Last updated: 2026-04-27_

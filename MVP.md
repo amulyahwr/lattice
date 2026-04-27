@@ -1,7 +1,7 @@
 # Lattice MVP — Scope & Code Mapping
 
-**Date:** 2026-04-26 (Updated for L3-only architecture + cross-source linking + knowledge graph visualization)
-**Goal:** Prove the core thesis — compiled context atoms served through pgvector search with bitmask access control, cross-source relationship linking, and full knowledge graph visualization.
+**Date:** 2026-04-27 (Updated for L3-only architecture + cross-source linking + consolidation + atom versioning + multi-hypothesis search)
+**Goal:** Prove the core thesis — compiled context atoms served through multi-hypothesis pgvector search with bitmask access control, cross-source relationship linking, knowledge graph visualization, and provenance-preserving deduplication via LLM consolidation.
 
 ---
 
@@ -15,6 +15,7 @@
 | pgvector search is sufficient | L3 (pgvector) with bitmask pre-filtering delivers 40-60ms latency — fast enough for production.              |
 | Agent-aware context           | Different agents get different context for the same query based on profile, role, and token budget.          |
 | Cross-source knowledge links  | New atoms are linked to semantically similar atoms from other sources via domain-aware candidate selection + LLM inference. Knowledge graph spans source boundaries. |
+| Provenance-preserving dedup   | Near-duplicate atoms are classified by LLM (confirms/subsumes/supersedes/contradicts) rather than silently discarded. Provenance lives in `atom_versions` ledger. |
 
 ---
 
@@ -28,9 +29,23 @@
 - `kind`: fact | decision | metric | relationship | event | procedure
 - `dense_vec`: float[384] (sentence-transformers embedding)
 - `domain[]`, `freshness`, `confidence`
-- `access_mask`: bit field (64-bit integer for MVP — covers most orgs)
-- `links[]`: typed edges to other atoms (stored as JSONB array of `{target_id, relation}`)
-- `source_id`, `compiled_at`, `version`
+- `access_mask`: 64-bit bitmask
+- `links[]`: typed edges (JSONB) — `{target_id, relation}` where relation ∈ `{confirms, subsumes, supersedes, contradicts, related_to, ...}`
+- `compiled_at`, `version`
+- `canonical`: structured JSONB form `{subject, predicate, object, value, unit, period}`
+- `canonical_subject`: extracted, normalised subject — indexed column for SQL pre-filtering (`"Revenue Growth"` → `"revenue growth"`)
+- `canonical_period`: extracted, normalised period — indexed column for SQL pre-filtering (`"Q2-2024"` → `"Q2 2024"`)
+- `valid_from`, `valid_until`: time-bounded validity window
+- `is_superseded`: True when a newer atom replaces this one; excluded from L3 search
+- `superseded_by`: FK to superseding atom
+
+**AtomVersion** — append-only ledger
+
+- `atom_id`, `version`, `content`, `canonical`
+- `valid_from`, `valid_until`: the time window this version was current
+- `reason`: `initial` | `confirmed` | `superseded`
+- `triggered_by_atom_id`: which atom caused the transition
+- Written on atom creation and on every consolidation transition
 
 **Agent Profile** (evolves from Agent)
 
@@ -54,23 +69,24 @@
 Synchronous for MVP (async workers come later), but structured as distinct stages:
 
 ```
-Ingest → Atomize → Distill → Embed → Link → Tag → Index → Cross-link
+Ingest → Extract(1+2) → Embed(3) → Link+Tag(4+5 parallel) → Index(6) → Cross-link(7) → Consolidate(8)
 ```
 
-- **Atomize**: Break content into atomic facts (LLM-assisted, fall back to sentence splitting)
-- **Distill**: Generate concise token-efficient text per atom (LLM or extractive for MVP)
-- **Embed**: Dense vector via sentence-transformers (existing)
-- **Link**: Identify within-source relationships between atoms (LLM)
-- **Tag**: Assign `access_mask` from source permissions, assign `domain[]`, set `kind`
-- **Index**: Write atoms to DB with pgvector index; two-tier deduplication (content_hash → canonical_hash)
-- **Cross-link**: Find relationships between new atoms and semantically similar atoms from other sources. Domain-aware candidate selection via `expand_domains()` (one-hop expansion through DOMAIN_GROUPS) + pgvector similarity search (threshold ≥ 0.5, top-K=5 per new atom) + LLM link inference.
+- **Extract (1+2)**: One LLM call per chunk — atomize raw text into atomic propositions + distill to concise token-efficient form. Returns `kind`, `content`, and `canonical` JSON.
+- **Embed (3)**: Dense vector via sentence-transformers (384-dim).
+- **Link (4)**: Identify within-source relationships between atoms (LLM). Runs in parallel with Tag.
+- **Tag (5)**: Assign `access_mask`, `domain[]`, `kind`. Runs in parallel with Link.
+- **Index (6)**: Write atoms to DB with Tier 1 exact dedup — single batch `SELECT` on `content_hash` (SHA-256). Near-duplicates are no longer discarded here; they pass to Stage 8.
+- **Cross-link (7)**: Find relationships between new atoms and semantically similar existing atoms from other sources. Domain-aware via `expand_domains()` (one-hop through DOMAIN_GROUPS) + pgvector similarity (threshold ≥ 0.5, top-K=5 per new atom) + LLM link inference.
+- **Consolidate (8)**: Near-duplicate detection — pgvector search (cosine ≥ 0.85) across all new atoms vs. existing atoms. Batched LLM classification into: `confirms`, `subsumes`, `supersedes`, `contradicts`, `distinct`. Actions: confidence boost, `is_superseded` flagging, `AtomVersion` records, typed link emission.
 
 `compile_source()` returns:
 ```python
 {
     "atoms_created": int,
     "cross_links_added": int,
-    "kinds": dict[str, int],   # e.g. {"fact": 3, "metric": 1}
+    "consolidation": dict[str, int],  # e.g. {"confirms": 2, "supersedes": 1}
+    "kinds": dict[str, int],          # e.g. {"fact": 3, "metric": 1}
     "domains": list[str],
 }
 ```
@@ -79,25 +95,29 @@ Ingest → Atomize → Distill → Embed → Link → Tag → Index → Cross-li
 
 **Query Router** with single tier for MVP:
 
-- **L3 (pgvector)**: Cosine similarity search with bitmask pre-filtering. ~40-60ms.
+- **L3 (pgvector)**: Multi-hypothesis cosine similarity search with bitmask pre-filtering.
+- **`smart_search=True`** (default): ~100–200ms — 1 LLM call for k=3 hypotheses + canonical extraction, then k × pgvector searches.
+- **`smart_search=False`** (fast path): ~50ms — embed raw query directly, 1 × pgvector search, no LLM overhead.
+- **`deep_rerank=True`** (optional): +1–3s — second LLM pass scores candidates 1–10 and re-sorts the shortlist.
 
 **Query flow:**
 
 ```
 query + agent_profile
-    → embed query
-    → apply role_mask pre-filter (SQL WHERE)
-    → pgvector cosine similarity search
-    → filter atoms by access_mask (post-filter)
+    → [smart_search] process_query() → k=3 diverse declarative hypotheses + canonical {subject, period}
+    → for each hypothesis: embed → SQL canonical pre-filter → pgvector cosine search
+    → RRF fusion (1/(60+rank) per list; atoms across multiple lists surface higher)
+    → heuristic re-score: cosine × confidence_weight × freshness_weight
+    → [deep_rerank] LLM re-ranker: 1–10 score per candidate
     → trim to agent's max_tokens budget
-    → return atoms + metadata (cache_tier="L3", latency, version)
+    → return atoms + metadata
 ```
 
 **Why L3-only for MVP:**
 
 - Simpler architecture — no frame cache complexity
-- pgvector is fast enough (40-60ms) for production use
-- Bitmask pre-filtering keeps search space small
+- Multi-hypothesis search + RRF makes pgvector retrieval robust to phrasing variance
+- Canonical pre-filters (subject + period) cut the search space before cosine runs
 - Can add L2 frame cache later as optimization without breaking changes
 
 ### 2.4 API Surface
@@ -204,22 +224,24 @@ GET    /audit/stats                     Access control statistics
 
 ## 5. New Files Created
 
-| File                             | Purpose                                                      |
-| -------------------------------- | ------------------------------------------------------------ |
-| `backend/compiler/__init__.py`   | Compiler package                                             |
-| `backend/compiler/pipeline.py`   | Orchestrates: atomize → distill → embed → link → tag → index |
-| `backend/compiler/atomizer.py`   | Breaks raw text into atoms                                   |
-| `backend/compiler/distiller.py`  | Generates concise atom content                               |
-| `backend/compiler/linker.py`     | Creates atom-to-atom links                                   |
-| `backend/compiler/tagger.py`     | Assigns access_mask, domains, kind                           |
-| `backend/compiler/llm_client.py` | LLM API client for compiler stages                           |
-| `backend/serving/__init__.py`    | Serving package                                              |
-| `backend/serving/router.py`      | Query Router: L3 search → access filter → token trim         |
-| `backend/serving/l3_search.py`   | pgvector atom search                                         |
-| `backend/models/atoms.py`        | Atom, AgentProfile, Source, AccessLog models                 |
-| `backend/connectors/text.py`     | Text/markdown connector                                      |
+| File                                    | Purpose                                                                         |
+| --------------------------------------- | ------------------------------------------------------------------------------- |
+| `backend/compiler/__init__.py`          | Compiler package                                                                |
+| `backend/compiler/pipeline.py`          | Orchestrates: atomize → distill → embed → link → tag → index → cross-link → consolidate |
+| `backend/compiler/atomizer.py`          | Breaks raw text into atoms                                                      |
+| `backend/compiler/distiller.py`         | Generates concise atom content                                                  |
+| `backend/compiler/linker.py`            | Creates atom-to-atom links                                                      |
+| `backend/compiler/tagger.py`            | Assigns access_mask, domains, kind                                              |
+| `backend/compiler/consolidator.py`      | Near-duplicate detection + LLM relationship classification                      |
+| `backend/compiler/query_processor.py`   | HyDE: k=3 diverse hypotheses + canonical extraction + period/subject normalisation |
+| `backend/compiler/llm_client.py`        | LLM API client for compiler stages                                              |
+| `backend/serving/__init__.py`           | Serving package                                                                 |
+| `backend/serving/router.py`             | Query Router: smart_search, deep_rerank, token trim, access log                 |
+| `backend/serving/l3_search.py`          | Multi-hypothesis pgvector search with RRF fusion                                |
+| `backend/models/atoms.py`               | Atom, AgentProfile, Source, AccessLog models                                    |
+| `backend/connectors/text.py`            | Text/markdown connector                                                         |
 
-**12 new files.**
+**14 new files.**
 
 ---
 
@@ -239,17 +261,19 @@ lattice/
 │   │
 │   ├── compiler/
 │   │   ├── __init__.py
-│   │   ├── pipeline.py              # Compiler orchestrator
+│   │   ├── pipeline.py              # Compiler orchestrator (8 stages)
 │   │   ├── atomizer.py              # Text → Atoms
 │   │   ├── distiller.py             # Raw → Distilled
 │   │   ├── linker.py                # Atom linking
 │   │   ├── tagger.py                # Access mask + domain tagging
+│   │   ├── consolidator.py          # Near-duplicate detection + LLM classification
+│   │   ├── query_processor.py       # HyDE hypotheses + canonical extraction + normalisation
 │   │   └── llm_client.py            # LLM API client
 │   │
 │   ├── serving/
 │   │   ├── __init__.py
-│   │   ├── router.py                # Query Router (L3-only)
-│   │   └── l3_search.py             # pgvector search
+│   │   ├── router.py                # Query Router (smart_search, deep_rerank)
+│   │   └── l3_search.py             # Multi-hypothesis pgvector search + RRF
 │   │
 │   ├── connectors/
 │   │   ├── __init__.py
@@ -296,13 +320,13 @@ lattice/
 
 ## 7. Summary
 
-| Category            | Count | Notes                                                                                                                         |
-| ------------------- | ----- | ----------------------------------------------------------------------------------------------------------------------------- |
-| **Keep as-is**      | 8     | config, database, main, connectors, embeddings, pyproject.toml                                                                |
-| **Refactor**        | 11    | schemas→atoms, access→tagger, search→l3_search, extraction→atomizer, graph→linker, summarize→distiller, all route files, deps |
-| **Remove**          | 7     | models/graph.py, AgentPermission, L2 cache files, frame files                                                                 |
-| **Create new**      | 12    | compiler package (6), serving package (2), models/atoms.py, connectors/text.py, routes updates                                |
-| **Total MVP files** | ~30   | Lean, focused architecture                                                                                                    |
+| Category            | Count | Notes                                                                                                                                |
+| ------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------ |
+| **Keep as-is**      | 8     | config, database, main, connectors, embeddings, pyproject.toml                                                                       |
+| **Refactor**        | 11    | schemas→atoms, access→tagger, search→l3_search, extraction→atomizer, graph→linker, summarize→distiller, all route files, deps        |
+| **Remove**          | 7     | models/graph.py, AgentPermission, L2 cache files, frame files                                                                        |
+| **Create new**      | 14    | compiler package (8 incl. query_processor, consolidator), serving package (2), models/atoms.py, connectors/text.py, routes updates   |
+| **Total MVP files** | ~30   | Lean, focused architecture                                                                                                           |
 
 **Bottom line:** ~60% of existing logic survives in evolved form. The core investment (FastAPI, async Postgres, pgvector, embeddings, PDF connector, entity extraction, summarization) all carries forward. What's new is the _architecture around it_ — the compiler pipeline structure, L3-only serving, and the bitmask access model.
 
