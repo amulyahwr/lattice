@@ -20,11 +20,12 @@ from tests.helpers import chat_sequence, make_vector
 def _pipeline_responses(
     extract: str,
     link: str = "[]",
-    tag: str = '[["general"]]',
+    tag: str = '{"0": ["general"]}',
 ) -> callable:
     """Return a side_effect that feeds pipeline stages in order (1 chunk).
 
     New pipeline: extract (merged atomize+distill), link, tag = 3 calls.
+    Tag response must be a JSON object: {"<index>": ["<domain>", ...], ...}
     """
     return chat_sequence(extract, link, tag)
 
@@ -52,7 +53,7 @@ async def test_pipeline_creates_atom_and_atom_source(
                 }
             ]
         ),
-        tag='[["general"]]',
+        tag='{"0": ["general"]}',
     )
 
     result = await compile_source(db_session, source, ["Company background text."])
@@ -82,7 +83,7 @@ async def test_pipeline_returns_kinds_dict(
                 }
             ]
         ),
-        tag='[["sales"]]',
+        tag='{"0": ["sales"]}',
     )
 
     result = await compile_source(db_session, source, ["Revenue text."])
@@ -105,7 +106,7 @@ async def test_pipeline_returns_domains_list(
                 }
             ]
         ),
-        tag='[["sales"]]',
+        tag='{"0": ["sales"]}',
     )
 
     result = await compile_source(db_session, source, ["Sales report text."])
@@ -140,7 +141,7 @@ async def test_pipeline_dedup_tier1_reuses_existing_atom(
     source2 = await make_source("second_source.txt")
     mock_chat.side_effect = _pipeline_responses(
         extract=json.dumps([{"kind": "metric", "content": content, "canonical": None}]),
-        tag='[["finance"]]',  # different domain tag → widens mask
+        tag='{"0": ["finance"]}',  # different domain tag → widens mask
     )
 
     result = await compile_source(db_session, source2, ["Revenue again text."])
@@ -154,9 +155,10 @@ async def test_pipeline_dedup_tier1_reuses_existing_atom(
     assert existing.access_mask & finance_bit
 
 
-async def test_pipeline_dedup_tier2_canonical_hash_match(
+async def test_pipeline_canonical_match_creates_atom_not_blocked(
     db_session, mock_chat, mock_embed_texts, make_source, clear_l2_cache
 ):
+    """Canonical hash no longer gates dedup; atom is created and consolidation handles near-duplicates."""
     canonical = {
         "subject": "revenue",
         "predicate": "grew",
@@ -200,11 +202,11 @@ async def test_pipeline_dedup_tier2_canonical_hash_match(
                 }
             ]
         ),
-        tag='[["sales"]]',
+        tag='{"0": ["sales"]}',
     )
 
     result = await compile_source(db_session, source2, ["Variant revenue text."])
-    assert result["atoms_created"] == 0  # tier-2 dedup hit
+    assert result["atoms_created"] == 1  # canonical hash no longer blocks; consolidation handles it
 
 
 async def test_pipeline_links_stored_on_atoms(
@@ -229,8 +231,8 @@ async def test_pipeline_links_stored_on_atoms(
         ),
         # link: atom 0 → atom 1
         json.dumps([{"from": 0, "to": 1, "relation": "causal"}]),
-        # tag
-        '[["finance"], ["finance"]]',
+        # tag (2 atoms)
+        '{"0": ["finance"], "1": ["finance"]}',
     )
 
     result = await compile_source(db_session, source, ["Q3 financial text."])
@@ -254,7 +256,7 @@ async def test_pipeline_result_has_cross_links_added_key(
         extract=json.dumps(
             [{"kind": "fact", "content": "Simple company fact.", "canonical": None}]
         ),
-        tag='[["general"]]',
+        tag='{"0": ["general"]}',
     )
     result = await compile_source(db_session, source, ["Company background text."])
     assert "cross_links_added" in result
@@ -294,11 +296,11 @@ async def test_pipeline_cross_links_new_atoms_against_existing(
         # link (within-source — only 1 atom, so no links)
         "[]",
         # tag → sales domain
-        '[["sales"]]',
+        '{"0": ["sales"]}',
         # cross_link LLM call (if candidates found)
         json.dumps([{"new_index": 0, "existing_index": 0, "relation": "topical"}]),
     ]
-    mock_chat.side_effect = mock_responses
+    mock_chat.side_effect = chat_sequence(*mock_responses)
 
     result = await compile_source(db_session, source2, ["Sales Q2 report text."])
 
@@ -347,7 +349,7 @@ async def test_pipeline_cross_link_deduplicates_existing_target(
             ]
         ),
         "[]",
-        '[["sales"]]',
+        '{"0": ["sales"]}',
         json.dumps(
             [
                 {"new_index": 0, "existing_index": 0, "relation": "topical"},
@@ -400,7 +402,7 @@ async def test_pipeline_no_cross_link_call_when_domain_mismatch(
             ]
         ),
         "[]",
-        '[["engineering"]]',
+        '{"0": ["engineering"]}',
     )
 
     result = await compile_source(db_session, source2, ["Engineering deployment text."])

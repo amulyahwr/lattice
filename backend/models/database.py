@@ -25,3 +25,20 @@ async def init_db():
     async with engine.begin() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
         await conn.run_sync(Base.metadata.create_all)
+        # Idempotent migrations for columns added after initial schema creation
+        await conn.execute(text(
+            "ALTER TABLE atoms ADD COLUMN IF NOT EXISTS valid_from TIMESTAMPTZ DEFAULT NOW()"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE atoms ADD COLUMN IF NOT EXISTS valid_until TIMESTAMPTZ"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE atoms ADD COLUMN IF NOT EXISTS is_superseded BOOLEAN DEFAULT FALSE"
+        ))
+        await conn.execute(text(
+            "ALTER TABLE atoms ADD COLUMN IF NOT EXISTS superseded_by UUID REFERENCES atoms(id)"
+        ))
+        # Drop unique constraint on canonical_hash — no longer used as a dedup gate
+        await conn.execute(text(
+            "ALTER TABLE atoms DROP CONSTRAINT IF EXISTS atoms_canonical_hash_key"
+        ))

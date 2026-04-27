@@ -177,12 +177,15 @@ def mock_embed_texts():
 @pytest.fixture
 def mock_embed_text():
     """
-    Patch embed_text (singular) used by l3_search.py for query embedding.
-    Always returns make_vector(0).
+    Patch embed_text at both the source module and the l3_search usage site.
+    l3_search.py imports embed_text by reference, so patching only the source
+    module doesn't intercept calls made through the already-bound local name.
     """
-    with patch("backend.engine.embeddings.embed_text") as m:
-        m.return_value = make_vector(0)
-        yield m
+    with patch("backend.engine.embeddings.embed_text") as m1, \
+         patch("backend.serving.l3_search.embed_text") as m2:
+        m1.return_value = make_vector(0)
+        m2.return_value = make_vector(0)
+        yield m1
 
 
 @pytest.fixture(autouse=False)

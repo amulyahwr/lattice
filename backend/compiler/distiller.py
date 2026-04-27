@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 
+from pydantic import BaseModel, RootModel
+
 from backend.compiler.atomizer import RawAtom
 from backend.compiler.llm_client import chat
 
@@ -41,6 +43,30 @@ Output ONLY valid JSON — no explanation, no markdown, no code fences.
 _BATCH_SIZE = 25  # atoms per LLM call
 
 
+# ── Response schema ───────────────────────────────────────────────────────────
+
+
+class _CanonicalForm(BaseModel):
+    subject: str
+    predicate: str
+    object: str
+    value: float | None = None
+    unit: str | None = None
+    period: str | None = None
+
+
+class _DistilledAtom(BaseModel):
+    content: str
+    canonical: _CanonicalForm | None = None
+
+
+class _DistillResponse(RootModel[list[_DistilledAtom]]):
+    pass
+
+
+# ── Parser ────────────────────────────────────────────────────────────────────
+
+
 def _extract_json_array(text: str) -> str:
     """Strip any surrounding prose and extract the JSON array."""
     start = text.find("[")
@@ -60,14 +86,23 @@ async def distill_atoms(atoms: list[RawAtom]) -> list[dict]:
             [{"kind": a.kind, "proposition": a.content} for a in batch],
             ensure_ascii=False,
         )
-        output = await chat(_SYSTEM, payload)
-        parsed: list[dict] = json.loads(_extract_json_array(output))
+        output = await chat(_SYSTEM, payload, response_format=_DistillResponse)
+        raw = _extract_json_array(output)
 
-        if len(parsed) != len(batch):
+        try:
+            parsed = _DistillResponse.model_validate_json(raw)
+        except Exception as exc:
+            raise ValueError(f"Distiller: invalid response structure: {raw[:300]!r}") from exc
+
+        if len(parsed.root) != len(batch):
             raise ValueError(
-                f"Distiller returned {len(parsed)} items for {len(batch)} atoms in batch {i}"
+                f"Distiller returned {len(parsed.root)} items for {len(batch)} atoms in batch {i}"
             )
 
-        results.extend(parsed)
+        for atom in parsed.root:
+            results.append({
+                "content": atom.content,
+                "canonical": atom.canonical.model_dump() if atom.canonical else None,
+            })
 
     return results

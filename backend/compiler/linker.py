@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import json
 
+from pydantic import BaseModel, ConfigDict, Field, RootModel
+
 from backend.compiler.llm_client import chat
 from backend.config import DOMAIN_GROUPS
 
@@ -37,30 +39,6 @@ Rules:
 _BATCH_SIZE = 30  # atoms per linking call
 
 
-def _parse_links(text: str) -> list[dict]:
-    """Extract JSON array from LLM output. Returns [] if no array found."""
-    start = text.find("[")
-    end = text.rfind("]")
-    if start == -1 or end == -1:
-        return []
-    return json.loads(text[start : end + 1])
-
-
-def expand_domains(domains: list[str]) -> set[str]:
-    """Expand a domain list one hop using DOMAIN_GROUPS.
-
-    For each group that overlaps with the input domains, all domains in that
-    group are added. Expansion uses the original set only (no chaining), so a
-    "sales" atom expands to {sales, finance, product} — not further.
-    """
-    original = set(domains)
-    expanded = set(domains)
-    for group in DOMAIN_GROUPS:
-        if original & group:
-            expanded |= group
-    return expanded
-
-
 _CROSS_SYSTEM = """\
 You identify relationships between two groups of knowledge atoms.
 
@@ -85,6 +63,87 @@ Rules:
 - If no cross-group relationships exist, return []
 - Output ONLY valid JSON — no explanation, no markdown, no code fences
 """
+
+
+# ── Response schemas ──────────────────────────────────────────────────────────
+
+
+class _Link(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    from_: int = Field(alias="from")
+    to: int
+    relation: str = "topical"
+
+
+class _LinkResponse(RootModel[list[_Link]]):
+    pass
+
+
+class _CrossLink(BaseModel):
+    new_index: int
+    existing_index: int
+    relation: str = "topical"
+
+
+class _CrossLinkResponse(RootModel[list[_CrossLink]]):
+    pass
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+
+def expand_domains(domains: list[str]) -> set[str]:
+    """Expand a domain list one hop using DOMAIN_GROUPS.
+
+    For each group that overlaps with the input domains, all domains in that
+    group are added. Expansion uses the original set only (no chaining), so a
+    "sales" atom expands to {sales, finance, product} — not further.
+    """
+    original = set(domains)
+    expanded = set(domains)
+    for group in DOMAIN_GROUPS:
+        if original & group:
+            expanded |= group
+    return expanded
+
+
+def _parse_links(raw: str) -> list[_Link]:
+    start = raw.find("[")
+    end = raw.rfind("]")
+    if start == -1 or end == -1:
+        return []
+    try:
+        items = json.loads(raw[start : end + 1])
+    except json.JSONDecodeError:
+        return []
+    links = []
+    for item in items:
+        try:
+            links.append(_Link.model_validate(item))
+        except Exception:
+            continue
+    return links
+
+
+def _parse_cross_links(raw: str) -> list[_CrossLink]:
+    start = raw.find("[")
+    end = raw.rfind("]")
+    if start == -1 or end == -1:
+        return []
+    try:
+        items = json.loads(raw[start : end + 1])
+    except json.JSONDecodeError:
+        return []
+    links = []
+    for item in items:
+        try:
+            links.append(_CrossLink.model_validate(item))
+        except Exception:
+            continue
+    return links
+
+
+# ── Public API ────────────────────────────────────────────────────────────────
 
 
 async def cross_link_atoms(
@@ -119,20 +178,13 @@ async def cross_link_atoms(
         ensure_ascii=False,
     )
 
-    output = await chat(_CROSS_SYSTEM, payload)
-    raw_links = _parse_links(output)
+    output = await chat(_CROSS_SYSTEM, payload, response_format=_CrossLinkResponse)
+    raw_links = _parse_cross_links(output)
 
     for rel in raw_links:
-        new_idx = rel.get("new_index")
-        existing_idx = rel.get("existing_index")
-        relation = rel.get("relation", "topical")
-
-        if new_idx is None or existing_idx is None:
+        if not (0 <= rel.new_index < n_new and 0 <= rel.existing_index < len(existing_contents)):
             continue
-        if not (0 <= new_idx < n_new and 0 <= existing_idx < len(existing_contents)):
-            continue
-
-        links[new_idx].append({"existing_index": existing_idx, "relation": relation})
+        links[rel.new_index].append({"existing_index": rel.existing_index, "relation": rel.relation})
 
     return links
 
@@ -156,25 +208,18 @@ async def link_atoms(contents: list[str]) -> list[list[dict]]:
             [{"index": i, "proposition": c} for i, c in enumerate(batch)],
             ensure_ascii=False,
         )
-        output = await chat(_SYSTEM, payload)
+        output = await chat(_SYSTEM, payload, response_format=_LinkResponse)
         raw_links = _parse_links(output)
 
         for rel in raw_links:
-            from_local = rel.get("from")
-            to_local = rel.get("to")
-            relation = rel.get("relation", "topical")
-
-            if from_local is None or to_local is None:
-                continue
-
-            global_from = batch_start + from_local
-            global_to = batch_start + to_local
+            global_from = batch_start + rel.from_
+            global_to = batch_start + rel.to
 
             if (
                 0 <= global_from < n
                 and 0 <= global_to < n
                 and global_from != global_to
             ):
-                links[global_from].append({"target_index": global_to, "relation": relation})
+                links[global_from].append({"target_index": global_to, "relation": rel.relation})
 
     return links

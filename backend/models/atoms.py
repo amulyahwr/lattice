@@ -1,8 +1,4 @@
-"""SQLAlchemy models for Lattice — Atom-based architecture.
-
-Replaces the old Chunk/Entity/Relationship/Agent/AgentPermission models
-with Atom, Frame, AgentProfile, Source, and AccessLog.
-"""
+"""SQLAlchemy models for Lattice — Atom-based architecture."""
 
 import uuid
 from datetime import datetime, timezone
@@ -51,9 +47,9 @@ class Atom(Base):
     id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     content = Column(Text, nullable=False)  # Distilled, token-efficient text
     raw_content = Column(Text, nullable=True)  # Original text before distillation
-    content_hash = Column(String(64), nullable=True, unique=True)   # SHA-256 of distilled content — exact dedup
-    canonical = Column(JSONB, nullable=True)                        # Structured form: {subject, predicate, object, value, unit, period}
-    canonical_hash = Column(String(64), nullable=True, unique=True) # SHA-256 of canonical JSON — cross-source structural dedup
+    content_hash = Column(String(64), nullable=True, unique=True)  # SHA-256 of distilled content — exact re-ingest guard
+    canonical = Column(JSONB, nullable=True)                       # Structured form: {subject, predicate, object, value, unit, period}
+    canonical_hash = Column(String(64), nullable=True)             # kept for reference; no longer used as a dedup gate
     kind = Column(
         String(50), nullable=False, default="fact"
     )  # fact | decision | metric | relationship | event | procedure
@@ -62,13 +58,19 @@ class Atom(Base):
     freshness = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     confidence = Column(Float, default=1.0)
     access_mask = Column(BigInteger, default=0)  # 64-bit bitmask — OR of all source masks
-    links = Column(JSONB, default=list)  # [{target_id: str, relation: str}, ...]
+    links = Column(JSONB, default=list)  # [{target_id, relation}] — relation includes confirms/subsumes/supersedes/contradicts
     compiled_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     version = Column(Integer, default=1)
+    # Temporal + consolidation fields
+    valid_from = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    valid_until = Column(DateTime(timezone=True), nullable=True)
+    is_superseded = Column(Boolean, default=False)
+    superseded_by = Column(UUID(as_uuid=True), ForeignKey("atoms.id"), nullable=True)
 
     __table_args__ = (
         Index("ix_atoms_kind", "kind"),
         Index("ix_atoms_domain", "domain", postgresql_using="gin"),
+        Index("ix_atoms_is_superseded", "is_superseded"),
     )
 
 
@@ -94,6 +96,35 @@ class AtomSource(Base):
     __table_args__ = (
         Index("ix_atom_sources_source", "source_id"),
         Index("ix_atom_sources_atom", "atom_id"),
+    )
+
+
+class AtomVersion(Base):
+    """Append-only ledger of every state an atom has been in.
+
+    Written when an atom is first created (reason="initial") and on every
+    consolidation transition (confirmed / superseded / contradicted).
+    Enables temporal queries: what did the system believe at time T?
+    """
+
+    __tablename__ = "atom_versions"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    atom_id = Column(
+        UUID(as_uuid=True), ForeignKey("atoms.id", ondelete="CASCADE"), nullable=False
+    )
+    version = Column(Integer, nullable=False)
+    content = Column(Text, nullable=False)
+    canonical = Column(JSONB, nullable=True)
+    valid_from = Column(DateTime(timezone=True), nullable=False)
+    valid_until = Column(DateTime(timezone=True), nullable=True)
+    # "initial" | "confirmed" | "superseded" | "contradicted"
+    reason = Column(String(50), nullable=False, default="initial")
+    triggered_by_atom_id = Column(UUID(as_uuid=True), nullable=True)
+
+    __table_args__ = (
+        Index("ix_atom_versions_atom", "atom_id"),
+        Index("ix_atom_versions_valid_from", "valid_from"),
     )
 
 

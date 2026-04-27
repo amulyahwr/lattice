@@ -68,7 +68,10 @@ async def ingest_file(
         connector = TextConnector()
         source_type = "text"
 
-    chunks = await connector.ingest(file_bytes=file_bytes)
+    try:
+        chunks = await connector.ingest(file_bytes=file_bytes)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="No content could be extracted") from exc
     if not chunks:
         raise HTTPException(status_code=400, detail="No content could be extracted")
 
