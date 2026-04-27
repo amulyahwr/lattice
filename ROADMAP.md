@@ -4,6 +4,28 @@
 
 ---
 
+## Mental Model
+
+**Agents are transmitters.** Each agent simultaneously broadcasts two signals:
+- *Identity signal* — `role_mask` + `domains`: "here is who I am and what I'm allowed to see"
+- *Intent signal* — query embedding: "here is what I want"
+
+**Atoms are receivers.** Each atom simultaneously broadcasts two signals:
+- *Identity signal* — `access_mask` + `domain[]` + `kind`: "here is who I am and who can see me"
+- *Content signal* — `dense_vec` + `content`: "here is what I have"
+
+**Lattice is the structure in between.** Its job is to arrange all atoms into an optimized lattice so that any agent can quickly find what it's looking for. Matching runs two orthogonal filters in sequence:
+1. `role_mask & access_mask != 0` — hard identity gate, nanoseconds, eliminates invisible atoms
+2. `cosine(query_vec, dense_vec)` — soft content rank, ~50ms, finds the most relevant atoms
+
+The `links[]` between atoms are the lattice topology — not just metadata. The compiler doesn't just extract facts; it arranges atoms into a structure where related signals cluster together. Cross-source linking, domain groups, and typed edges (`supersedes`, `contradicts`) make the lattice navigable, not just searchable.
+
+Graph-traversal serving (`?hops=1`, Phase 2) is the natural extension: seed via signal match, then walk the lattice to pull in connected context that embeddings alone wouldn't surface.
+
+Agent session memory (Phase 2) makes the transmitter dynamic — an agent's identity and intent signals grow richer the more it queries. The lattice doesn't change; the transmitter gets better at tuning its frequency.
+
+---
+
 ## Priority List
 
 Ordered by impact-to-effort ratio and competitive urgency. Items above the line are must-haves before the next funding / customer milestone.
