@@ -1,6 +1,6 @@
 import { ArrowRight, ExternalLink } from 'lucide-react'
 import type { AtomDetail } from '../../lib/types'
-import { ATOM_BADGE_CLASSES, ATOM_ICONS, ROLE_COLORS } from '../../lib/constants'
+import { ATOM_BADGE_CLASSES, ATOM_ICONS, ROLE_COLORS, DOMAIN_COLORS } from '../../lib/constants'
 import { cn, timeAgo } from '../../lib/utils'
 import { ROLES } from '../../lib/types'
 import AccessMask from './AccessMask'
@@ -29,9 +29,18 @@ export default function AtomDetail({ atom, onNavigate }: AtomDetailProps) {
           <span>{ATOM_ICONS[atom.kind]}</span>
           {atom.kind}
         </span>
-        {atom.domain.map(d => (
-          <span key={d} className="rounded-md bg-[#E8D4BC] px-2 py-0.5 text-[11px] text-[#6B5744]">{d}</span>
-        ))}
+        {atom.domain.map(d => {
+          const c = DOMAIN_COLORS[d];
+          return (
+            <span
+              key={d}
+              style={c ? { background: `${c}18`, color: c, border: `1px solid ${c}40` } : undefined}
+              className={`rounded-md px-2 py-0.5 text-[11px] font-medium${!c ? ' bg-[#E8D4BC] text-[#6B5744]' : ''}`}
+            >
+              {d}
+            </span>
+          );
+        })}
         <span className="ml-auto font-mono text-[10px] text-[#9B8365]">
           {atom.id.slice(0, 8)}…
         </span>

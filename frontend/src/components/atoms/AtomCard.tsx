@@ -1,5 +1,5 @@
 import type { Atom } from '../../lib/types'
-import { ATOM_BADGE_CLASSES, ATOM_ICONS } from '../../lib/constants'
+import { ATOM_BADGE_CLASSES, ATOM_ICONS, DOMAIN_COLORS } from '../../lib/constants'
 import { cn } from '../../lib/utils'
 
 interface AtomCardProps {
@@ -15,11 +15,18 @@ export default function AtomCard({ atom, compact }: AtomCardProps) {
           <span>{ATOM_ICONS[atom.kind]}</span>
           {atom.kind}
         </span>
-        {atom.domain.map(d => (
-          <span key={d} className="rounded-md bg-[#E8D4BC] px-1.5 py-0.5 text-[10px] text-[#6B5744]">
-            {d}
-          </span>
-        ))}
+        {atom.domain.map(d => {
+          const c = DOMAIN_COLORS[d];
+          return (
+            <span
+              key={d}
+              style={c ? { background: `${c}18`, color: c, border: `1px solid ${c}40` } : undefined}
+              className={`rounded-md px-1.5 py-0.5 text-[10px] font-medium${!c ? ' bg-[#E8D4BC] text-[#6B5744]' : ''}`}
+            >
+              {d}
+            </span>
+          );
+        })}
       </div>
       <p className={cn('text-sm leading-relaxed text-[#5A4530]', compact && 'line-clamp-2')}>
         {atom.content}

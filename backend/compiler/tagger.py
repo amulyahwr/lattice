@@ -46,12 +46,12 @@ Rules:
 - Choose only from the valid domain list above.
 - An atom may belong to multiple domains (e.g. a budget decision is both finance and sales).
 - If no specific domain applies, return an empty array for that atom.
-- Return ONLY a JSON array of arrays, same length as the input, no explanation, no markdown.
-- CRITICAL: You must return exactly one classification array for each input item, even if items are similar or identical.
-- Do NOT deduplicate or merge similar items - classify each one independently.
+- Return ONLY a JSON object mapping each item's 0-based index (as a string key) to its domain array.
+- You MUST include an entry for every index from "0" to "N-1". Do not skip any index.
+- CRITICAL: Classify each item independently, even if items are similar or identical.
 
 Example input:  ["Q2 pipeline hit 120% of quota.", "Deploy the Kubernetes cluster.", "New hire onboarding checklist."]
-Example output: [["sales","finance"],["engineering"],["hr"]]"""
+Example output: {"0": ["sales","finance"], "1": ["engineering"], "2": ["hr"]}"""
 
 
 def _domains_to_mask(domains: list[str]) -> int:
@@ -86,36 +86,39 @@ async def _suggest_domains_batch(texts: list[str]) -> list[list[str]]:
 
 
 def _parse_domain_response(raw: str, expected: int) -> list[list[str]]:
-    match = re.search(r"\[.*\]", raw, re.DOTALL)
+    match = re.search(r"\{.*\}", raw, re.DOTALL)
     if not match:
-        raise ValueError(f"LLM domain response contains no JSON array: {raw!r}")
-    parsed = json.loads(match.group())
+        raise ValueError(f"LLM domain response contains no JSON object: {raw!r}")
+    try:
+        parsed = json.loads(match.group())
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"LLM domain response is not valid JSON: {raw!r}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError(f"LLM domain response is not a JSON object: {raw!r}")
 
-    # Handle size mismatch gracefully: LLM sometimes deduplicates or merges items
-    if len(parsed) != expected:
+    # Detect which indices the LLM dropped — we can now fill exactly the right slots.
+    present = {int(k) for k in parsed if k.isdigit()}
+    missing = set(range(expected)) - present
+    if missing:
         logger.warning(
-            f"Domain classification size mismatch: expected {expected}, got {len(parsed)}. "
-            f"This may indicate the LLM is deduplicating similar content or having context issues. "
-            f"Adjusting response to match expected size."
+            f"Domain classification missing indices {sorted(missing)} "
+            f"(expected {expected} entries). Falling back to [] for those atoms."
         )
-        # If we got fewer results, pad with empty lists (will fall back to INTERNAL_BITS)
-        if len(parsed) < expected:
-            parsed.extend([[]] * (expected - len(parsed)))
-        # If we got more results, truncate to expected size
-        else:
-            parsed = parsed[:expected]
 
-    normalized: list[list[str]] = []
-    for item in parsed:
+    results: list[list[str]] = []
+    for i in range(expected):
+        item = parsed.get(str(i), [])
         if isinstance(item, str):
             item = [item]
+        elif not isinstance(item, list):
+            item = []
         domains = [
             d.lower()
             for d in item
             if isinstance(d, str) and d.lower() in _VALID_DOMAINS
         ]
-        normalized.append(domains)  # Empty list if no valid domains
-    return normalized
+        results.append(domains)
+    return results
 
 
 async def tag_atoms(
@@ -124,21 +127,20 @@ async def tag_atoms(
 ) -> list[dict]:
     """Tag a batch of atoms with access_mask and LLM-suggested domains.
 
-    access_mask is SOURCE-level — every atom in a source gets the same mask,
-    derived by majority-vote across the LLM domain tags for all atoms.
-    This prevents a sales atom that mentions engineering topics from becoming
-    readable by engineering agents.
+    access_mask is ATOM-level: derived directly from the atom's own domain tags.
+    An atom tagged [sales, finance] gets exactly sales_bit | finance_bit, making
+    it visible only to agents whose role_mask overlaps those domains.
 
-    Per-atom `domain` tags are kept for content routing (L2 frames, L3 domain
-    filter) but do NOT influence access control.
+    Fallback: atoms with no recognisable domains (LLM returned [] after filtering)
+    inherit the source-level majority-vote mask, so they don't become world-readable.
     """
     llm_domain_lists = await _suggest_domains_batch(contents)
-    source_mask = _source_level_mask(llm_domain_lists)
+    source_mask = _source_level_mask(llm_domain_lists)  # fallback for domain-less atoms
 
     return [
         {
-            "access_mask": source_mask,  # same for every atom in this source
-            "domain": llm_domains,  # per-atom, for routing only
+            "access_mask": _domains_to_mask(llm_domains) if llm_domains else source_mask,
+            "domain": llm_domains,
             "kind": kind,
         }
         for kind, llm_domains in zip(kinds, llm_domain_lists)

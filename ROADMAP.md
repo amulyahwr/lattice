@@ -4,6 +4,32 @@
 
 ---
 
+## Priority List
+
+Ordered by impact-to-effort ratio and competitive urgency. Items above the line are must-haves before the next funding / customer milestone.
+
+| # | Item | Phase | Why Now |
+|---|------|-------|---------|
+| 1 | **Atom versioning + `atom_versions` table** | 2 | Closes biggest gap vs. HydraDB; foundational for temporal query, state diff, and change tracking |
+| 2 | **Temporal query API (`?as_of=`, `valid_from/until`)** | 2 | Turns Lattice into a temporal knowledge layer, not just a snapshot store; enables "what was true on date X" |
+| 3 | **Graph-traversal serving mode** | 2 | Uses existing `atom.links[]` data with no schema change; directly answers "flat embeddings" criticism |
+| 4 | **`supersedes` link type + state-diff on re-ingest** | 2 | Upgrade planned `contradicts` detection to full state evolution; required for temporal versioning story |
+| 5 | **Contradiction detection** | 2 | Already planned; accelerate — needed alongside supersedes |
+| 6 | **Agent session memory** | 2 | Closes HydraDB's "persistent agent memory" pitch; differentiates Lattice for agent-first customers |
+| 7 | **Async compiler workers** | 2 | Unblocks production ingest throughput; needed before first enterprise pilot |
+| 8 | **Sliding window ingestion** | 2 | Better boundary-spanning relationship extraction; low-risk compiler-only change |
+| 9 | **LongMemEval-S benchmark** | 2 | Gives a competitive accuracy number to cite against HydraDB's 90.79% claim |
+| 10 | **L2 frame cache** | 2 | Performance optimization for hot paths; can defer until latency becomes a complaint |
+| 11 | **Context Diff API** | 2 | Moved up from Phase 3 — shares groundwork with atom versioning |
+| 12 | **Push Gateway + subscription model** | 3 | Real-time context delivery; needed for agentic workflows at scale |
+| 13 | **Confluence / Slack / Jira connectors** | 3 | Expands TAM; enterprise customers need connectors before they can adopt |
+| 14 | **OpenTelemetry + Prometheus** | 3 | Enterprise procurement requirement; often a blocker |
+| 15 | **Multi-tenant deployment** | 4 | Required for SaaS; can serve early customers single-tenant |
+| 16 | **Python + TypeScript SDKs** | 4 | Developer experience; needed for self-serve adoption |
+| 17 | **SOC 2 / HIPAA readiness** | business | Required for FinServ / Healthcare verticals |
+
+---
+
 ## Phase 1: MVP ✅ (Complete - L3-Only)
 
 See [MVP.md](./MVP.md) for full scope.
@@ -28,8 +54,18 @@ See [MVP.md](./MVP.md) for full scope.
 
 ## Phase 2: Production Hardening
 
+### Temporal Knowledge Layer _(new — closes gap vs. HydraDB)_
+
+- [ ] **Atom versioning** — `atom_versions` table tracks every change to an atom's content with timestamps; superseded versions are retained with a `superseded_by` link rather than overwritten; enables full audit history of what the system believed at any point in time
+- [ ] **Time-bounded fact modeling** — add `valid_from` / `valid_until` fields to atoms to represent facts with explicit lifetimes (e.g. "CEO was Alice from 2020–2023"); query engine filters by validity window
+- [ ] **Temporal query API** — `?as_of=<ISO-timestamp>` parameter on `/v1/context/query` returns atoms valid at that point in time; complements the existing version-delta `Context Diff API`
+- [ ] **`supersedes` link type** — new typed edge; when re-ingest produces an atom that replaces an existing one, the compiler emits a `supersedes` link and timestamps the transition rather than silently deduping
+- [ ] **State-diff on re-ingest** — when the same fact changes across ingestion runs, detect the delta, emit a structured state-change event, and record the transition in atom history; lays groundwork for event bus in Phase 3
+- [ ] **Context Diff API** — `GET /v1/context/query?since=version:42` returns delta since last fetch, not full payload; moved up from Phase 3 because groundwork is shared with atom versioning
+
 ### Serving Enhancements
 
+- [ ] **Graph-traversal serving mode** — optional `?hops=1` parameter on `/v1/context/query` seeds via pgvector similarity then expands via `atom.links[]`; hybrid retrieval uses existing data with no schema change; directly answers "flat embeddings" criticism
 - [ ] **L2 frame cache (optional)** — pre-built context frames for common queries, <5ms lookups
 - [ ] **L1 per-agent session cache** — in-memory atom set per active agent, sub-1ms lookups
 - [ ] **L4 cold semantic search** — full corpus search for rare/new query patterns, <200ms
@@ -37,14 +73,28 @@ See [MVP.md](./MVP.md) for full scope.
 - [ ] **Token budget trimming improvements** — smarter atom prioritization based on relevance, recency, confidence
 - [ ] **Query result caching** — cache recent query results to avoid re-embedding same queries
 
+### Agent Session Memory _(new — closes gap vs. HydraDB)_
+
+- [ ] **Agent interaction history** — track which atoms each agent has accessed, which queries it has issued, and which domains it has focused on across sessions
+- [ ] **Recency-weighted retrieval** — boost atoms the agent has recently engaged with during L3 scoring; same query returns progressively better results as agent builds history
+- [ ] **Agent preference inference** — infer agent domain affinities from access patterns; auto-suggest domain refinements for agent profiles
+- [ ] **Session context continuity** — when the same agent queries repeatedly within a time window, maintain a lightweight session state that biases retrieval toward the current task
+
 ### Compiler Improvements
 
 - [ ] **Async compiler workers** — decouple ingestion from HTTP request lifecycle, queue-based processing
+- [ ] **Sliding window ingestion** — replace fixed-chunk atomization with overlapping windows (e.g. 50% overlap) to preserve relationship context at chunk boundaries; compiler-only change, no serving impact
 - [ ] **LLM-powered atomization** — use LLM for higher-quality atom extraction alongside regex patterns
 - [ ] **LLM-powered distillation** — generate better token-efficient summaries vs extractive fallback
 - [ ] **Contradiction detection** — when two sources disagree, flag both atoms with `contradicts` link
 - [ ] **Incremental recompilation** — track source content hashes, only recompile changed atoms
 - [ ] **Multi-format connectors** — Markdown, DOCX, HTML, CSV ingestion
+
+### Evaluation & Benchmarks _(new — competitive positioning)_
+
+- [ ] **LongMemEval-S benchmark run** — evaluate Lattice against the same benchmark HydraDB cites (90.79%); surfaces compiler quality gaps and produces a competitive accuracy number
+- [ ] **Internal eval harness** — test query suite with expected atom sets; regression tracking across compiler iterations
+- [ ] **Context quality scoring** — track which atoms agents actually use; close the feedback loop into compiler quality
 
 ### Access Control
 
@@ -56,6 +106,7 @@ See [MVP.md](./MVP.md) for full scope.
 
 - ✅ **Atom Explorer** — search, browse, inspect individual atoms with full metadata
 - ✅ **Graph Explorer** — interactive knowledge graph visualization of atom relationships (React Flow, circular nodes, relationship labels, auto-fit)
+- [ ] **Atom version timeline** — visualize the history of an atom: what it said at each version, what triggered changes
 - [ ] **Real-time activity feed** — WebSocket-powered live updates on dashboard
 - [ ] **Source detail page** — drill into a source, see all atoms, compilation history, recompile button
 
@@ -68,7 +119,7 @@ See [MVP.md](./MVP.md) for full scope.
 - [ ] **Subscription model** — agents subscribe to frames/domains, receive push updates on context changes
 - [ ] **Push Gateway** — gRPC streaming + WebSocket transports for real-time context delivery
 - [ ] **Delta protocol** — version-tracked atoms; on re-query, send only what changed since last fetch
-- [ ] **Context Diff API** — `GET /v1/context/query?since=version:42` returns delta, not full payload
+- [ ] **Compiler event pipeline** — atom create/update/delete/supersede events flow from compiler to mesh
 
 ### Sparse Distributed Representations (SDR)
 
@@ -78,9 +129,8 @@ See [MVP.md](./MVP.md) for full scope.
 
 ### Event-Driven Architecture
 
-- [ ] **Event bus integration** — NATS JetStream or Kafka for frame invalidation events
+- [ ] **Event bus integration** — NATS JetStream or Kafka for frame invalidation and state-change events
 - [ ] **Source webhooks** — receive real-time change notifications from source systems
-- [ ] **Compiler event pipeline** — atom create/update/delete events flow from compiler to mesh
 
 ### Advanced Connectors
 
@@ -98,7 +148,6 @@ See [MVP.md](./MVP.md) for full scope.
 - [ ] **OpenTelemetry integration** — distributed tracing across compiler + serving
 - [ ] **Prometheus metrics** — standard metric export for enterprise monitoring stacks
 - [ ] **Compliance reporting** — scheduled PDF/CSV reports of access patterns, data residency
-- [ ] **Context quality scoring** — track which atoms agents actually use (feedback loops)
 
 ### Frontend
 

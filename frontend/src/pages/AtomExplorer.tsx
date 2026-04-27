@@ -3,6 +3,7 @@ import { Network, Info, X } from "lucide-react";
 import { useFullGraph, useAtom } from "../hooks/useAtoms";
 import FullAtomGraph from "../components/atoms/FullAtomGraph";
 import AtomDetail from "../components/atoms/AtomDetail";
+import { DOMAIN_COLORS } from "../lib/constants";
 
 export default function AtomExplorer() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -32,18 +33,25 @@ export default function AtomExplorer() {
               Knowledge Graph
             </h2>
           </div>
-          {graphData && (
-            <div className="flex items-center gap-4 text-sm text-[#6B5744]">
-              <span>
-                {graphData.nodes.length} atom
-                {graphData.nodes.length !== 1 ? "s" : ""}
-              </span>
-              <span>
-                {graphData.edges.length} connection
-                {graphData.edges.length !== 1 ? "s" : ""}
-              </span>
+          <div className="flex items-center gap-3 flex-wrap">
+            {graphData && (
+              <div className="flex items-center gap-4 text-sm text-[#6B5744]">
+                <span>{graphData.nodes.length} atom{graphData.nodes.length !== 1 ? "s" : ""}</span>
+                <span>{graphData.edges.length} connection{graphData.edges.length !== 1 ? "s" : ""}</span>
+              </div>
+            )}
+            <div className="flex items-center gap-2 flex-wrap">
+              {Object.entries(DOMAIN_COLORS).map(([domain, color]) => (
+                <span
+                  key={domain}
+                  style={{ background: `${color}18`, color, border: `1px solid ${color}40` }}
+                  className="rounded-md px-2 py-0.5 text-[10px] font-medium"
+                >
+                  {domain}
+                </span>
+              ))}
             </div>
-          )}
+          </div>
         </div>
 
         <div className="min-h-0 flex-1 overflow-hidden">

@@ -44,11 +44,14 @@ export const CACHE_TIER_CONFIG = {
   },
 } as const;
 
-export const ROLE_COLORS: Record<string, string> = {
-  sales: "#3B82F6",
-  finance: "#10B981",
-  engineering: "#F59E0B",
-  hr: "#F43F5E",
-  legal: "#8B5CF6",
-  product: "#06B6D4",
+// Domain colors — chosen for contrast on the warm parchment background (#FFF5E6 / #F5E6D3)
+export const DOMAIN_COLORS: Record<string, string> = {
+  sales:       "#DC2626", // red
+  finance:     "#1D4ED8", // deep blue
+  engineering: "#15803D", // forest green
+  hr:          "#C2410C", // burnt orange
+  legal:       "#7C3AED", // violet
+  product:     "#0E7490", // teal
 };
+
+export const ROLE_COLORS = DOMAIN_COLORS;

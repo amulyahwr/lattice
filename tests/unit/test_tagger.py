@@ -98,60 +98,59 @@ def test_mask_to_domains_all_six_domains():
 
 
 def test_parse_domain_response_happy_path():
-    raw = '[["sales"], ["engineering", "finance"]]'
+    raw = '{"0": ["sales"], "1": ["engineering", "finance"]}'
     result = _parse_domain_response(raw, expected=2)
     assert result == [["sales"], ["engineering", "finance"]]
 
 
-def test_parse_domain_response_string_items_wrapped_in_list():
-    # LLM sometimes returns a flat string per item instead of a list
-    raw = '["sales", "engineering"]'
+def test_parse_domain_response_string_value_wrapped_in_list():
+    # LLM returns a bare string for a key instead of a list
+    raw = '{"0": "sales", "1": "engineering"}'
     result = _parse_domain_response(raw, expected=2)
     assert result == [["sales"], ["engineering"]]
 
 
-def test_parse_domain_response_no_json_array_raises():
-    with pytest.raises(ValueError, match="no JSON array"):
+def test_parse_domain_response_no_json_object_raises():
+    with pytest.raises(ValueError, match="no JSON object"):
         _parse_domain_response("I cannot classify these.", expected=1)
 
 
-def test_parse_domain_response_size_mismatch_pads_with_empty():
-    # LLM sometimes returns fewer items than expected; we pad with empty lists
-    raw = '[["sales"]]'
+def test_parse_domain_response_missing_index_fills_empty():
+    # LLM skipped index 1 — we know exactly which atom was dropped.
+    raw = '{"0": ["sales"], "2": ["engineering"]}'
     result = _parse_domain_response(raw, expected=3)
-    assert result == [["sales"], [], []]
+    assert result == [["sales"], [], ["engineering"]]
 
 
-def test_parse_domain_response_size_mismatch_truncates():
-    # LLM sometimes returns more items than expected; we truncate
-    raw = '[["sales"], ["finance"], ["engineering"]]'
+def test_parse_domain_response_extra_indices_ignored():
+    # LLM returned an extra index beyond expected — simply ignored.
+    raw = '{"0": ["sales"], "1": ["finance"], "2": ["engineering"]}'
     result = _parse_domain_response(raw, expected=2)
     assert result == [["sales"], ["finance"]]
 
 
 def test_parse_domain_response_invalid_domains_return_empty_list():
-    # Invalid domain names are filtered out; result is an empty list per atom
-    raw = '[["superpowers", "magic"]]'
+    raw = '{"0": ["superpowers", "magic"]}'
     result = _parse_domain_response(raw, expected=1)
     assert result == [[]]
 
 
 def test_parse_domain_response_mixed_valid_invalid_keeps_valid():
-    raw = '[["sales", "unicorn"]]'
+    raw = '{"0": ["sales", "unicorn"]}'
     result = _parse_domain_response(raw, expected=1)
     assert result == [["sales"]]
 
 
 def test_parse_domain_response_general_not_a_valid_domain():
     # 'general' is used in serving-layer filters but is not produced by the tagger
-    raw = '[["general"]]'
+    raw = '{"0": ["general"]}'
     result = _parse_domain_response(raw, expected=1)
     assert result == [[]]
 
 
 def test_parse_domain_response_extracts_from_prose():
-    # LLM wraps array in prose
-    raw = 'Here is the classification: [["hr"]] Hope that helps.'
+    # LLM wraps object in prose
+    raw = 'Here is the classification: {"0": ["hr"]} Hope that helps.'
     result = _parse_domain_response(raw, expected=1)
     assert result == [["hr"]]
 

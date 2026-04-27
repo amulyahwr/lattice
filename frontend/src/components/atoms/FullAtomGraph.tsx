@@ -1,4 +1,4 @@
-import { useCallback, useEffect } from "react";
+import React, { useCallback, useEffect } from "react";
 import {
   ReactFlow,
   Node,
@@ -13,7 +13,7 @@ import {
   Handle,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { ATOM_COLORS, ATOM_ICONS } from "../../lib/constants";
+import { ATOM_ICONS, DOMAIN_COLORS } from "../../lib/constants";
 import type { AtomKind } from "../../lib/types";
 
 interface FullAtomGraphProps {
@@ -29,32 +29,53 @@ interface FullAtomGraphProps {
   fitViewTrigger?: number;
 }
 
+function buildDomainStyle(domains: string[]): React.CSSProperties {
+  const colors = domains.length > 0
+    ? domains.map(d => DOMAIN_COLORS[d] ?? "#8B5CF6")
+    : ["#8B5CF6"];
+
+  if (colors.length === 1) {
+    return { border: `2px solid ${colors[0]}`, backgroundColor: `${colors[0]}22` };
+  }
+
+  const step = 100 / colors.length;
+  const stops = colors.map((c, i) => `${c} ${i * step}% ${(i + 1) * step}%`).join(", ");
+  return { background: `conic-gradient(from -90deg, ${stops})` };
+}
+
 function AtomNode({ data }: { data: any }) {
   const kind = data.kind as AtomKind;
-  const color = ATOM_COLORS[kind] ?? "#8B5CF6";
+  const domains: string[] = data.domain ?? [];
+  const isMulti = domains.length > 1;
+  const primaryColor = DOMAIN_COLORS[domains[0]] ?? "#8B5CF6";
   const shortId = (data.id as string)?.slice(0, 8) ?? "?";
+
+  const content = (
+    <>
+      <span className="text-xl leading-none select-none">{ATOM_ICONS[kind]}</span>
+      <span className="mt-1 font-mono text-[9px] font-bold leading-none" style={{ color: primaryColor }}>
+        {shortId}
+      </span>
+    </>
+  );
 
   return (
     <div
-      style={{
-        width: 80,
-        height: 80,
-        borderColor: color,
-        backgroundColor: `${color}22`,
-      }}
-      className="rounded-full border-2 flex flex-col items-center justify-center cursor-pointer shadow-md hover:shadow-xl hover:scale-105 transition-all"
+      style={{ width: 80, height: 80, ...buildDomainStyle(domains) }}
+      className="rounded-full flex items-center justify-center cursor-pointer shadow-md hover:shadow-xl hover:scale-105 transition-all"
     >
       <Handle type="target" position={Position.Left} style={{ opacity: 0 }} />
       <Handle type="source" position={Position.Right} style={{ opacity: 0 }} />
-      <span className="text-xl leading-none select-none">
-        {ATOM_ICONS[kind]}
-      </span>
-      <span
-        className="mt-1 font-mono text-[9px] font-bold leading-none"
-        style={{ color }}
-      >
-        {shortId}
-      </span>
+      {isMulti ? (
+        <div
+          style={{ width: 68, height: 68, backgroundColor: "#FFF5E6" }}
+          className="rounded-full flex flex-col items-center justify-center"
+        >
+          {content}
+        </div>
+      ) : (
+        <div className="flex flex-col items-center justify-center">{content}</div>
+      )}
     </div>
   );
 }

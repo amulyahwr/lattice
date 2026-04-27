@@ -11,7 +11,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import { cn } from "../../lib/utils";
-import { ATOM_BADGE_CLASSES, ATOM_ICONS } from "../../lib/constants";
+import { ATOM_BADGE_CLASSES, ATOM_ICONS, DOMAIN_COLORS } from "../../lib/constants";
 import type { Atom, AtomKind } from "../../lib/types";
 
 interface AtomGraphProps {
@@ -51,14 +51,18 @@ function AtomNode({ data }: { data: any }) {
       </p>
       {data.domain && data.domain.length > 0 && (
         <div className="mt-2 flex flex-wrap gap-1">
-          {data.domain.slice(0, 3).map((d: string) => (
-            <span
-              key={d}
-              className="rounded bg-[#E8D4BC] px-1.5 py-0.5 text-[9px] text-[#8B7355]"
-            >
-              {d}
-            </span>
-          ))}
+          {data.domain.slice(0, 3).map((d: string) => {
+            const c = DOMAIN_COLORS[d];
+            return (
+              <span
+                key={d}
+                style={c ? { background: `${c}18`, color: c, border: `1px solid ${c}40` } : undefined}
+                className={`rounded px-1.5 py-0.5 text-[9px] font-medium${!c ? " bg-[#E8D4BC] text-[#8B7355]" : ""}`}
+              >
+                {d}
+              </span>
+            );
+          })}
         </div>
       )}
     </div>
