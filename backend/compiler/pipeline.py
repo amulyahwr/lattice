@@ -27,6 +27,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.compiler.atomizer import atomize_and_distill_chunks
 from backend.compiler.consolidator import consolidate_atoms
 from backend.compiler.linker import cross_link_atoms, expand_domains, link_atoms
+from backend.compiler.query_processor import normalize_period, normalize_subject
 from backend.compiler.tagger import mask_to_domains, tag_atoms
 from backend.config import CROSS_LINK_SIMILARITY_THRESHOLD, CROSS_LINK_TOP_K
 from backend.engine.embeddings import embed_texts
@@ -163,6 +164,8 @@ async def compile_source(
                 content_hash=content_hash,
                 canonical=canonical,
                 canonical_hash=canonical_hash,
+                canonical_subject=normalize_subject(canonical.get("subject")) if canonical else None,
+                canonical_period=normalize_period(canonical.get("period")) if canonical else None,
                 kind=tag["kind"],
                 dense_vec=embedding,
                 domain=tag["domain"],

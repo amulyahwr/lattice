@@ -50,6 +50,8 @@ class Atom(Base):
     content_hash = Column(String(64), nullable=True, unique=True)  # SHA-256 of distilled content — exact re-ingest guard
     canonical = Column(JSONB, nullable=True)                       # Structured form: {subject, predicate, object, value, unit, period}
     canonical_hash = Column(String(64), nullable=True)             # kept for reference; no longer used as a dedup gate
+    canonical_subject = Column(String(255), nullable=True)         # extracted for indexed pre-filter
+    canonical_period = Column(String(50), nullable=True)           # extracted for indexed pre-filter
     kind = Column(
         String(50), nullable=False, default="fact"
     )  # fact | decision | metric | relationship | event | procedure
@@ -71,6 +73,8 @@ class Atom(Base):
         Index("ix_atoms_kind", "kind"),
         Index("ix_atoms_domain", "domain", postgresql_using="gin"),
         Index("ix_atoms_is_superseded", "is_superseded"),
+        Index("ix_atoms_canonical_period", "canonical_period"),
+        Index("ix_atoms_canonical_subject", "canonical_subject"),
     )
 
 

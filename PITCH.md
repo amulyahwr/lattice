@@ -32,7 +32,7 @@ When your sales bot asks "What's our Q2 outlook?", Lattice:
 
 ---
 
-## Three Things That Make Lattice Different
+## Five Things That Make Lattice Different
 
 ### 1. It compiles knowledge, not just searches it.
 
@@ -55,6 +55,22 @@ When the sales bot asks _"How are we doing this quarter?"_, it gets revenue numb
 When the engineering bot asks the same question, it gets uptime metrics.
 
 Lattice knows what's relevant based on who's asking. No manual configuration needed.
+
+### 4. It understands what you're asking, not just the words you used.
+
+Lattice doesn't just embed your query and search. It generates multiple diverse interpretations of your question — from different angles — then fuses the results using Reciprocal Rank Fusion. An atom that appears across several interpretations gets scored higher than one that matched only once.
+
+If your query has a time period ("Q2") or a subject ("revenue"), Lattice extracts that structure and applies it as a SQL pre-filter before cosine search runs. Searching for "Q2 revenue" never surfaces Q3 atoms.
+
+The result: a system that finds the right context even when your words don't exactly match how the knowledge is stored.
+
+### 5. It knows when facts change — and keeps the history.
+
+Enterprise knowledge is not static. Headcount changes. Deals close. Policies get revised.
+
+When Lattice sees a new fact that contradicts, refines, or replaces an existing one, it doesn't silently overwrite — it classifies the relationship and records the transition. Agents always get the current version. Auditors can ask "what did the system believe on March 15th?" and get an exact answer.
+
+This is the temporal knowledge layer. No other AI context system does this out of the box.
 
 ---
 
@@ -82,12 +98,12 @@ Type a question — _"What's our Q2 outlook?"_ — and run it as two different a
 | **Result 1** | EMEA Q2 pipeline: $4.2M, up 12% from Q1  | Platform uptime Q2: 99.97%                   |
 | **Result 2** | Board approved EMEA enterprise expansion | 3 P1 incidents, all resolved under 4h MTTR   |
 | **Result 3** | Top deals: Acme ($800K), Globex ($650K)  | Infra team prioritizing K8s migration for Q3 |
-| **Speed**    | 🔍 45ms (vector search)                  | 🔍 52ms (vector search)                      |
+| **Speed**    | 🔍 ~150ms (smart search: 3 hypotheses + RRF) | 🔍 ~160ms (smart search: 3 hypotheses + RRF) |
 | **Access**   | 8 atoms served, 2 filtered               | 6 atoms served, 5 filtered                   |
 
 **Same question. Completely different — and completely appropriate — answers.**
 
-The sales bot never sees engineering incidents. The engineering bot never sees deal values. And it all happens in ~50 milliseconds via pgvector search with bitmask filtering.
+The sales bot never sees engineering incidents. The engineering bot never sees deal values. Smart search generates 3 diverse interpretations of the question and fuses results via Reciprocal Rank Fusion — in ~150ms total.
 
 ---
 
@@ -123,7 +139,7 @@ The alternative is every team building their own retrieval pipeline — fragment
 
 **"How is this different from just using RAG?"**
 
-RAG searches documents at query time. Lattice compiles knowledge at ingest time and serves from cache. Plus, RAG has no built-in access control — Lattice does. It's like comparing a library where you have to search the shelves yourself every time vs. a librarian who already pulled the right books for you based on who you are.
+RAG searches documents at query time with a single embedding. Lattice compiles knowledge at ingest time, then at query time generates 3 diverse interpretations of your question and fuses results via Reciprocal Rank Fusion — which means a much higher probability of surfacing the right atom even when your phrasing doesn't match how the knowledge is stored. Plus, RAG has no built-in access control, no deduplication intelligence, and no temporal tracking — Lattice does all three. It's like comparing a library where you search the shelves yourself vs. a librarian who understands what you meant, already pulled the right books, knows which edition is current, and can tell you what the shelf looked like last Tuesday.
 
 **"Why can't we just use a vector database?"**
 
@@ -141,7 +157,7 @@ Data doesn't move regions — Lattice runs where you need it. Full audit trail f
 
 ## One Line
 
-> **Lattice gives every AI agent the right knowledge, with the right permissions, in milliseconds.**
+> **Lattice gives every AI agent the right knowledge, with the right permissions, at the right point in time — in milliseconds.**
 
 ---
 

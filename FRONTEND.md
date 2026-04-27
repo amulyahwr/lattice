@@ -1,6 +1,6 @@
 # Frontend Specification — Enterprise Context Engine
 
-**Date:** 2026-04-26  
+**Date:** 2026-04-27  
 **Status:** Implemented with Knowledge Graph Visualization & Warm Theme
 
 ## Overview
@@ -189,7 +189,7 @@ All API calls go through `frontend/src/api/client.ts`:
 ```typescript
 api.getStats(); // Dashboard stats
 api.getSources(); // Source list
-api.ingestSource(file); // Upload document
+api.ingestSource(file); // Upload document — response includes atoms_created, cross_links_added, consolidation counts
 api.getAgents(); // Agent list
 api.createAgent(data); // Create agent
 api.compareContext(q, ids); // Playground queries
@@ -199,6 +199,8 @@ api.getFullGraph(limit); // Full knowledge graph ⭐ NEW
 api.getAtomNeighborhood(id); // Atom neighborhood
 api.getAuditLog(page); // Audit entries
 ```
+
+**Atom link relations in the graph** — edges now carry consolidation relation types in addition to cross-source and within-source relations: `confirms`, `subsumes`, `supersedes`, `contradicts`. The graph visualization renders all of these as purple edges with relation labels; no frontend code change required since relation labels are pulled directly from the `links[].relation` field.
 
 ## State Management
 
