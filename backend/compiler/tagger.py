@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import json
 import logging
-import re
+from typing import Any
+
+from pydantic import RootModel
 
 from backend.compiler.llm_client import chat
 
@@ -54,6 +56,17 @@ Example input:  ["Q2 pipeline hit 120% of quota.", "Deploy the Kubernetes cluste
 Example output: {"0": ["sales","finance"], "1": ["engineering"], "2": ["hr"]}"""
 
 
+# ── Response schema ───────────────────────────────────────────────────────────
+
+
+class _DomainResponse(RootModel[dict[str, Any]]):
+    """Validates that the response is a JSON object with string keys.
+    Values use Any so the parser can leniently coerce strings → lists."""
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+
 def _domains_to_mask(domains: list[str]) -> int:
     """OR together the bit for each named domain. Falls back to INTERNAL_BITS if none match."""
     mask = 0
@@ -80,24 +93,28 @@ async def _suggest_domains_batch(texts: list[str]) -> list[list[str]]:
     results: list[list[str]] = []
     for i in range(0, len(texts), _BATCH_SIZE):
         batch = texts[i : i + _BATCH_SIZE]
-        raw = await chat(_SYSTEM_DOMAIN, json.dumps(batch), temperature=0.0)
+        raw = await chat(
+            _SYSTEM_DOMAIN,
+            json.dumps(batch),
+            temperature=0.0,
+            response_format=_DomainResponse,
+        )
         results.extend(_parse_domain_response(raw, expected=len(batch)))
     return results
 
 
 def _parse_domain_response(raw: str, expected: int) -> list[list[str]]:
-    match = re.search(r"\{.*\}", raw, re.DOTALL)
-    if not match:
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start == -1 or end == -1:
         raise ValueError(f"LLM domain response contains no JSON object: {raw!r}")
-    try:
-        parsed = json.loads(match.group())
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"LLM domain response is not valid JSON: {raw!r}") from exc
-    if not isinstance(parsed, dict):
-        raise ValueError(f"LLM domain response is not a JSON object: {raw!r}")
 
-    # Detect which indices the LLM dropped — we can now fill exactly the right slots.
-    present = {int(k) for k in parsed if k.isdigit()}
+    try:
+        parsed = _DomainResponse.model_validate_json(raw[start : end + 1])
+    except Exception as exc:
+        raise ValueError(f"LLM domain response is not valid JSON: {raw!r}") from exc
+
+    present = {int(k) for k in parsed.root if k.isdigit()}
     missing = set(range(expected)) - present
     if missing:
         logger.warning(
@@ -107,7 +124,7 @@ def _parse_domain_response(raw: str, expected: int) -> list[list[str]]:
 
     results: list[list[str]] = []
     for i in range(expected):
-        item = parsed.get(str(i), [])
+        item = parsed.root.get(str(i), [])
         if isinstance(item, str):
             item = [item]
         elif not isinstance(item, list):
@@ -136,11 +153,12 @@ async def tag_atoms(
     """
     llm_domain_lists = await _suggest_domains_batch(contents)
     source_mask = _source_level_mask(llm_domain_lists)  # fallback for domain-less atoms
+    fallback_domains = mask_to_domains(source_mask)
 
     return [
         {
             "access_mask": _domains_to_mask(llm_domains) if llm_domains else source_mask,
-            "domain": llm_domains,
+            "domain": llm_domains if llm_domains else fallback_domains,
             "kind": kind,
         }
         for kind, llm_domains in zip(kinds, llm_domain_lists)

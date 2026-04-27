@@ -46,7 +46,7 @@ async def test_tag_atoms_no_domain_falls_back_to_source_mask(mock_chat):
     from backend.compiler.tagger import DOMAIN_BIT_MAP
     sales_bit = 1 << DOMAIN_BIT_MAP["sales"]
     assert result[2]["access_mask"] == sales_bit  # fallback to source mask
-    assert result[2]["domain"] == []
+    assert result[2]["domain"] == ["sales"]  # back-derived from fallback mask to stay consistent
 
 
 async def test_tag_atoms_missing_index_maps_to_correct_atom(mock_chat):
@@ -63,8 +63,8 @@ async def test_tag_atoms_missing_index_maps_to_correct_atom(mock_chat):
     eng_bit = 1 << DOMAIN_BIT_MAP["engineering"]
     source_mask = sales_bit | eng_bit
     assert result[0]["access_mask"] == sales_bit    # index 0 → own domain: sales only
-    assert result[1]["domain"] == []                # index 1 missing → empty domains
     assert result[1]["access_mask"] == source_mask  # falls back to source majority mask
+    assert set(result[1]["domain"]) == {"sales", "engineering"}  # back-derived from source mask
     assert result[2]["access_mask"] == eng_bit      # index 2 → own domain: engineering, not shifted
 
 

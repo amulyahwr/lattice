@@ -15,21 +15,52 @@ atomize_chunk() / atomize_chunks() are kept for direct unit testing.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
+from typing import Literal
+
+from pydantic import BaseModel, RootModel
 
 from backend.compiler.llm_client import chat
+
+
+# ── Response schema for the merged extract+distill call ──────────────────────
+
+
+class _CanonicalForm(BaseModel):
+    subject: str
+    predicate: str
+    object: str
+    value: float | None = None
+    unit: str | None = None
+    period: str | None = None
+
+
+class _ExtractedAtom(BaseModel):
+    kind: Literal["fact", "metric", "decision", "event", "procedure"]
+    content: str
+    canonical: _CanonicalForm | None = None
+
+
+class _ExtractResponse(RootModel[list[_ExtractedAtom]]):
+    """Top-level schema: a JSON array of extracted atoms."""
+
+
+class _RawAtomItem(BaseModel):
+    kind: Literal["fact", "metric", "decision", "event", "procedure"]
+    content: str
+
+
+class _AtomizeResponse(RootModel[list[_RawAtomItem]]):
+    pass
+
 
 _SYSTEM = """\
 You extract atomic propositions from text.
 
 A proposition is a single, self-contained claim: subject + predicate + object.
-One sentence often contains multiple propositions — split them into separate lines.
+One sentence often contains multiple propositions — split them into separate items.
 
-For each proposition output exactly one line in this format:
-<kind>|<proposition>
-
-Kinds:
+Classify each into a kind:
   metric       — a quantitative claim; must include the specific number or value
   decision     — something decided, approved, or agreed
   event        — something that happened, was launched, or completed
@@ -40,8 +71,11 @@ Rules:
 - Each proposition must be fully self-contained (include all names, dates, values)
 - Metrics must include the numeric value; never omit it
 - Skip navigation text, page numbers, section headers, and formatting noise
-- Do not number lines, add explanations, or output blank lines
-- Output ONLY the <kind>|<proposition> lines, nothing else
+- Return [] if no valid propositions are found
+- Output ONLY a valid JSON array — no explanation, no markdown, no code fences
+
+Return a JSON array. Each element:
+{"kind": "<kind>", "content": "<proposition>"}
 """
 
 _VALID_KINDS = frozenset({"fact", "metric", "decision", "event", "procedure"})
@@ -56,24 +90,30 @@ class RawAtom:
     entities: list[str] = field(default_factory=list)
 
 
-def _parse_propositions(llm_output: str) -> list[RawAtom]:
-    atoms: list[RawAtom] = []
-    for line in llm_output.splitlines():
-        line = line.strip()
-        if "|" not in line:
+def _parse_propositions(text: str) -> list[RawAtom]:
+    import json as _json
+    start = text.find("[")
+    end = text.rfind("]")
+    if start == -1 or end == -1:
+        return []
+    try:
+        raw_items = _json.loads(text[start : end + 1])
+    except _json.JSONDecodeError:
+        return []
+    atoms = []
+    for item in raw_items:
+        try:
+            parsed = _RawAtomItem.model_validate(item)
+            if len(parsed.content.split()) >= 3:
+                atoms.append(RawAtom(content=parsed.content, kind=parsed.kind))
+        except Exception:
             continue
-        kind, _, content = line.partition("|")
-        kind = kind.strip().lower()
-        content = content.strip()
-        if kind not in _VALID_KINDS or len(content.split()) < 3:
-            continue
-        atoms.append(RawAtom(content=content, kind=kind))
     return atoms
 
 
 async def atomize_chunk(text: str) -> list[RawAtom]:
     """Extract atomic propositions from a single text chunk."""
-    output = await chat(_SYSTEM, text.strip())
+    output = await chat(_SYSTEM, text.strip(), response_format=_AtomizeResponse)
     return _parse_propositions(output)
 
 
@@ -128,25 +168,29 @@ Rules:
 
 
 def _parse_merged(text: str) -> list[dict]:
-    """Extract the JSON array from a merged LLM response, filtering bad items."""
+    """Validate and normalise the merged LLM response using the Pydantic schema.
+
+    Falls back to an empty list on any parse or validation error so the pipeline
+    never crashes on a malformed model response.
+    """
     start = text.find("[")
     end = text.rfind("]")
     if start == -1 or end == -1:
         return []
     try:
-        items = json.loads(text[start : end + 1])
-    except json.JSONDecodeError:
+        atoms = _ExtractResponse.model_validate_json(text[start : end + 1])
+    except Exception:
         return []
 
     result: list[dict] = []
-    for item in items:
-        if not isinstance(item, dict):
+    for atom in atoms.root:
+        if len(atom.content.split()) < 3:
             continue
-        kind = str(item.get("kind", "fact")).strip().lower()
-        content = str(item.get("content", "")).strip()
-        if kind not in _VALID_KINDS or len(content.split()) < 3:
-            continue
-        result.append({"kind": kind, "content": content, "canonical": item.get("canonical")})
+        result.append({
+            "kind": atom.kind,
+            "content": atom.content,
+            "canonical": atom.canonical.model_dump() if atom.canonical else None,
+        })
     return result
 
 
@@ -156,7 +200,7 @@ async def atomize_and_distill_chunk(text: str) -> list[dict]:
     Returns [{kind, content, canonical}] — the merged output used by the
     pipeline in place of separate atomize + distill calls.
     """
-    output = await chat(_MERGED_SYSTEM, text.strip())
+    output = await chat(_MERGED_SYSTEM, text.strip(), response_format=_ExtractResponse)
     return _parse_merged(output)
 
 

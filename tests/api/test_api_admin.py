@@ -14,7 +14,7 @@ from tests.helpers import make_vector
 
 async def test_admin_relink_empty_db_returns_zero_counts(http_client):
     """Relink on an empty database should succeed and report nothing processed."""
-    resp = await http_client.post("/admin/relink")
+    resp = await http_client.post("/api/v1/admin/relink")
     assert resp.status_code == 200
     data = resp.json()
     assert data["sources_processed"] == 0
@@ -30,7 +30,7 @@ async def test_admin_relink_single_source_no_candidates(
     db_session.add(AtomSource(atom_id=atom.id, source_id=source.id, is_primary=True))
     await db_session.flush()
 
-    resp = await http_client.post("/admin/relink")
+    resp = await http_client.post("/api/v1/admin/relink")
     assert resp.status_code == 200
     data = resp.json()
     assert data["sources_processed"] == 1
@@ -66,7 +66,7 @@ async def test_admin_relink_adds_cross_links_between_related_domains(
         {"new_index": 0, "existing_index": 0, "relation": "topical"}
     ])
 
-    resp = await http_client.post("/admin/relink")
+    resp = await http_client.post("/api/v1/admin/relink")
     assert resp.status_code == 200
     data = resp.json()
     assert data["sources_processed"] == 2
@@ -102,7 +102,7 @@ async def test_admin_relink_skips_unrelated_domains(
         {"new_index": 0, "existing_index": 0, "relation": "topical"}
     ])
 
-    resp = await http_client.post("/admin/relink")
+    resp = await http_client.post("/api/v1/admin/relink")
     assert resp.status_code == 200
     data = resp.json()
     assert data["cross_links_added"] == 0
@@ -136,11 +136,11 @@ async def test_admin_relink_does_not_duplicate_existing_links(
         {"new_index": 0, "existing_index": 0, "relation": "topical"}
     ])
 
-    resp1 = await http_client.post("/admin/relink")
+    resp1 = await http_client.post("/api/v1/admin/relink")
     first_run = resp1.json()["cross_links_added"]
 
     # Second run — links already exist, should add nothing new
-    resp2 = await http_client.post("/admin/relink")
+    resp2 = await http_client.post("/api/v1/admin/relink")
     assert resp2.status_code == 200
     assert resp2.json()["cross_links_added"] == 0
 
@@ -149,7 +149,7 @@ async def test_admin_relink_does_not_duplicate_existing_links(
 
 
 async def test_admin_stats_returns_expected_fields(http_client):
-    resp = await http_client.get("/admin/stats")
+    resp = await http_client.get("/api/v1/admin/stats")
     assert resp.status_code == 200
     data = resp.json()
     for field in ["total_atoms", "total_agents", "total_sources", "atoms_by_kind", "total_queries"]:
@@ -157,7 +157,7 @@ async def test_admin_stats_returns_expected_fields(http_client):
 
 
 async def test_admin_stats_counts_are_non_negative(http_client):
-    resp = await http_client.get("/admin/stats")
+    resp = await http_client.get("/api/v1/admin/stats")
     data = resp.json()
     assert data["total_atoms"] >= 0
     assert data["total_agents"] >= 0
@@ -169,7 +169,7 @@ async def test_admin_stats_counts_are_non_negative(http_client):
 
 
 async def test_admin_activity_returns_events_list(http_client):
-    resp = await http_client.get("/admin/activity")
+    resp = await http_client.get("/api/v1/admin/activity")
     assert resp.status_code == 200
     data = resp.json()
     assert "events" in data
@@ -178,6 +178,6 @@ async def test_admin_activity_returns_events_list(http_client):
 
 
 async def test_admin_activity_respects_limit(http_client):
-    resp = await http_client.get("/admin/activity?limit=5")
+    resp = await http_client.get("/api/v1/admin/activity?limit=5")
     assert resp.status_code == 200
     assert len(resp.json()["events"]) <= 5

@@ -1,13 +1,16 @@
-"""Compiler Pipeline — orchestrates extract → embed → link+tag → index → cross-link.
+"""Compiler Pipeline — orchestrates extract → embed → link+tag → index → cross-link → consolidate.
 
-LLM call count per source (vs. old atomize→distill→link→tag):
-  Old: 4 calls  (atomize, distill, link, tag)
-  New: 3 calls  (extract, then link+tag in parallel)
+LLM call count per source:
+  3 calls  (extract, then link+tag in parallel)
   + 1 optional cross-link call when candidates exist
+  + 1 optional consolidation call when near-duplicates exist
 
-Dedup strategy (two tiers):
-  Tier 1 — content_hash:   exact SHA-256 match on distilled text (re-ingestion guard)
-  Tier 2 — canonical_hash: structural match on normalized canonical JSON (cross-source)
+Dedup strategy:
+  Tier 1 — content_hash: exact SHA-256 match on distilled text (re-ingestion guard)
+  Stage 8 — consolidation: near-duplicate detection via pgvector (cosine ≥ 0.85) +
+             LLM relationship classification (confirms/subsumes/supersedes/contradicts).
+             Replaces the old Tier 2 canonical_hash gate — near-duplicates are kept with
+             typed links rather than silently discarded.
 """
 
 from __future__ import annotations
@@ -22,11 +25,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.compiler.atomizer import atomize_and_distill_chunks
+from backend.compiler.consolidator import consolidate_atoms
 from backend.compiler.linker import cross_link_atoms, expand_domains, link_atoms
 from backend.compiler.tagger import mask_to_domains, tag_atoms
 from backend.config import CROSS_LINK_SIMILARITY_THRESHOLD, CROSS_LINK_TOP_K
 from backend.engine.embeddings import embed_texts
-from backend.models.atoms import Atom, AtomSource, Source
+from backend.models.atoms import Atom, AtomSource, AtomVersion, Source
 
 
 async def fetch_cross_link_candidates(
@@ -77,11 +81,12 @@ async def compile_source(
     """Run the full compiler pipeline on raw text chunks.
 
     Stages:
-    1+2. Extract  — one LLM call per chunk: atomize + distill merged
-    3.   Embed    — dense vectors via sentence-transformers
-    4+5. Link+Tag — parallel LLM calls (independent of each other)
-    6.   Index    — write to DB with two-tier dedup (2 batch SELECTs, not N)
-    7.   Cross-link — LLM links new atoms to semantically similar existing atoms
+    1+2. Extract     — one LLM call per chunk: atomize + distill merged
+    3.   Embed       — dense vectors via sentence-transformers
+    4+5. Link+Tag    — parallel LLM calls (independent of each other)
+    6.   Index       — write to DB with Tier 1 exact dedup (content_hash)
+    7.   Cross-link  — LLM links new atoms to semantically similar existing atoms
+    8.   Consolidate — near-duplicate detection + LLM relationship classification
     """
     if not chunks_text:
         return {"atoms_created": 0}
@@ -104,7 +109,7 @@ async def compile_source(
         tag_atoms(contents=distilled_contents, kinds=raw_kinds),
     )
 
-    # ── Stage 6: Index (batch dedup — 2 SELECTs instead of 2N) ──
+    # ── Stage 6: Index (Tier 1 exact dedup — 1 batch SELECT on content_hash) ──
     all_content_hashes = [
         hashlib.sha256(c.encode()).hexdigest() for c in distilled_contents
     ]
@@ -117,7 +122,6 @@ async def compile_source(
         for canonical in canonicals
     ]
 
-    # Batch lookup by content hash
     existing_by_content: dict[str, Atom] = {}
     rows = (
         (
@@ -131,24 +135,8 @@ async def compile_source(
     for atom in rows:
         existing_by_content[atom.content_hash] = atom
 
-    # Batch lookup by canonical hash (only for atoms with a canonical form)
-    existing_by_canonical: dict[str, Atom] = {}
-    canonical_hash_set = [h for h in all_canonical_hashes if h]
-    if canonical_hash_set:
-        rows = (
-            (
-                await db.execute(
-                    select(Atom).where(Atom.canonical_hash.in_(canonical_hash_set))
-                )
-            )
-            .scalars()
-            .all()
-        )
-        for atom in rows:
-            existing_by_canonical[atom.canonical_hash] = atom
-
     atom_ids: list[uuid.UUID] = []
-    atom_objects: list[Atom] = []  # newly created atoms only (not dedup hits)
+    atom_objects: list[Atom] = []  # newly created atoms only
     now = datetime.now(timezone.utc)
 
     for content, canonical, content_hash, canonical_hash, embedding, tag in zip(
@@ -159,11 +147,8 @@ async def compile_source(
         embeddings,
         tags,
     ):
-        # Tier 1: exact content match
+        # Tier 1: exact content match — block true re-ingestion
         existing = existing_by_content.get(content_hash)
-        # Tier 2: structural canonical match
-        if existing is None and canonical_hash:
-            existing = existing_by_canonical.get(canonical_hash)
 
         if existing is not None:
             existing.access_mask = existing.access_mask | tag["access_mask"]
@@ -187,8 +172,18 @@ async def compile_source(
                 links=[],
                 compiled_at=now,
                 version=1,
+                valid_from=now,
             )
             db.add(atom)
+            # Write initial version record for the ledger.
+            db.add(AtomVersion(
+                atom_id=atom_id,
+                version=1,
+                content=content,
+                canonical=canonical,
+                valid_from=now,
+                reason="initial",
+            ))
             atom_objects.append(atom)
             is_primary = True
 
@@ -243,11 +238,17 @@ async def compile_source(
 
             await db.flush()
 
+    # ── Stage 8: Consolidate (near-duplicate detection + relationship classification) ──
+    consolidation_counts = {}
+    if atom_objects:
+        consolidation_counts = await consolidate_atoms(db=db, new_atoms=atom_objects)
+
     source_domains = mask_to_domains(tags[0]["access_mask"]) if tags else []
 
     return {
         "atoms_created": len(atom_objects),
         "cross_links_added": cross_links_added,
+        "consolidation": consolidation_counts,
         "kinds": _count_kinds(atom_objects),
         "domains": source_domains,
     }
