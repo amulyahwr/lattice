@@ -47,6 +47,30 @@ Ordered by impact-to-effort ratio and competitive urgency. Items above the line 
 | 13 | **LongMemEval-S benchmark** | 2 | 📋 Planned | Gives a competitive accuracy number to cite against HydraDB's 90.79% claim |
 | 14 | **L2 frame cache** | 2 | 📋 Planned | Performance optimization for hot paths; can defer until latency becomes a complaint |
 | 15 | **Context Diff API** | 2 | 📋 Planned | Shares groundwork with atom versioning (now done); ready to build |
+| — | _**Search Intelligence — Phase 2**_ | — | — | — |
+| 22 | **BM25 + dense hybrid search** | 2 | ✅ Done | Pure-dense vectors miss exact term/ID/name matches; pgvector + tsvector fused via RRF (fusion layer already exists); no new dependency |
+| 23 | **Kind-aware freshness decay** | 2 | 📋 Planned | `metric` atoms decay in weeks; `procedure` atoms in years; single formula change in `l3_search.py`; immediate relevance gain on metric queries |
+| 24 | **Contradiction adjudication at query time** | 2 | 📋 Planned | Routes `contradicts` pairs to LLM re-ranker with targeted prompt; turns existing link data into active search feature; no competitor does this |
+| 25 | **Graph-centrality atom boosting** | 2 | 📋 Planned | Pre-compute hub scores from in-degree across diverse link types; fold into heuristic re-scorer; uses existing link data, no traversal |
+| 26 | **Minimum coverage set** | 2 | 📋 Planned | Evict near-semantic-duplicate results (cosine > 0.9 between results); saves token budget with no precision loss |
+| 27 | **Temporal velocity scoring** | 2 | 📋 Planned | Detect hot-topic churn from `atom_versions`; surface warning at query time; pure read signal, no schema change |
+| 28 | **Kind-aware query intent + intent-adaptive routing** | 2 | ✅ Done | Classify query by atom kind (metric/event/decision/procedure/fact); generate kind-flavored HyDE hypotheses; auto-configure deep_rerank, top_k, min_relevance per kind |
+| 29 | **Knowledge gap detection** | 2 | 📋 Planned | Score KB coverage as `high/partial/gap` after search; agents know when operating on thin evidence; differentiator, no competitor surfaces this |
+| 30 | **Uncertainty-aware token budgeting** | 2 | 📋 Planned | Allocate token budget inversely to confidence; contested atoms get more tokens where reasoning matters most |
+| 31 | **Query decomposition** | 2 | 📋 Planned | Split compound queries into independent sub-queries; run each through full L3 pipeline; stitch with provenance labels; closes HyDE failure mode on multi-part questions |
+| 32 | **Novelty-biased search mode** | 2 | 📋 Planned | `discovery=True` flag; score = relevance × (1 − prior access frequency); pure `access_log` signal; no schema change |
+| 33 | **Access gap surfacing** | 2 | 📋 Planned | Return cardinality + domain hint when relevant atoms are blocked by `role_mask`; turns ACL into a visible boundary, not a silent wall |
+| 34 | **Cross-agent collaborative filtering** | 2 | 📋 Planned | Boost atoms co-accessed by similar-`role_mask` agents on similar queries; personalizes retrieval with no schema change |
+| — | _**Search Intelligence — Phase 3**_ | — | — | — |
+| 35 | **Causal chain construction** | 3 | 📋 Planned | Walk `causal` links backward for explanation, forward for consequences; returns directed reasoning chain, not flat list; answers "why" queries structurally |
+| 36 | **Belief propagation through link graph** | 3 | 📋 Planned | Confidence propagates transitively via `confirms` chains (with decay); `contradicts` against high-confidence atoms penalizes skepticism; turns link graph into trust network |
+| 37 | **Ghost atoms — temporal extrapolation** | 3 | 📋 Planned | Detect metric time-series at query time; synthesize projected atom for missing period; tagged `kind=projection, confidence=derived`; generated on-the-fly, never stored |
+| 38 | **Counterfactual time travel search** | 3 | 📋 Planned | Extends `?as_of=` to return then-vs-now result diff: flipped confidences, new contradictions, superseded facts; active knowledge state comparison |
+| 39 | **Contrastive search** | 3 | 📋 Planned | `find_similar_to(X) − find_similar_to(Y)` query mode; embed both, compute `X − Y` direction, search along it; answers "how is X different from Y?" without new infrastructure |
+| 40 | **Emergent concept flagging** | 3 | 📋 Planned | When top results cluster tightly but share no explicit links, flag unnamed emergent pattern; pure topology signal, no LLM needed |
+| 41 | **Semantic temperature** | 3 | 📋 Planned | `temperature` param (0.0–1.0) on query endpoint; low = tight canonical filters, high precision; high = relaxed filters, unexpected cross-domain connections surface |
+| 42 | **Inverse retrieval** | 3 | 📋 Planned | Given atom ID, find natural-language queries that would surface it; enables gap analysis ("is this atom discoverable?") and auto-FAQ generation |
+| 43 | **Cross-role insight bridging** | 3 | 📋 Planned | Surface to agent when elevated-role atoms exist for their query topic; domain hints only, no content leaked; builds awareness of cross-role knowledge silos |
 | 16 | **Push Gateway + subscription model** | 3 | 📋 Planned | Real-time context delivery; needed for agentic workflows at scale |
 | 17 | **Confluence / Slack / Jira connectors** | 3 | 📋 Planned | Expands TAM; enterprise customers need connectors before they can adopt |
 | 18 | **OpenTelemetry + Prometheus** | 3 | 📋 Planned | Enterprise procurement requirement; often a blocker |
@@ -125,6 +149,32 @@ See [MVP.md](./MVP.md) for full scope.
 - [ ] **Incremental recompilation** — track source content hashes, only recompile changed atoms
 - [ ] **Multi-format connectors** — Markdown, DOCX, HTML, CSV ingestion
 
+### Search Intelligence _(new — expanded retrieval capabilities)_
+
+#### Priority A — Quick Wins (schema-free, high immediate impact)
+
+- ✅ **BM25 + dense hybrid search** — PostgreSQL `tsvector` full-text search fused into the same RRF pipeline alongside pgvector hypothesis searches; GIN index added; subject canonical pre-filter removed (BM25 covers it as a soft signal instead of a hard gate)
+- [ ] **Kind-aware freshness decay** — replace global half-life (~139 days) with per-kind decay rates inferred from `atom_versions` supersedure patterns; `metric` atoms decay in weeks, `procedure` atoms in years; single formula change in `l3_search.py`
+- [ ] **Temporal velocity scoring** — detect "hot" topics from churn in `atom_versions`; surface velocity signal at query time: *"8 updates in 30 days — treat with caution"*; inversely, stable atoms get a "settled knowledge" boost; pure read signal, no schema change
+- [ ] **Graph-centrality atom boosting** — pre-compute nightly hub scores (in-degree across diverse link types and domains); fold into heuristic re-scorer in `l3_search.py`; atoms that are topologically load-bearing outrank isolated newcomers at equal cosine distance
+- [ ] **Minimum coverage set** — after RRF scoring, evict near-semantic-duplicate atoms from the result set (cosine > 0.9 between any two results); keep highest-confidence of each duplicate pair; reduces token waste with no precision loss
+
+#### Priority B — Serving Layer Additions (changes to `router.py` / `l3_search.py`)
+
+- [ ] **Contradiction adjudication at query time** — when result set contains atoms with active `contradicts` links between them, route the conflicted pair to the LLM re-ranker with a targeted prompt; return winner surfaced, loser flagged with confidence delta shown; turns existing `contradicts` data into an active query feature
+- ✅ **Kind-aware query intent + intent-adaptive routing** — `process_query()` classifies query into atom kinds (metric/event/decision/procedure/fact) and generates kind-flavored HyDE hypotheses; `_apply_intent_routing()` in `router.py` reads the classified kinds and auto-configures `deep_rerank`, `top_k_factor`, `min_relevance`, and `strip_period` per-kind via `_INTENT_CONFIG`
+- [ ] **Knowledge gap / negative space detection** — after search, score KB coverage as `high / partial / gap` based on result confidence distribution, supersedure proximity, and `contradicts` density; return as a coverage signal alongside atoms; agents know when operating on thin evidence
+- [ ] **Uncertainty-aware token budgeting** — allocate token budget inversely to atom confidence: high-confidence settled atoms get fewer tokens, contested/low-confidence/recently-superseded atoms get more; agents receive richer context where reasoning matters most
+- [ ] **Query decomposition for compound queries** — detect compound structure in incoming query (LLM classifier step before `process_query()`); split into sub-queries; run each through full L3 pipeline independently; stitch and deduplicate before token trim; each sub-result gets a provenance label; closes HyDE failure mode on multi-part questions
+
+#### Priority C — Agent Intelligence (signals from `access_log` + agent profiles)
+
+- [ ] **Novelty-biased search mode** — `discovery=True` flag on query endpoint; per-agent score = `relevance × (1 − prior_access_frequency)`; surfaces highly relevant atoms the agent has never retrieved; pure `access_log` signal, no schema change
+- [ ] **Access gap surfacing** — after search, query whether additional relevant atoms exist that the agent's `role_mask` blocks; return cardinality + domain hints only (no content leaked); agents see what they're missing; turns access control from a silent wall into a visible boundary
+- [ ] **Cross-agent collaborative filtering** — boost atoms historically co-accessed by agents with similar `role_mask` profiles on similar queries; item-based collaborative filtering on `access_log`; personalizes search results with no schema change
+
+---
+
 ### Evaluation & Benchmarks _(new — competitive positioning)_
 
 - [ ] **LongMemEval-S benchmark run** — evaluate Lattice against the same benchmark HydraDB cites (90.79%); surfaces compiler quality gaps and produces a competitive accuracy number
@@ -155,6 +205,20 @@ See [MVP.md](./MVP.md) for full scope.
 - [ ] **Push Gateway** — gRPC streaming + WebSocket transports for real-time context delivery
 - [ ] **Delta protocol** — version-tracked atoms; on re-query, send only what changed since last fetch
 - [ ] **Compiler event pipeline** — atom create/update/delete/supersede events flow from compiler to mesh
+
+### Search Intelligence — Advanced _(builds on Phase 2 Search Intelligence)_
+
+- [ ] **Causal chain construction** — walk `causal` links backward from matched atoms to surface upstream causes; walk forward for consequences; return a directed reasoning chain alongside the flat result list; query *"why did X happen"* returns a structured explanation, not just facts
+- [ ] **Belief propagation through link graph** — make confidence network-propagated: `confirms` chains boost transitively with per-hop decay, `contradicts` edges against high-confidence atoms impose skepticism penalties; runs as a nightly graph pass; turns typed link edges into a living trust network
+- [ ] **Ghost atoms — dynamic temporal extrapolation** — detect metric atoms forming a time series at query time (Q1/Q2/Q3 data); synthesize a projected atom for the missing period from the detected trend; returned tagged `kind=projection, confidence=derived`; generated on-the-fly, never written to the atom store
+- [ ] **Counterfactual time travel search** — extend `?as_of=` to return *two* result sets (knowledge state then vs. now) with a structural diff: atoms that flipped confidence, newly emerged contradictions, superseded high-confidence facts; active knowledge comparison, not just point-in-time retrieval
+- [ ] **Contrastive search** — `find_similar_to(X) − find_similar_to(Y)` query mode; embed both X and Y, compute contrastive direction `X − Y` in embedding space, search along that vector; answers *"how is our Q3 strategy different from Q2?"* with no infrastructure change
+- [ ] **Emergent concept flagging** — when top results cluster tightly in embedding space but share no explicit `links[]` between them, flag as an unnamed emergent concept: *"these atoms describe a pattern not explicitly captured in the knowledge graph"*; pure topology signal, no LLM needed
+- [ ] **Semantic temperature** — `temperature` parameter (0.0–1.0) on the query endpoint; low = tight canonical filters, small cosine radius, high precision; high = filters relaxed, hypotheses drift further from the literal query, unexpected cross-domain connections surface; gives callers a knob between *"give me exactly this"* and *"surprise me with what's related"*
+- [ ] **Inverse retrieval** — given an atom ID, find natural-language queries that would best surface it; embed atom content, match against query log; answers *"what question does this atom answer?"*; surfaces undiscoverable atoms and enables auto-FAQ generation from the knowledge base
+- [ ] **Cross-role insight bridging** — identify which elevated `role_mask` profiles historically retrieve high-confidence atoms relevant to a given query topic; surface to current agent: *"relevant knowledge exists in [domain] requiring elevated access"*; domain hints only, no content leaked; builds awareness of cross-role knowledge silos without breaching ACL
+
+---
 
 ### Sparse Distributed Representations (SDR)
 
@@ -242,6 +306,9 @@ See [MVP.md](./MVP.md) for full scope.
 - [ ] **Cross-domain insight detection** — find non-obvious connections between atoms in different domains
 - [ ] **Context summarization chains** — when an agent needs a broad overview, auto-compose summary from multiple frames
 - [ ] **Agent collaboration context** — when multiple agents work on the same task, share a context session
+- [ ] **Query trajectory prediction** — model an agent's session queries as a path through embedding space; detect convergence (agent homing in on a topic) vs. divergence (exploration); predict next query, pre-warm results, and surface contextually adjacent atoms before they're asked for
+- [ ] **Atom authority scoring** — multi-factor authority metric: in-degree across link types, source trust rank, survival count through consolidation challenges, confirmation-to-contradiction ratio; replaces flat confidence as the primary ranking signal for high-stakes retrieval
+- [ ] **Semantic momentum** — detect when a concept's embedding centroid in a domain is drifting over successive ingestions; surface at query time: *"the knowledge base's understanding of 'customer acquisition' has shifted since Q2"*; flags knowledge in transition vs. settled knowledge
 
 ---
 

@@ -1,7 +1,9 @@
 """Query Router — multi-hypothesis L3 search with access filter and token trim.
 
-Flow: query → process_query (k hypotheses + canonical) → pgvector per hypothesis
-      → RRF fusion → heuristic re-score → optional LLM re-rank → token trim → log.
+Flow: query → process_query (kinds + k hypotheses + canonical)
+      → intent-adaptive routing (adjusts deep_rerank, search_top_k, min_relevance)
+      → pgvector per hypothesis + BM25 → RRF fusion → heuristic re-score
+      → optional LLM re-rank → token trim → log.
 """
 
 from __future__ import annotations
@@ -21,6 +23,57 @@ def count_tokens(text: str) -> int:
     return len(text) // 4
 
 
+# ── Intent-adaptive routing ───────────────────────────────────────────────────
+
+# Per-kind defaults. Mixed-intent queries merge these configs:
+#   deep_rerank  — auto-enable for precision-critical kinds
+#   top_k_factor — multiplier on the caller's top_k for the search candidate pool
+#   min_relevance — relevance floor passed to search_atoms
+#   strip_period  — True for timeless kinds (procedure, fact) so the period filter
+#                   doesn't exclude valid atoms
+_INTENT_CONFIG: dict[str, dict] = {
+    "metric":    {"deep_rerank": True,  "top_k_factor": 2, "min_relevance": 0.35, "strip_period": False},
+    "event":     {"deep_rerank": False, "top_k_factor": 3, "min_relevance": 0.25, "strip_period": False},
+    "decision":  {"deep_rerank": True,  "top_k_factor": 2, "min_relevance": 0.30, "strip_period": False},
+    "procedure": {"deep_rerank": False, "top_k_factor": 2, "min_relevance": 0.28, "strip_period": True},
+    "fact":      {"deep_rerank": False, "top_k_factor": 2, "min_relevance": 0.28, "strip_period": True},
+}
+
+
+def _apply_intent_routing(
+    kinds: list[str],
+    query_canonical: dict | None,
+    caller_deep_rerank: bool,
+    top_k: int,
+) -> tuple[dict | None, bool, int, float]:
+    """Resolve search configuration from query intent kinds.
+
+    Returns (query_canonical, deep_rerank, search_top_k, min_relevance).
+    Caller's deep_rerank is never downgraded — only upgraded.
+    For mixed intents, takes the most permissive recall params and highest precision floor.
+    """
+    configs = [_INTENT_CONFIG[k] for k in kinds if k in _INTENT_CONFIG]
+    if not configs:
+        return query_canonical, caller_deep_rerank, top_k * 2, 0.3
+
+    auto_rerank    = any(c["deep_rerank"]   for c in configs)
+    top_k_factor   = max(c["top_k_factor"]  for c in configs)
+    min_relevance  = min(c["min_relevance"] for c in configs)  # most permissive floor
+    strip_period   = all(c["strip_period"]  for c in configs)  # only strip when ALL kinds are timeless
+
+    resolved_canonical = query_canonical
+    if strip_period and resolved_canonical:
+        stripped = {k: v for k, v in resolved_canonical.items() if k != "period"}
+        resolved_canonical = stripped or None
+
+    return (
+        resolved_canonical,
+        caller_deep_rerank or auto_rerank,
+        top_k * top_k_factor,
+        min_relevance,
+    )
+
+
 async def query_context(
     db: AsyncSession,
     query: str,
@@ -32,12 +85,13 @@ async def query_context(
     """Route a context query through multi-hypothesis L3 search with access control.
 
     Flow:
-    1. process_query → k hypotheses + canonical (if smart_search=True)
-    2. pgvector search per hypothesis with optional canonical pre-filter
-    3. RRF fusion + confidence × freshness re-scoring
-    4. Optional LLM re-ranking (deep_rerank=True adds ~1–3s latency)
-    5. Token budget trim
-    6. Access log
+    1. process_query → kinds + k hypotheses + canonical (if smart_search=True)
+    2. Intent-adaptive routing — adjusts deep_rerank, search_top_k, min_relevance from kinds
+    3. pgvector per hypothesis + BM25 with optional canonical period pre-filter
+    4. RRF fusion + confidence × freshness re-scoring
+    5. Optional LLM re-ranking (deep_rerank=True adds ~1–3s latency)
+    6. Token budget trim
+    7. Access log
 
     Returns:
         {"atoms": [...], "cache_tier": str, "latency_ms": float,
@@ -45,14 +99,19 @@ async def query_context(
     """
     hypotheses = [query]
     query_canonical: dict | None = None
+    search_top_k = top_k * 2
+    min_relevance = 0.3
 
     if smart_search:
         processed = await process_query(query)
         hypotheses = processed.hypotheses
-        query_canonical = processed.canonical
+        query_canonical, deep_rerank, search_top_k, min_relevance = _apply_intent_routing(
+            processed.kinds, processed.canonical, deep_rerank, top_k
+        )
 
     return await _query_context_core(
-        db, query, hypotheses, agent, top_k, query_canonical, deep_rerank
+        db, query, hypotheses, agent, top_k, query_canonical, deep_rerank,
+        search_top_k=search_top_k, min_relevance=min_relevance,
     )
 
 
@@ -88,6 +147,8 @@ async def _query_context_core(
     top_k: int,
     query_canonical: dict | None,
     deep_rerank: bool,
+    search_top_k: int | None = None,
+    min_relevance: float = 0.3,
 ) -> dict:
     """Inner search + trim + log. Separated so compare_context shares one process_query call."""
     start = time.monotonic()
@@ -95,6 +156,7 @@ async def _query_context_core(
     role_mask = agent.role_mask or 0
     max_tokens = agent.max_tokens or 4000
     domain_filter = list(set(agent_domains)) if agent_domains else None
+    resolved_search_top_k = search_top_k if search_top_k is not None else top_k * 2
 
     # ── Pre-flight: skip if agent has no accessible atoms ────────────────────
     preflight_stmt = (
@@ -124,9 +186,9 @@ async def _query_context_core(
         db=db,
         hypotheses=hypotheses,
         role_mask=role_mask,
-        top_k=top_k * 2,
+        top_k=resolved_search_top_k,
         domain_filter=domain_filter,
-        min_relevance=0.3,
+        min_relevance=min_relevance,
         query_canonical=query_canonical,
         deep_rerank=deep_rerank,
         raw_query=query,
