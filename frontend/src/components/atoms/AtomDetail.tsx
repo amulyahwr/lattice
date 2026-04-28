@@ -1,4 +1,5 @@
-import { ArrowRight, ExternalLink } from 'lucide-react'
+import { useState } from 'react'
+import { ArrowRight, ExternalLink, ChevronDown, ChevronRight } from 'lucide-react'
 import type { AtomDetail } from '../../lib/types'
 import { ATOM_BADGE_CLASSES, ATOM_ICONS, ROLE_COLORS, DOMAIN_COLORS } from '../../lib/constants'
 import { cn, timeAgo } from '../../lib/utils'
@@ -19,7 +20,7 @@ const RELATION_COLORS: Record<string, string> = {
 }
 
 export default function AtomDetail({ atom, onNavigate }: AtomDetailProps) {
-  const primarySource = atom.sources?.find(s => s.is_primary) ?? atom.sources?.[0]
+  const [canonicalOpen, setCanonicalOpen] = useState(false)
 
   return (
     <div className="space-y-5">
@@ -115,6 +116,26 @@ export default function AtomDetail({ atom, onNavigate }: AtomDetailProps) {
               </div>
             ))}
           </div>
+        </div>
+      )}
+
+      {/* Canonical */}
+      {atom.canonical && Object.keys(atom.canonical).length > 0 && (
+        <div className="rounded-lg border border-[#D4BFA8] bg-[#FFF5E6]/30 p-4">
+          <button
+            onClick={() => setCanonicalOpen(o => !o)}
+            className="flex w-full items-center gap-2 text-xs text-[#8B7355] hover:text-[#6B5744]"
+          >
+            {canonicalOpen
+              ? <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+              : <ChevronRight className="h-3.5 w-3.5 shrink-0" />}
+            Canonical Form
+          </button>
+          {canonicalOpen && (
+            <pre className="mt-3 overflow-x-auto rounded border border-[#D4BFA8] bg-[#FFF5E6] p-3 font-mono text-[10px] leading-relaxed text-[#4A3520]">
+              {JSON.stringify(atom.canonical, null, 2)}
+            </pre>
+          )}
         </div>
       )}
 
