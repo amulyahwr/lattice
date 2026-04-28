@@ -42,3 +42,8 @@ async def init_db():
         await conn.execute(text(
             "ALTER TABLE atoms DROP CONSTRAINT IF EXISTS atoms_canonical_hash_key"
         ))
+        # GIN index for BM25 full-text search on atom content
+        await conn.execute(text(
+            "CREATE INDEX IF NOT EXISTS ix_atoms_content_fts "
+            "ON atoms USING gin(to_tsvector('english', content))"
+        ))

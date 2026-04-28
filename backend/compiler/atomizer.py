@@ -21,6 +21,7 @@ from typing import Literal
 from pydantic import BaseModel, RootModel
 
 from backend.compiler.llm_client import chat
+from backend.compiler.period_utils import extract_period_from_text, normalize_period
 
 
 # ── Response schema for the merged extract+distill call ──────────────────────
@@ -186,10 +187,21 @@ def _parse_merged(text: str) -> list[dict]:
     for atom in atoms.root:
         if len(atom.content.split()) < 3:
             continue
+        canonical = atom.canonical.model_dump() if atom.canonical else None
+
+        # Regex fallback — if LLM left period null, extract it from the atom content
+        detected = extract_period_from_text(atom.content)
+        if detected:
+            period_norm = normalize_period(detected)
+            if canonical is None:
+                canonical = {"period": period_norm}
+            elif not canonical.get("period"):
+                canonical["period"] = period_norm
+
         result.append({
             "kind": atom.kind,
             "content": atom.content,
-            "canonical": atom.canonical.model_dump() if atom.canonical else None,
+            "canonical": canonical,
         })
     return result
 

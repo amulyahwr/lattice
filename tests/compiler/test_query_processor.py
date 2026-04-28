@@ -5,7 +5,7 @@ import pytest
 from backend.compiler.query_processor import HYPOTHESES_K, process_query
 
 
-def _valid_response(hypotheses=None, canonical=None) -> str:
+def _valid_response(hypotheses=None, canonical=None, kinds=None) -> str:
     hyps = hypotheses or [
         "Revenue grew 20% in Q2 2025 compared to prior year.",
         "Q2 2025 revenue reached record highs driven by enterprise deals.",
@@ -17,7 +17,9 @@ def _valid_response(hypotheses=None, canonical=None) -> str:
         if canonical
         else "null"
     )
-    return f'{{"hypotheses": {hyps_json}, "canonical": {canonical_json}}}'
+    kinds_list = kinds or ["metric"]
+    kinds_json = "[" + ", ".join(f'"{k}"' for k in kinds_list) + "]"
+    return f'{{"kinds": {kinds_json}, "hypotheses": {hyps_json}, "canonical": {canonical_json}}}'
 
 
 @pytest.mark.asyncio

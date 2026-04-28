@@ -110,10 +110,13 @@ Near-duplicates are preserved with typed links rather than silently discarded. P
 
 ### 3. Query Processor (`backend/compiler/query_processor.py`)
 
-Converts a raw query into embedding-ready inputs before search. Two responsibilities:
+Converts a raw query into embedding-ready inputs before search. Three responsibilities:
+
+**Kind classification:**
+Classifies the query's intent into one or two atom kinds from the same taxonomy used at ingest: `metric | event | decision | procedure | fact`. Examples: "top deals" → `["event"]`; "Q2 revenue" → `["metric"]`; "deals and revenue" → `["event", "metric"]`.
 
 **HyDE (Hypothetical Document Embeddings):**
-Generates `k=3` diverse declarative statements ("hypotheses") written as if a matching atom already exists in the KB. Each hypothesis covers a different angle of the query (activity/event, metric/quantity, trend/decision). Eliminates the question-vs-statement embedding mismatch that degrades single-embedding search.
+Generates `k=3` declarative statements ("hypotheses") written as if a matching atom already exists in the KB. Hypotheses are *kind-flavored* — structured to sound like atoms of the detected kind(s). An event-intent query produces event-sounding hypotheses; a metric-intent query produces metric-sounding hypotheses. This bridges query space and atom space using the same vocabulary on both sides, replacing random angle diversity with structured kind diversity.
 
 Rules enforced:
 - No hallucinated entity names, dollar amounts, or specific values not in the query
@@ -121,13 +124,13 @@ Rules enforced:
 - Fallback to `[raw_query]` on any LLM failure — never raises
 
 **Canonical extraction:**
-Extracts `subject` and `period` from the query in a standard normalised form:
-- `normalize_subject("Revenue Growth")` → `"revenue growth"` (lowercase + strip)
-- `normalize_period("q2-2024")` → `"Q2 2024"`, `"second quarter"` → `"Q2"`
+Period is extracted *deterministically via regex* before the LLM call (`period_utils.extract_period_from_text`). The detected period is injected into the LLM prompt as a hint and used as a fallback if the LLM returns null — making period extraction robust to LLM unreliability. Subject extraction is LLM-based; subject is no longer used as a pre-filter (see BM25 below).
 
-These are used as SQL pre-filters in `_search_one` before cosine search runs.
+- `normalize_period("q2-2024")` → `"Q2 2024"`, `"second quarter"` → `"Q2"`, `"H1 2024"` → `"H1 2024"`, `"FY2024"` → `"FY 2024"`
 
-**Output:** `ProcessedQuery(hypotheses: list[str], canonical: dict | None)`
+These utilities live in `backend/compiler/period_utils.py` and are shared between the query processor and the atomizer (same normalisation rules at ingest and query time).
+
+**Output:** `ProcessedQuery(hypotheses: list[str], kinds: list[str], canonical: dict | None)`
 
 ---
 
@@ -135,11 +138,24 @@ These are used as SQL pre-filters in `_search_one` before cosine search runs.
 
 **`router.py`** — Query routing
 
-- `smart_search=True` (default) — calls `process_query()` to get k hypotheses + canonical
+- `smart_search=True` (default) — calls `process_query()` to get kinds + k hypotheses + canonical, then `_apply_intent_routing()` to resolve search config
 - `smart_search=False` — skips LLM call, embeds raw query directly (fast path)
 - `deep_rerank=False` (default) — uses confidence × freshness heuristic scoring
 - `deep_rerank=True` — adds a second LLM pass to re-rank the shortlist by semantic relevance (+1–3s)
 - `compare_context()` calls `process_query()` once and reuses hypotheses across all agents
+
+**Intent-adaptive routing (`_apply_intent_routing`):**
+After `process_query()` returns `kinds`, the router looks up per-kind config from `_INTENT_CONFIG` and resolves search parameters:
+
+| Kind | deep_rerank | top_k_factor | min_relevance | strip_period |
+|---|---|---|---|---|
+| metric | auto-on | 2× | 0.35 | no |
+| event | no | 3× | 0.25 | no |
+| decision | auto-on | 2× | 0.30 | no |
+| procedure | no | 2× | 0.28 | yes (timeless) |
+| fact | no | 2× | 0.28 | yes (timeless) |
+
+Mixed-intent queries merge configs: most permissive recall (max top_k_factor, min min_relevance), precision floor is highest deep_rerank. Period is stripped only when all kinds are timeless.
 
 **`l3_search.py`** — Multi-hypothesis search with RRF
 
@@ -147,11 +163,16 @@ Search flow per query:
 
 ```
 for each hypothesis in hypotheses:
-    1. SQL pre-filter: canonical_period (bidirectional ILIKE) + canonical_subject (bidirectional ILIKE)
-       → atoms with no canonical fields (events, decisions) always pass through
+    1. SQL pre-filter: canonical_period (bidirectional ILIKE)
+       → atoms with no canonical_period always pass through
     2. pgvector cosine distance → top_k rows
 
-RRF fusion:
+BM25 full-text search (parallel ranked list):
+    plainto_tsquery('english', raw_query) against to_tsvector('english', content)
+    GIN index on to_tsvector('english', content) for performance
+    distance = 1 − min(1.0, ts_rank_cd score)
+
+RRF fusion (all lists merged — hypothesis lists + BM25 list):
     atom_score += 1 / (60 + rank)  for each list it appears in
     dedup by atom_id, keep row with best (lowest) cosine distance
 
@@ -169,12 +190,12 @@ Heuristic re-scoring:
 
 **Canonical pre-filter design:**
 
-Both `canonical_period` and `canonical_subject` use bidirectional ILIKE:
+`canonical_period` uses bidirectional ILIKE:
 - `stored ILIKE '%q2%'` → stored `"Q2 2024"` matches query `"Q2"`
 - `'q2 2024' ILIKE '%' || stored || '%'` → stored `"Q2"` matches query `"Q2 2024"`
-- `OR canonical_period IS NULL` → atoms without canonical fields always survive
+- `OR canonical_period IS NULL` → atoms without canonical period always survive
 
-This means a metric atom with the wrong period (`"Q3"`) is excluded before cosine search, but a non-metric event atom (no `canonical_period`) always passes through.
+`canonical_subject` is **not** used as a pre-filter. Subject matching is handled by BM25 as a soft relevance signal rather than a hard exclusion gate.
 
 ---
 
@@ -270,10 +291,13 @@ GET    /audit/stats                 Access control statistics
 ✅ **Atom versioning** (append-only `atom_versions` ledger)
 ✅ **Supersedes / contradicts / confirms links** (provenance-preserving knowledge evolution)
 ✅ **is_superseded filter** (stale atoms never appear in search results)
-✅ **Multi-hypothesis HyDE search** (k=3 diverse hypotheses, no kind classification)
-✅ **RRF fusion** (atoms appearing across multiple hypothesis shortlists are surfaced)
-✅ **Canonical pre-filter** (period + subject as indexed SQL pre-filters; bidirectional ILIKE)
-✅ **Period + subject normalisation** (consistent format at write and query time)
+✅ **Kind-aware query intent classification** (metric/event/decision/procedure/fact)
+✅ **Kind-diverse HyDE search** (k=3 kind-flavored hypotheses bridging query and atom vocabulary)
+✅ **BM25 + dense hybrid search** (pgvector + tsvector fused via RRF; GIN index on content)
+✅ **RRF fusion** (atoms appearing across hypothesis + BM25 ranked lists score higher)
+✅ **Intent-adaptive routing** (per-kind deep_rerank, top_k, min_relevance, strip_period)
+✅ **Canonical pre-filter** (period as indexed SQL pre-filter; bidirectional ILIKE; subject filter removed)
+✅ **Deterministic period extraction** (regex-first before LLM call; shared `period_utils.py`)
 ✅ **Optional LLM re-ranker** (deep_rerank flag; falls back gracefully)
 ✅ **Audit logging** (every access tracked)
 ✅ **Cross-source relationship linking** (domain-aware, similarity-gated)
@@ -304,7 +328,8 @@ lattice/
 │   │   ├── linker.py            # Atom-to-atom linking (LLM)
 │   │   ├── tagger.py            # Access mask + domain tagging (LLM)
 │   │   ├── consolidator.py      # Near-duplicate detection + classification (LLM)
-│   │   ├── query_processor.py   # HyDE hypotheses + canonical extraction (LLM)
+│   │   ├── query_processor.py   # Kind classification + HyDE hypotheses + canonical extraction (LLM)
+│   │   ├── period_utils.py      # Shared period/subject extraction + normalisation (regex)
 │   │   └── llm_client.py        # LM Studio API client
 │   ├── serving/
 │   │   ├── router.py            # Query routing + token trim + access log

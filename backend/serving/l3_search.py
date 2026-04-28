@@ -17,11 +17,11 @@ from datetime import datetime, timezone
 from typing import Any
 
 from pydantic import BaseModel
-from sqlalchemy import func, literal, or_, select
+from sqlalchemy import func, literal, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.compiler.llm_client import chat
-from backend.compiler.query_processor import normalize_period, normalize_subject
+from backend.compiler.query_processor import normalize_period
 from backend.engine.embeddings import embed_text
 from backend.models.atoms import Atom, AtomSource, Source
 
@@ -125,7 +125,6 @@ async def _search_one(
     top_k: int,
     domain_filter: list[str] | None,
     period_filter: str | None,
-    subject_filter: str | None,
     primary_source: Any,
 ) -> list[Any]:
     """Run a single pgvector query and return raw rows ordered by cosine distance."""
@@ -168,17 +167,58 @@ async def _search_one(
             )
         )
 
-    if subject_filter:
-        # Bidirectional substring match — "revenue" matches "revenue growth" and vice versa.
-        # Atoms with no canonical_subject (events, decisions) always pass through.
-        subject_norm = (normalize_subject(subject_filter) or subject_filter).lower()
-        stmt = stmt.where(
-            or_(
-                func.lower(Atom.canonical_subject).contains(subject_norm),
-                literal(subject_norm).ilike(func.concat("%", func.lower(Atom.canonical_subject), "%")),
-                Atom.canonical_subject.is_(None),
-            )
+    result = await db.execute(stmt)
+    return result.fetchall()
+
+
+async def _search_bm25(
+    db: AsyncSession,
+    query_text: str,
+    role_mask: int,
+    top_k: int,
+    domain_filter: list[str] | None,
+    primary_source: Any,
+) -> list[Any]:
+    """Full-text BM25 search via PostgreSQL tsvector/tsquery.
+
+    Catches exact term, ID, and name matches that dense vectors miss.
+    Results feed into the same RRF fusion as hypothesis embeddings so atoms
+    appearing in both BM25 and dense lists get a double boost.
+
+    Note: a GIN index on to_tsvector('english', content) is recommended for
+    production performance on large atom stores.
+    """
+    tsquery = func.plainto_tsquery(text("'english'"), query_text)
+    tsvector = func.to_tsvector(text("'english'"), Atom.content)
+    rank = func.ts_rank_cd(tsvector, tsquery)
+
+    stmt = (
+        select(
+            Atom.id,
+            Atom.content,
+            Atom.raw_content,
+            Atom.kind,
+            Atom.domain,
+            Atom.confidence,
+            Atom.access_mask,
+            Atom.links,
+            Atom.freshness,
+            Atom.version,
+            Atom.canonical,
+            primary_source.c.name.label("source_name"),
+            primary_source.c.source_type,
+            (literal(1.0) - func.least(literal(1.0), rank)).label("distance"),
         )
+        .outerjoin(primary_source, Atom.id == primary_source.c.atom_id)
+        .where(Atom.access_mask.bitwise_and(role_mask) != 0)
+        .where(Atom.is_superseded.is_(False))
+        .where(tsvector.op("@@")(tsquery))
+        .order_by(rank.desc())
+        .limit(top_k)
+    )
+
+    if domain_filter:
+        stmt = stmt.where(Atom.domain.overlap(domain_filter))
 
     result = await db.execute(stmt)
     return result.fetchall()
@@ -208,7 +248,6 @@ async def search_atoms(
         raw_query:       Original user query, passed to the LLM re-ranker prompt.
     """
     period_filter: str | None = (query_canonical or {}).get("period")
-    subject_filter: str | None = (query_canonical or {}).get("subject")
 
     primary_source = (
         select(AtomSource.atom_id, Source.name, Source.source_type)
@@ -217,13 +256,19 @@ async def search_atoms(
         .subquery()
     )
 
-    # ── Per-hypothesis searches (sequential — single session constraint) ───────
+    # ── Per-hypothesis dense searches (sequential — single session constraint) ─
     all_ranked: list[list[Any]] = []
     for hypothesis in hypotheses:
         embedding = embed_text(hypothesis)
-        rows = await _search_one(db, embedding, role_mask, top_k, domain_filter, period_filter, subject_filter, primary_source)
+        rows = await _search_one(db, embedding, role_mask, top_k, domain_filter, period_filter, primary_source)
         if rows:
             all_ranked.append(list(rows))
+
+    # ── BM25 full-text search (fused as an additional ranked list) ────────────
+    if raw_query:
+        bm25_rows = await _search_bm25(db, raw_query, role_mask, top_k, domain_filter, primary_source)
+        if bm25_rows:
+            all_ranked.append(list(bm25_rows))
 
     if not all_ranked:
         return []
