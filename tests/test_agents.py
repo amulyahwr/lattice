@@ -22,24 +22,12 @@ def db(tmp_path):
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
-def _subjects_response(subjects: list[str]) -> str:
-    return json.dumps({"subjects": subjects})
-
-
 def _ingest_response(atoms: list[dict]) -> str:
     return json.dumps({"atoms": atoms})
 
 
-def _questions_response(questions: list[str] | None = None) -> str:
-    return json.dumps({"questions": questions or ["What is this about?"]})
-
-
 def _supersession_response(atom_id: str | None) -> str:
     return json.dumps({"superseded_atom_id": atom_id})
-
-
-def _select_response(atom_ids: list[str]) -> str:
-    return json.dumps({"atom_ids": atom_ids})
 
 
 # ── ingest ────────────────────────────────────────────────────────────────────

@@ -61,7 +61,7 @@ metadata  — optional dict (title, url, author, date, …)
 → { atoms_created: N, atom_ids: [...] }
 ```
 
-For larger local knowledge bases, the roadmap is source-aware ingestion: source IDs, source spans, exact deduplication, and per-source commits so useful partial memory becomes queryable quickly.
+Each atom carries full provenance: `source_id`, `segment_id`, `source_span`, `content_hash`, and `observed_at`. Exact duplicates are skipped before write.
 
 ### `lattice_select(query, as_of?)`
 
@@ -74,7 +74,7 @@ as_of   — optional ISO date (YYYY-MM-DD); filters to atoms valid at that date
 → [ { atom_id, subject, content, kind, source, valid_from, valid_until }, ... ]
 ```
 
-The current implementation uses BM25 + LLM filtering. The product roadmap adds an incremental graph index and committed snapshots so selection stays fast while ingest is active.
+Uses BM25 candidates expanded into evidence packs — same-segment, same-source proximity, same-subject, and supersession neighbors — backed by a committed graph index (`graph/nodes.jsonl`, `graph/edges.jsonl`).
 
 ### `lattice_answer(query, atom_ids?, as_of?)`
 

@@ -9,7 +9,9 @@ from pathlib import Path
 
 from rank_bm25 import BM25Okapi
 
+from lattice.graph import LatticeGraph
 from lattice.models import Atom
+from lattice.util import _normalized_subject, _write_json_atomic
 
 _STOPWORDS = {
     "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
@@ -24,10 +26,6 @@ def _query_words(text: str) -> list[str]:
     return [w for w in re.findall(r"[a-z0-9]{3,}", text.lower()) if w not in _STOPWORDS]
 
 
-def _normalized_subject(subject: str) -> str:
-    return " ".join(re.findall(r"[a-z0-9]+", subject.lower()))
-
-
 class AtomNotFound(Exception):
     pass
 
@@ -39,6 +37,7 @@ class LatticeDB:
         self.dir.mkdir(parents=True, exist_ok=True)
         self._atom_cache: dict[str, Atom] = {}
         self._subjects_cache: dict[str, str] | None = None
+        self._graph: LatticeGraph | None = None
 
     @property
     def _subjects_file(self) -> Path:
@@ -59,7 +58,7 @@ class LatticeDB:
         subjects = self._load_subjects()
         old_id = subjects.get(key)
         subjects[key] = atom_id
-        self._write_json_atomic(self._subjects_file, subjects)
+        _write_json_atomic(self._subjects_file, subjects)
         self._subjects_cache = subjects
         return old_id if old_id != atom_id else None
 
@@ -70,18 +69,6 @@ class LatticeDB:
 
     def _path(self, atom_id: str) -> Path:
         return self.dir / f"{atom_id}.md"
-
-    def _write_json_atomic(self, path: Path, data: dict) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", text=True)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                json.dump(data, f)
-            Path(tmp_name).replace(path)
-        finally:
-            tmp = Path(tmp_name)
-            if tmp.exists():
-                tmp.unlink()
 
     # ── write ─────────────────────────────────────────────────────────────
 
@@ -99,6 +86,9 @@ class LatticeDB:
             if tmp.exists():
                 tmp.unlink()
         self._atom_cache[atom.atom_id] = atom
+        if self._graph is not None:
+            self._graph.add_atom(atom)
+            self._graph.save(self.dir)
 
     # ── read ──────────────────────────────────────────────────────────────
 
@@ -123,6 +113,15 @@ class LatticeDB:
                 except Exception:
                     pass
         _ = self._load_subjects()
+
+        atom_count = len(self._atom_cache)
+        lg = LatticeGraph()
+        if not lg.is_stale(self.dir, atom_count):
+            self._graph = LatticeGraph.load(self.dir)
+        else:
+            self._graph = LatticeGraph()
+            self._graph.rebuild(list(self._atom_cache.values()))
+            self._graph.save(self.dir)
 
     # ── list ──────────────────────────────────────────────────────────────
 
@@ -168,6 +167,13 @@ class LatticeDB:
         self.write(old)
         new_atom.supersedes = old_id
         self.write(new_atom)
+        if self._graph is not None:
+            self._graph.mark_superseded(old_id, new_atom.atom_id)
+            self._graph.save(self.dir)
+
+    @property
+    def graph(self) -> LatticeGraph | None:
+        return self._graph
 
     # ── retrieval packs ──────────────────────────────────────────────────
 

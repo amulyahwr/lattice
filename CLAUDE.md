@@ -25,6 +25,12 @@ lattice/
   models.py        Atom pydantic model + markdown serialization (python-frontmatter).
   db.py            File-based store: one .md file per atom in LATTICE_DIR. BM25 search.
                    subjects.json is a subject→atom_id index for O(1) supersession lookups.
+                   Holds a LatticeGraph instance; updated on every write/supersede/preload.
+  graph.py         Heterogeneous graph index (networkx MultiDiGraph). Writes committed
+                   sidecars to LATTICE_DIR/graph/{nodes.jsonl,edges.jsonl,manifest.json}.
+                   Node types: atom:<id>, source:<id>, segment:<cid>:<sid>, subject:<norm>.
+                   Edge types: source_contains_segment, segment_contains_atom,
+                   atom_has_subject, same_subject_as, same_hash, supersedes.
   ingest.py        LLM extracts atoms from raw text, then checks supersession per atom.
   selection.py     BM25 pre-filter (top_k=20) → LLM re-ranks → returns atom dicts.
   synthesis.py     LLM generates prose answer from a list of atom dicts.
@@ -47,9 +53,11 @@ lattice/
 
 **Atom storage**: every atom is a `.md` file with YAML frontmatter. `LatticeDB` has an in-memory cache (`_atom_cache`). Cache is per-instance; `server.py` reuses one instance per process.
 
-**BM25**: built fresh on each `db.search()` call from all non-superseded atoms. No persistent index.
+**BM25**: built fresh on each `db.search()` call from all non-superseded atoms. No persistent BM25 index.
 
-This is current MVP behavior, not the target product shape. Roadmap priorities in `lattice/eval/PRIORITIES.md` move search toward cached BM25/graph snapshots.
+**Graph sidecars**: `LatticeGraph` (P5) writes `LATTICE_DIR/graph/` on every atom write. `db.preload()` loads from sidecars if manifest atom_count matches; otherwise rebuilds. Access via `db.graph`. P6 will use this for BFS-based evidence pack expansion instead of the current O(n) scan in `evidence_pack()`.
+
+This is current MVP behavior, not the target product shape. Roadmap priorities in `lattice/eval/PRIORITIES.md` move search toward graph-seeded selection (P6 is next).
 
 ### Test conventions
 
