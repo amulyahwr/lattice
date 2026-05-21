@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date
 from typing import Any
 
@@ -8,9 +9,9 @@ from mcp.server import Server
 from mcp.server.models import InitializationOptions
 from mcp.types import TextContent, Tool
 
-from lattice.db import LatticeDB
+from lattice.db import AtomNotFound, LatticeDB
 from lattice.ingest import ingest
-from lattice.selection import select
+from lattice.selection import _atom_to_dict, select
 from lattice.synthesis import synthesize
 
 app = Server("lattice-mcp")
@@ -107,11 +108,9 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         as_of_str: str | None = arguments.get("as_of")
         as_of = date.fromisoformat(as_of_str) if as_of_str else None
         atoms = select(query=arguments["query"], as_of=as_of, db=_db)
-        import json
         return [TextContent(type="text", text=json.dumps(atoms, indent=2))]
 
     if name == "lattice_answer":
-        import json
         as_of_str = arguments.get("as_of")
         as_of = date.fromisoformat(as_of_str) if as_of_str else None
         atom_ids: list[str] = arguments.get("atom_ids", [])
@@ -120,17 +119,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             atoms = []
             for aid in atom_ids:
                 try:
-                    a = _db.read(aid)
-                    atoms.append({
-                        "atom_id": a.atom_id,
-                        "subject": a.subject,
-                        "content": a.content,
-                        "kind": a.kind,
-                        "source": a.source,
-                        "valid_from": a.valid_from.isoformat() if a.valid_from else None,
-                        "valid_until": a.valid_until.isoformat() if a.valid_until else None,
-                    })
-                except Exception:
+                    atoms.append(_atom_to_dict(_db.read(aid)))
+                except AtomNotFound:
                     pass
         else:
             atoms = select(query=arguments["query"], as_of=as_of, db=_db)

@@ -88,6 +88,8 @@ as_of     — optional ISO date; passed to selection when atom_ids not provided
 → answer string
 ```
 
+Synthesis runs as a tool-calling agent (raw OpenAI-compat API). A `date_diff(date1, date2)` tool is available so the model can perform exact date arithmetic without hallucinating day counts. The `as_of` date is passed as the agent's reference "today".
+
 ## Atom format
 
 Atoms are stored as `.md` files with YAML frontmatter:

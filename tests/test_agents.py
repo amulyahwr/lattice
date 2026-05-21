@@ -5,7 +5,7 @@ Tests verify external behavior: atoms created, supersession links, selection res
 
 import json
 from datetime import date
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch, PropertyMock
 
 import pytest
 
@@ -26,8 +26,8 @@ def _ingest_response(atoms: list[dict]) -> str:
     return json.dumps({"atoms": atoms})
 
 
-def _select_response(atom_ids: list[str]) -> str:
-    return json.dumps({"atom_ids": atom_ids})
+def _supersession_response(atom_id: str | None) -> str:
+    return json.dumps({"superseded_atom_id": atom_id})
 
 
 # ── ingest ────────────────────────────────────────────────────────────────────
@@ -38,9 +38,8 @@ class TestIngest:
             {"subject": "lattice-mcp", "kind": "fact", "source": "user",
              "content": "lattice-mcp is a local MCP server.", "valid_from": None, "valid_until": None},
         ]
-        # supersession check returns null (no supersession)
-        responses = [_ingest_response(llm_atoms), "null"]
-        with patch("lattice.ingest.complete", side_effect=responses):
+        # extract_atoms (no supersession: first atom for this subject)
+        with patch("lattice.ingest.complete", side_effect=[_ingest_response(llm_atoms)]):
             result = ingest("lattice-mcp is a local MCP server.", db=db)
 
         assert result["atoms_created"] == 1
@@ -54,21 +53,24 @@ class TestIngest:
             {"subject": "Project", "kind": "doc", "source": "document",
              "content": "Project readme.", "valid_from": None, "valid_until": None},
         ]
-        responses = [_ingest_response(llm_atoms), "null"]
-        with patch("lattice.ingest.complete", side_effect=responses):
+        with patch("lattice.ingest.complete", side_effect=[_ingest_response(llm_atoms)]):
             result = ingest("Project readme.", metadata={"title": "README"}, db=db)
 
         atom = db.read(result["atom_ids"][0])
         assert atom.metadata.get("title") == "README"
+        assert atom.source_title == "README"
+        assert atom.source_id == result["source_id"]
+        assert atom.ingested_at is not None
+        assert atom.content_hash
+        assert atom.normalized_content_hash
 
     def test_multiple_atoms_from_one_ingest(self, db):
         llm_atoms = [
             {"subject": "A", "kind": "fact", "source": "user", "content": "A is true.", "valid_from": None, "valid_until": None},
             {"subject": "B", "kind": "fact", "source": "user", "content": "B is false.", "valid_from": None, "valid_until": None},
         ]
-        # Two atoms → two supersession checks
-        responses = [_ingest_response(llm_atoms), "null", "null"]
-        with patch("lattice.ingest.complete", side_effect=responses):
+        # no supersession calls: first atoms on each subject → db.by_subject() returns []
+        with patch("lattice.ingest.complete", side_effect=[_ingest_response(llm_atoms)]):
             result = ingest("A is true. B is false.", db=db)
 
         assert result["atoms_created"] == 2
@@ -77,7 +79,7 @@ class TestIngest:
             assert aid in all_ids
 
     def test_supersession_links_atoms(self, db):
-        # First ingest: create old atom
+        # First ingest: create old atom (no supersession: no existing atoms for "API")
         old_atoms = [
             {"subject": "API", "kind": "fact", "source": "user",
              "content": "The API uses REST.", "valid_from": None, "valid_until": None},
@@ -87,13 +89,15 @@ class TestIngest:
 
         old_id = old_result["atom_ids"][0]
 
-        # Second ingest: supersedes old atom
+        # Second ingest: supersedes old atom (fast path: subject in registry → LLM call)
         new_atoms = [
             {"subject": "API", "kind": "fact", "source": "user",
              "content": "The API now uses GraphQL.", "valid_from": None, "valid_until": None},
         ]
-        # supersession check returns the old atom's id
-        with patch("lattice.ingest.complete", side_effect=[_ingest_response(new_atoms), old_id]):
+        with patch("lattice.ingest.complete", side_effect=[
+            _ingest_response(new_atoms),
+            _supersession_response(old_id),
+        ]):
             new_result = ingest("The API now uses GraphQL.", db=db)
 
         new_id = new_result["atom_ids"][0]
@@ -109,13 +113,67 @@ class TestIngest:
             {"subject": "Offer", "kind": "event", "source": "user",
              "content": "Special offer.", "valid_from": "2024-06-01", "valid_until": "2024-06-30"},
         ]
-        responses = [_ingest_response(llm_atoms), "null"]
-        with patch("lattice.ingest.complete", side_effect=responses):
+        with patch("lattice.ingest.complete", side_effect=[_ingest_response(llm_atoms)]):
             result = ingest("Special offer valid June 2024.", db=db)
 
         atom = db.read(result["atom_ids"][0])
         assert atom.valid_from == date(2024, 6, 1)
         assert atom.valid_until == date(2024, 6, 30)
+
+    def test_exact_duplicate_skipped(self, db):
+        llm_atoms = [
+            {"subject": "Project", "kind": "fact", "source": "user",
+             "content": "Project uses Python.", "valid_from": None, "valid_until": None},
+        ]
+        with patch("lattice.ingest.complete", side_effect=[_ingest_response(llm_atoms)]):
+            first = ingest("Project uses Python.", db=db)
+        with patch("lattice.ingest.complete", side_effect=[_ingest_response(llm_atoms)]):
+            second = ingest("Project uses Python.", db=db)
+
+        assert first["atoms_created"] == 1
+        assert second["atoms_created"] == 0
+        assert second["duplicates_skipped"] == 1
+        assert second["duplicate_atom_ids"] == first["atom_ids"]
+
+    def test_source_type_and_observed_at_from_metadata(self, db):
+        llm_atoms = [
+            {"subject": "Roadmap", "kind": "doc", "source": "document",
+             "content": "Roadmap has three phases.", "valid_from": None, "valid_until": None},
+        ]
+        with patch("lattice.ingest.complete", side_effect=[_ingest_response(llm_atoms)]):
+            result = ingest(
+                "# Roadmap\n\nRoadmap has three phases.",
+                metadata={
+                    "source_id": "src-roadmap",
+                    "source_type": "markdown",
+                    "observed_at": "2024-06-01T00:00:00+00:00",
+                },
+                db=db,
+            )
+
+        atom = db.read(result["atom_ids"][0])
+        assert atom.source_id == "src-roadmap"
+        assert atom.source_type == "markdown"
+        assert atom.observed_at is not None
+        assert atom.source_span == {"start": 0, "end": len("# Roadmap\n\nRoadmap has three phases.")}
+
+    def test_observed_at_parses_eval_date_format(self, db):
+        llm_atoms = [
+            {"subject": "Festival", "kind": "event", "source": "conversation",
+             "content": "Festival details were discussed.", "valid_from": None, "valid_until": None},
+        ]
+        with patch("lattice.ingest.complete", side_effect=[_ingest_response(llm_atoms)]):
+            result = ingest(
+                "Festival details were discussed.",
+                metadata={"source": "conversation", "date": "2023/05/25 (Thu) 06:05"},
+                db=db,
+            )
+
+        atom = db.read(result["atom_ids"][0])
+        assert atom.observed_at is not None
+        assert atom.observed_at.year == 2023
+        assert atom.observed_at.month == 5
+        assert atom.observed_at.day == 25
 
 
 # ── selection ─────────────────────────────────────────────────────────────────
@@ -135,28 +193,25 @@ class TestSelect:
     def test_returns_relevant_atoms(self, db):
         atoms = self._seed(db)
         python_id = atoms[0].atom_id
-        with patch("lattice.selection.complete", return_value=_select_response([python_id])):
-            result = select("tell me about Python", db=db)
-        assert len(result) == 1
+        result = select("tell me about Python", db=db)
         assert result[0]["atom_id"] == python_id
 
     def test_result_has_required_fields(self, db):
         atoms = self._seed(db)
-        with patch("lattice.selection.complete", return_value=_select_response([atoms[0].atom_id])):
-            result = select("Python", db=db)
+        result = select("Python", db=db)
         keys = set(result[0].keys())
         assert {"atom_id", "subject", "content", "kind", "source"}.issubset(keys)
+        assert {"source_id", "source_title", "segment_id", "observed_at"}.issubset(keys)
 
     def test_empty_db_returns_empty(self, db):
         result = select("anything", db=db)
         assert result == []
 
-    def test_llm_garbage_falls_back_to_bm25(self, db):
+    def test_uses_bm25_without_llm_selector(self, db):
         self._seed(db)
-        with patch("lattice.selection.complete", return_value="not valid json {{{}"):
-            result = select("programming language", db=db)
-        # Should still return something (BM25 fallback)
+        result = select("programming language", db=db)
         assert isinstance(result, list)
+        assert result
 
     def test_as_of_filters_before_llm(self, db):
         from lattice.models import Atom
@@ -165,19 +220,52 @@ class TestSelect:
             content="Price is $10.", valid_until=date(2023, 12, 31),
         )
         db.write(expired)
-        # Even if LLM returns the expired id, it shouldn't be in BM25 candidates
-        with patch("lattice.selection.complete", return_value=_select_response([expired.atom_id])):
-            result = select("price", as_of=date(2024, 6, 1), db=db)
-        # expired atom was filtered from BM25 candidates, so not in result
+        result = select("price", as_of=date(2024, 6, 1), db=db)
         assert all(r["atom_id"] != expired.atom_id for r in result)
+
+    def test_expands_same_segment_pack(self, db):
+        from lattice.models import Atom
+        seed = Atom(
+            kind="fact", source="user", subject="Python",
+            content="Python supports decorators.",
+            source_id="src-1", session_id="sess-1", segment_id="seg-1",
+            source_span={"start": 100, "end": 130},
+        )
+        sibling = Atom(
+            kind="fact", source="user", subject="Python testing",
+            content="Pytest fixtures help test Python code.",
+            source_id="src-1", session_id="sess-1", segment_id="seg-1",
+            source_span={"start": 131, "end": 180},
+        )
+        db.write(seed)
+        db.write(sibling)
+
+        result = select("decorators", db=db, top_k=1)
+        ids = [row["atom_id"] for row in result]
+        assert seed.atom_id in ids
+        assert sibling.atom_id in ids
 
 
 # ── synthesis ─────────────────────────────────────────────────────────────────
 
+def _mock_completion(answer: str):
+    """Return a mock openai ChatCompletion with no tool calls."""
+    msg = MagicMock()
+    msg.tool_calls = None
+    msg.content = answer
+    choice = MagicMock()
+    choice.message = msg
+    resp = MagicMock()
+    resp.choices = [choice]
+    return resp
+
+
 class TestSynthesize:
     def test_returns_string(self):
         atoms = [{"subject": "Python", "kind": "fact", "content": "Python is dynamically typed."}]
-        with patch("lattice.synthesis.complete", return_value=json.dumps({"thinking": "The atom states Python is dynamically typed.", "answer": "Python is dynamically typed."})):
+        with patch.dict("os.environ", {"LLM_PROVIDER": "openai", "LLM_API_KEY": "test"}), \
+             patch("lattice.synthesis.OpenAI") as mock_cls:
+            mock_cls.return_value.chat.completions.create.return_value = _mock_completion("Python is dynamically typed.")
             result = synthesize("What is Python?", atoms)
         assert isinstance(result.answer, str)
         assert len(result.answer) > 0
@@ -191,17 +279,21 @@ class TestSynthesize:
         assert result.raw_response == ""
 
     def test_raw_response_captured(self):
-        raw = json.dumps({"thinking": "The atom states Python is dynamically typed.", "answer": "Python is dynamically typed."})
         atoms = [{"subject": "Python", "kind": "fact", "content": "Python is dynamically typed."}]
-        with patch("lattice.synthesis.complete", return_value=raw):
+        with patch.dict("os.environ", {"LLM_PROVIDER": "openai", "LLM_API_KEY": "test"}), \
+             patch("lattice.synthesis.OpenAI") as mock_cls:
+            mock_cls.return_value.chat.completions.create.return_value = _mock_completion("Python is dynamically typed.")
             result = synthesize("What is Python?", atoms)
-        assert result.raw_response == raw
+        assert result.raw_response == result.answer
 
     def test_passes_query_and_atoms_to_llm(self):
         atoms = [{"subject": "X", "kind": "fact", "content": "X is true."}]
-        with patch("lattice.synthesis.complete", return_value=json.dumps({"thinking": "Atom says X is true.", "answer": "X is true."})) as mock:
+        with patch.dict("os.environ", {"LLM_PROVIDER": "openai", "LLM_API_KEY": "test"}), \
+             patch("lattice.synthesis.OpenAI") as mock_cls:
+            mock_cls.return_value.chat.completions.create.return_value = _mock_completion("X is true.")
             synthesize("Tell me about X.", atoms)
-        call_messages = mock.call_args[0][0]
-        combined = " ".join(m["content"] for m in call_messages)
+        create_call = mock_cls.return_value.chat.completions.create.call_args
+        messages = create_call.kwargs.get("messages") or create_call.args[0]
+        combined = " ".join(m["content"] for m in messages if isinstance(m.get("content"), str))
         assert "Tell me about X." in combined
         assert "X is true." in combined
