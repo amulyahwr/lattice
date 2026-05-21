@@ -8,11 +8,13 @@ Usage:
 from __future__ import annotations
 
 import json
+import tempfile
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 import streamlit as st
+import streamlit.components.v1 as components
 
 ROOT = Path(__file__).parent.parent.parent
 RESULTS_DIR = ROOT / "results"
@@ -107,6 +109,74 @@ def _atom_file(lattice_dir: str | None, atom_id: str) -> Path | None:
         return None
     path = Path(lattice_dir) / f"{atom_id}.md"
     return path if path.exists() else None
+
+
+# ── graph rendering ───────────────────────────────────────────────────────────
+
+_NODE_COLORS = {
+    "atom": "#4A90D9",
+    "source": "#27AE60",
+    "segment": "#95A5A6",
+    "subject": "#E67E22",
+}
+_NODE_SIZES = {"atom": 18, "source": 24, "segment": 14, "subject": 14}
+
+
+def _render_graph(d: dict, selected_ids: set[str]) -> None:
+    try:
+        from pyvis.network import Network
+        from lattice.graph import LatticeGraph
+    except ImportError:
+        st.warning("pyvis not installed.")
+        return
+
+    lattice_dir = Path(d["lattice_dir"])
+    if not (lattice_dir / "graph" / "nodes.jsonl").exists():
+        st.info("Graph sidecars not found in lattice dir.")
+        return
+
+    lg = LatticeGraph.load(lattice_dir)
+    g = lg.graph
+    bm25_ids = {f"atom:{aid}" for aid in (d.get("bm25_candidate_ids") or [])}
+    sel_nodes = {f"atom:{aid}" for aid in selected_ids}
+
+    net = Network(height="520px", width="100%", bgcolor="#0e1117", font_color="white",
+                  directed=True)
+    net.barnes_hut(gravity=-8000, central_gravity=0.3, spring_length=120)
+
+    for node_id, attrs in g.nodes(data=True):
+        ntype = attrs.get("type", "atom")
+        color = _NODE_COLORS.get(ntype, "#888")
+        size = _NODE_SIZES.get(ntype, 14)
+        border = "#FFFFFF"
+
+        if node_id in sel_nodes:
+            color = "#F1C40F"
+            size = 24
+            border = "#E74C3C"
+        elif node_id in bm25_ids:
+            color = "#9B59B6"
+            size = 20
+
+        label = node_id.split(":", 1)[-1][:24]
+        title_parts = [f"<b>{node_id}</b>"]
+        for k, v in attrs.items():
+            if v is not None:
+                title_parts.append(f"{k}: {str(v)[:80]}")
+        net.add_node(node_id, label=label, color={"background": color, "border": border},
+                     size=size, title="<br>".join(title_parts))
+
+    for src, dst, attrs in g.edges(data=True):
+        etype = attrs.get("type", "")
+        net.add_edge(src, dst, title=etype, label=etype, font={"size": 8, "color": "#aaa"},
+                     color={"color": "#555", "highlight": "#fff"}, arrows="to")
+
+    with tempfile.NamedTemporaryFile(suffix=".html", delete=False, mode="w") as f:
+        net.save_graph(f.name)
+        html = Path(f.name).read_text()
+
+    st.markdown("**Interactive graph** — yellow=selected · purple=BM25 seed · blue=atom · green=source · orange=subject · gray=segment")
+    components.html(html, height=540, scrolling=False)
 
 
 # ── sidebar ───────────────────────────────────────────────────────────────────
@@ -350,8 +420,8 @@ ds = dataset.get(selected_qid, {})
 label = labels.get(selected_qid)
 failure = _failure_type(d, label)
 
-tab_summary, tab_atoms, tab_bm25, tab_selected, tab_sessions, tab_raw = st.tabs(
-    ["Summary", "Atoms", "BM25", "Selected", "Sessions", "Raw"]
+tab_summary, tab_atoms, tab_bm25, tab_selected, tab_sessions, tab_graph, tab_raw = st.tabs(
+    ["Summary", "Atoms", "BM25", "Selected", "Sessions", "Graph", "Raw"]
 )
 
 with tab_summary:
@@ -560,6 +630,45 @@ with tab_sessions:
                 st.markdown(f"**{idx}. {role}{suffix}**")
                 st.write(content)
                 st.divider()
+
+with tab_graph:
+    gs = d.get("graph_stats") or {}
+    if gs:
+        g1, g2 = st.columns(2)
+        g1.metric("Graph nodes", gs.get("nodes_total", 0))
+        g2.metric("Graph edges", gs.get("edges_total", 0))
+
+        nodes_by_type = gs.get("nodes_by_type") or {}
+        edges_by_type = gs.get("edges_by_type") or {}
+
+        col_n, col_e = st.columns(2)
+        with col_n:
+            st.markdown("**Nodes by type**")
+            if nodes_by_type:
+                st.dataframe(
+                    pd.DataFrame(
+                        [{"type": k, "count": v} for k, v in sorted(nodes_by_type.items())]
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+        with col_e:
+            st.markdown("**Edges by type**")
+            if edges_by_type:
+                st.dataframe(
+                    pd.DataFrame(
+                        [{"type": k, "count": v} for k, v in sorted(edges_by_type.items())]
+                    ),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+    if d.get("lattice_dir_kept") and d.get("lattice_dir"):
+        _render_graph(d, selected_ids)
+    elif not gs:
+        st.info("No graph stats — re-run inference to populate.")
+    else:
+        st.info("Run with --keep-lattice-dirs to enable interactive graph.")
 
 with tab_raw:
     st.markdown("**Debug JSON**")

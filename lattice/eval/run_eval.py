@@ -356,6 +356,19 @@ def _format_retrieval_totals(name: str, totals: dict[str, float]) -> str:
     )
 
 
+def _graph_stats(db: LatticeDB) -> dict:
+    from collections import Counter
+    g = db.graph.graph
+    node_counts = dict(Counter(d.get("type", "unknown") for _, d in g.nodes(data=True)))
+    edge_counts = dict(Counter(d.get("type", "unknown") for _, _, d in g.edges(data=True)))
+    return {
+        "nodes_total": g.number_of_nodes(),
+        "edges_total": g.number_of_edges(),
+        "nodes_by_type": node_counts,
+        "edges_by_type": edge_counts,
+    }
+
+
 def _valid_as_of(atom, as_of: date | None) -> bool:
     if atom.is_superseded:
         return False
@@ -552,6 +565,7 @@ def _run_inference(cfg: dict) -> None:
                             "selected_atoms": selected,
                             "synthesis_raw": synthesis.raw_response,
                             "hypothesis": synthesis.answer,
+                            "graph_stats": _graph_stats(db),
                         }
                     )
                     + "\n"
