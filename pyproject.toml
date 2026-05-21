@@ -31,4 +31,5 @@ eval = [
     "requests>=2.0",
     "streamlit>=1.35",
     "pandas>=2.0",
+    "pyvis>=0.3.2",
 ]

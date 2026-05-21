@@ -37,7 +37,7 @@ class LatticeDB:
         self.dir.mkdir(parents=True, exist_ok=True)
         self._atom_cache: dict[str, Atom] = {}
         self._subjects_cache: dict[str, str] | None = None
-        self._graph: LatticeGraph | None = None
+        self._graph: LatticeGraph = LatticeGraph()
 
     @property
     def _subjects_file(self) -> Path:
@@ -167,12 +167,11 @@ class LatticeDB:
         self.write(old)
         new_atom.supersedes = old_id
         self.write(new_atom)
-        if self._graph is not None:
-            self._graph.mark_superseded(old_id, new_atom.atom_id)
-            self._graph.save(self.dir)
+        self._graph.mark_superseded(old_id, new_atom.atom_id)
+        self._graph.save(self.dir)
 
     @property
-    def graph(self) -> LatticeGraph | None:
+    def graph(self) -> LatticeGraph:
         return self._graph
 
     # ── retrieval packs ──────────────────────────────────────────────────

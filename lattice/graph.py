@@ -187,6 +187,51 @@ class LatticeGraph:
 
         return lg
 
+    def bfs_expand(
+        self,
+        seed_atom_ids: list[str],
+        max_depth: int = 4,
+        max_atoms: int = 60,
+    ) -> list[str]:
+        """BFS from seed atoms through all edge types. Returns atom IDs in visit order."""
+        from collections import deque
+
+        visited: set[str] = set()
+        result: list[str] = []
+        queue: deque[tuple[str, int]] = deque()
+
+        for aid in seed_atom_ids:
+            node = f"atom:{aid}"
+            if node in self._g.nodes and node not in visited:
+                visited.add(node)
+                result.append(aid)
+                queue.append((node, 0))
+                if len(result) >= max_atoms:
+                    return result
+
+        while queue:
+            node, depth = queue.popleft()
+            if depth >= max_depth:
+                continue
+
+            neighbors: set[str] = set()
+            neighbors.update(self._g.successors(node))
+            neighbors.update(self._g.predecessors(node))
+
+            for nbr in neighbors:
+                if nbr in visited:
+                    continue
+                visited.add(nbr)
+                if nbr not in self._g.nodes:
+                    continue
+                if self._g.nodes[nbr].get("type") == "atom":
+                    result.append(nbr[len("atom:"):])
+                    if len(result) >= max_atoms:
+                        return result
+                queue.append((nbr, depth + 1))
+
+        return result
+
     def is_stale(self, lattice_dir: Path, atom_count: int) -> bool:
         manifest_path = lattice_dir / "graph" / "manifest.json"
         if not manifest_path.exists():

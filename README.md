@@ -74,7 +74,7 @@ as_of   — optional ISO date (YYYY-MM-DD); filters to atoms valid at that date
 → [ { atom_id, subject, content, kind, source, valid_from, valid_until }, ... ]
 ```
 
-Uses BM25 candidates expanded into evidence packs — same-segment, same-source proximity, same-subject, and supersession neighbors — backed by a committed graph index (`graph/nodes.jsonl`, `graph/edges.jsonl`).
+Uses BM25 to seed candidate atoms, then expands via bounded BFS through the committed graph index (`graph/nodes.jsonl`, `graph/edges.jsonl`) — traversing segment, source, subject, supersession, and duplicate edges. Superseded atoms and exact duplicates are collapsed before synthesis.
 
 ### `lattice_answer(query, atom_ids?, as_of?)`
 

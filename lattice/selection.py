@@ -59,9 +59,15 @@ def select(
     if not seeds:
         return []
 
+    max_atoms = max(top_k, top_k * 3)
+    graph = db.graph
+
+    if graph.graph.number_of_nodes() > 0:
+        return _graph_select(seeds, graph, db, as_of, max_atoms)
+
+    # Fallback: P4 evidence_pack expansion
     selected = []
     seen: set[str] = set()
-    max_atoms = max(top_k, top_k * 3)
     for seed in seeds:
         for atom in db.evidence_pack(seed, as_of=as_of):
             if atom.atom_id in seen:
@@ -70,5 +76,48 @@ def select(
             seen.add(atom.atom_id)
             if len(selected) >= max_atoms:
                 return [_atom_to_dict(a) for a in selected]
-
     return [_atom_to_dict(a) for a in selected]
+
+
+def _graph_select(
+    seeds: list,
+    graph,
+    db: LatticeDB,
+    as_of: date | None,
+    max_atoms: int,
+) -> list[dict]:
+    expanded_ids = graph.bfs_expand(
+        [s.atom_id for s in seeds],
+        max_depth=4,
+        max_atoms=max_atoms,
+    )
+
+    seen_ids: set[str] = set()
+    seen_hashes: set[str] = set()
+    result: list[Atom] = []
+
+    for atom_id in expanded_ids:
+        if atom_id in seen_ids:
+            continue
+        seen_ids.add(atom_id)
+        try:
+            atom = db.read(atom_id)
+        except Exception:
+            continue
+
+        # Temporal validity filter
+        if as_of is not None:
+            if atom.valid_from is not None and atom.valid_from > as_of:
+                continue
+            if atom.valid_until is not None and atom.valid_until < as_of:
+                continue
+
+        # Collapse exact duplicates by normalized content hash
+        if atom.normalized_content_hash:
+            if atom.normalized_content_hash in seen_hashes:
+                continue
+            seen_hashes.add(atom.normalized_content_hash)
+
+        result.append(atom)
+
+    return [_atom_to_dict(a) for a in result]

@@ -31,11 +31,16 @@ lattice_select(query, as_of)
    BM25 search           top-20 non-superseded atoms scored on subject+content
         │
         ▼
-   Evidence packing      each seed expands: same segment → same source proximity
-                         → same normalized subject → supersession chain
+   Graph BFS expansion   bounded BFS (depth=4, max=60 atoms) through committed
+                         graph snapshot — traverses segment, source, subject,
+                         supersedes, and same_hash edges in both directions
         │
         ▼
-   LLM re-rank           returns final list of atom dicts with provenance
+   Collapse + filter     drop superseded atoms; deduplicate by normalized hash;
+                         apply as_of temporal filter
+        │
+        ▼
+   Return atom dicts     with full provenance fields
 
 
 lattice_answer(query, atom_ids?, as_of)
@@ -61,7 +66,7 @@ lattice_answer(query, atom_ids?, as_of)
 | `lattice/graph.py` | `LatticeGraph` — `networkx.MultiDiGraph` backed by committed sidecars. Incrementally updated; full rebuild triggered when manifest atom count diverges from disk. |
 | `lattice/util.py` | Shared low-level helpers: `_normalized_subject()`, `_write_json_atomic()`. |
 | `lattice/ingest.py` | Segments source text → LLM extracts atoms → dedup + supersession check → write to DB. |
-| `lattice/selection.py` | BM25 pre-filter → `evidence_pack()` expansion → LLM re-rank. Exports `_atom_to_dict()` for consistent atom serialization. |
+| `lattice/selection.py` | BM25 pre-filter → graph BFS expansion via `LatticeGraph.bfs_expand()` → collapse superseded/duplicate groups. Falls back to `evidence_pack()` if graph is empty. Exports `_atom_to_dict()` for consistent atom serialization. |
 | `lattice/synthesis.py` | Takes atom dicts + query → LLM produces prose answer. |
 | `lattice/llm.py` | Thin litellm wrapper. Single `complete(messages) → str` interface. Reads `LLM_PROVIDER` / `LLM_MODEL` / `LLM_API_KEY` from env. Raises `EnvironmentError` eagerly if API key missing. |
 
@@ -146,6 +151,6 @@ LATTICE_DIR/
 
 ## Roadmap Direction
 
-Current state (P4 done): BM25 seeds → deterministic evidence packs → LLM answer.
+Current state (P6 done): BM25 seeds → graph BFS expansion → collapse superseded/duplicates → LLM answer.
 
-Next: **P5 graph index** (done) → **P6 graph-seeded selection** — BFS through committed graph edges replaces the O(n) in-memory scan in `evidence_pack()`. After that: optional semantic enrichment (P8), topic hubs (P9), embeddings (P11). Full roadmap in `lattice/eval/PRIORITIES.md`.
+Next: optional semantic relation enrichment (P8), topic hubs (P9), embeddings (P11). Full roadmap in `lattice/eval/PRIORITIES.md`.
