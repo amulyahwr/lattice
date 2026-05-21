@@ -3,12 +3,15 @@ from __future__ import annotations
 import json
 import os
 import re
+import tempfile
 from datetime import date
 from pathlib import Path
 
 from rank_bm25 import BM25Okapi
 
+from lattice.graph import LatticeGraph
 from lattice.models import Atom
+from lattice.util import _normalized_subject, _write_json_atomic
 
 _STOPWORDS = {
     "a", "an", "the", "and", "or", "but", "in", "on", "at", "to", "for",
@@ -34,6 +37,7 @@ class LatticeDB:
         self.dir.mkdir(parents=True, exist_ok=True)
         self._atom_cache: dict[str, Atom] = {}
         self._subjects_cache: dict[str, str] | None = None
+        self._graph: LatticeGraph = LatticeGraph()
 
     @property
     def _subjects_file(self) -> Path:
@@ -54,7 +58,7 @@ class LatticeDB:
         subjects = self._load_subjects()
         old_id = subjects.get(key)
         subjects[key] = atom_id
-        self._subjects_file.write_text(json.dumps(subjects))
+        _write_json_atomic(self._subjects_file, subjects)
         self._subjects_cache = subjects
         return old_id if old_id != atom_id else None
 
@@ -70,8 +74,21 @@ class LatticeDB:
 
     def write(self, atom: Atom) -> None:
         text = atom.to_markdown()
-        self._path(atom.atom_id).write_text(text, encoding="utf-8")
+        path = self._path(atom.atom_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", text=True)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(text)
+            Path(tmp_name).replace(path)
+        finally:
+            tmp = Path(tmp_name)
+            if tmp.exists():
+                tmp.unlink()
         self._atom_cache[atom.atom_id] = atom
+        if self._graph is not None:
+            self._graph.add_atom(atom)
+            self._graph.save(self.dir)
 
     # ── read ──────────────────────────────────────────────────────────────
 
@@ -97,6 +114,15 @@ class LatticeDB:
                     pass
         _ = self._load_subjects()
 
+        atom_count = len(self._atom_cache)
+        lg = LatticeGraph()
+        if not lg.is_stale(self.dir, atom_count):
+            self._graph = LatticeGraph.load(self.dir)
+        else:
+            self._graph = LatticeGraph()
+            self._graph.rebuild(list(self._atom_cache.values()))
+            self._graph.save(self.dir)
+
     # ── list ──────────────────────────────────────────────────────────────
 
     def all(self) -> list[Atom]:
@@ -117,6 +143,12 @@ class LatticeDB:
     def by_subject(self, subject: str) -> list[Atom]:
         return [a for a in self.all() if a.subject.lower() == subject.lower()]
 
+    def find_by_normalized_hash(self, normalized_content_hash: str) -> Atom | None:
+        for atom in self.all():
+            if atom.normalized_content_hash == normalized_content_hash:
+                return atom
+        return None
+
     def subjects(self) -> list[str]:
         seen: set[str] = set()
         result = []
@@ -135,6 +167,149 @@ class LatticeDB:
         self.write(old)
         new_atom.supersedes = old_id
         self.write(new_atom)
+        self._graph.mark_superseded(old_id, new_atom.atom_id)
+        self._graph.save(self.dir)
+
+    @property
+    def graph(self) -> LatticeGraph:
+        return self._graph
+
+    # ── retrieval packs ──────────────────────────────────────────────────
+
+    def _valid_atoms(
+        self,
+        as_of: date | None = None,
+        include_superseded: bool = False,
+    ) -> list[Atom]:
+        atoms = (
+            self.all()
+            if include_superseded
+            else [a for a in self.all() if not a.is_superseded]
+        )
+
+        if as_of is not None:
+            atoms = [
+                a
+                for a in atoms
+                if (a.valid_from is None or a.valid_from <= as_of)
+                and (a.valid_until is None or a.valid_until >= as_of)
+            ]
+
+        return atoms
+
+    @staticmethod
+    def _source_order_key(atom: Atom) -> tuple:
+        span = atom.source_span or {}
+        return (
+            atom.observed_at.isoformat() if atom.observed_at else "",
+            atom.source_id or "",
+            atom.session_id or "",
+            atom.segment_id or "",
+            span.get("start", -1),
+            span.get("end", -1),
+            atom.atom_id,
+        )
+
+    @staticmethod
+    def _add_unique(target: list[Atom], seen: set[str], atoms: list[Atom]) -> None:
+        for atom in atoms:
+            if atom.atom_id in seen:
+                continue
+            target.append(atom)
+            seen.add(atom.atom_id)
+
+    def evidence_pack(
+        self,
+        seed: Atom,
+        as_of: date | None = None,
+        nearby_window: int = 2,
+        subject_limit: int = 6,
+    ) -> list[Atom]:
+        """Expand a BM25 seed into deterministic local evidence.
+
+        This stays file-local: no graph sidecar required. It uses provenance
+        already stored on atoms to recover source/segment context.
+        """
+        atoms = self._valid_atoms(as_of=as_of, include_superseded=True)
+        by_id = {atom.atom_id: atom for atom in atoms}
+        pack: list[Atom] = []
+        seen: set[str] = set()
+
+        seed = by_id.get(seed.atom_id, seed)
+        self._add_unique(pack, seen, [seed])
+
+        if seed.segment_id:
+            same_segment = [
+                atom for atom in atoms
+                if atom.atom_id != seed.atom_id
+                and atom.segment_id == seed.segment_id
+                and (
+                    (seed.source_id and atom.source_id == seed.source_id)
+                    or (seed.session_id and atom.session_id == seed.session_id)
+                    or (not seed.source_id and not seed.session_id)
+                )
+            ]
+            self._add_unique(
+                pack,
+                seen,
+                sorted(same_segment, key=self._source_order_key),
+            )
+
+        same_source = [
+            atom for atom in atoms
+            if atom.atom_id != seed.atom_id
+            and (
+                (seed.source_id and atom.source_id == seed.source_id)
+                or (seed.session_id and atom.session_id == seed.session_id)
+            )
+        ]
+        same_source_sorted = sorted(
+            same_source + [seed],
+            key=self._source_order_key,
+        )
+        seed_index = next(
+            (
+                i for i, atom in enumerate(same_source_sorted)
+                if atom.atom_id == seed.atom_id
+            ),
+            -1,
+        )
+        if seed_index >= 0:
+            start = max(0, seed_index - nearby_window)
+            end = min(len(same_source_sorted), seed_index + nearby_window + 1)
+            nearby = [
+                atom for atom in same_source_sorted[start:end]
+                if atom.atom_id != seed.atom_id
+            ]
+            self._add_unique(pack, seen, nearby)
+
+        normalized = _normalized_subject(seed.subject)
+        if normalized:
+            same_subject = [
+                atom for atom in atoms
+                if atom.atom_id != seed.atom_id
+                and _normalized_subject(atom.subject) == normalized
+            ]
+            self._add_unique(
+                pack,
+                seen,
+                sorted(same_subject, key=self._source_order_key)[:subject_limit],
+            )
+
+        linked_ids = {
+            atom_id for atom_id in (seed.supersedes, seed.superseded_by) if atom_id
+        }
+        linked_ids.update(
+            atom.atom_id for atom in atoms
+            if atom.supersedes == seed.atom_id or atom.superseded_by == seed.atom_id
+        )
+        linked = [
+            by_id[atom_id] for atom_id in sorted(linked_ids)
+            if atom_id in by_id
+        ]
+        self._add_unique(pack, seen, linked)
+
+        return pack
 
     # ── search ────────────────────────────────────────────────────────────
 
@@ -144,15 +319,7 @@ class LatticeDB:
         as_of: date | None = None,
         top_k: int = 20,
     ) -> list[Atom]:
-        atoms = [a for a in self.all() if not a.is_superseded]
-
-        if as_of is not None:
-            atoms = [
-                a
-                for a in atoms
-                if (a.valid_from is None or a.valid_from <= as_of)
-                and (a.valid_until is None or a.valid_until >= as_of)
-            ]
+        atoms = self._valid_atoms(as_of=as_of)
 
         if not atoms:
             return []
