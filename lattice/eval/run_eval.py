@@ -59,7 +59,7 @@ from tqdm import tqdm
 
 from lattice.db import LatticeDB
 from lattice.eval.session_formatter import format_session
-from lattice.ingest import ingest
+from lattice.ingest import _parse_datetime, ingest
 from lattice.selection import select
 from lattice.synthesis import synthesize
 
@@ -491,10 +491,9 @@ def _run_inference(cfg: dict) -> None:
                 question_date_str: str | None = item.get("question_date")
                 as_of: date | None = None
                 if question_date_str:
-                    try:
-                        as_of = date.fromisoformat(question_date_str[:10])
-                    except ValueError:
-                        pass
+                    dt = _parse_datetime(question_date_str)
+                    if dt:
+                        as_of = dt.date()
 
                 bm25_atoms = db.search(
                     item["question"], as_of=as_of, top_k=cfg["top_k"]
@@ -525,7 +524,7 @@ def _run_inference(cfg: dict) -> None:
                     "selected": _session_retrieval_metrics(item, selected),
                 }
 
-                synthesis = synthesize(item["question"], selected)
+                synthesis = synthesize(item["question"], selected, query_date=as_of)
 
                 all_atoms = [_atom_debug_dict(a, preview_chars=240) for a in db.all()]
 
@@ -564,6 +563,7 @@ def _run_inference(cfg: dict) -> None:
                             "atoms_selected": [a["atom_id"] for a in selected],
                             "selected_atoms": selected,
                             "synthesis_raw": synthesis.raw_response,
+                            "synthesis_tool_calls": synthesis.tool_calls,
                             "hypothesis": synthesis.answer,
                             "graph_stats": _graph_stats(db),
                         }

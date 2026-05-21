@@ -60,6 +60,47 @@ Return a JSON object with an `atoms` key containing an array of atom objects. \
 Each atom must have exactly these keys: subject, kind, source, content, valid_from, valid_until.
 """
 
+_CHAT_ADDENDUM = """\
+
+Source-specific rules for chat/conversation (User: / Assistant: / System: turns):
+  - USER turns are the primary source — extract personal facts, events, decisions, and preferences \
+from them. These are things the specific person did, owns, experienced, or prefers.
+  - ASSISTANT turns contain generic advice — DO NOT extract atoms from them unless they explicitly \
+reference something specific about the user (e.g. "Since you prefer X..." or "Given that you bought Y...").
+  - Personal events in USER turns (e.g. "I just bought a car", "I downloaded Ibotta", \
+"I attended a class") must be captured as kind="event" atoms with the subject being the event \
+(e.g. "Ibotta adoption", "car purchase", "baking class attendance").
+  - Preserve explicit dates verbatim in atom content (e.g. "on January 10th", "on March 3rd"). \
+Do not drop them. When the user says "today", "this morning", or "tonight", replace with the ISO \
+date provided in "Today's date:" at the top of this prompt.
+"""
+
+_MARKDOWN_ADDENDUM = """\
+
+Source-specific rules for markdown documents:
+  - Use the nearest heading as context for the subject — prefer scoped subjects like \
+"Auth module rate limit" over bare "rate limit".
+  - Extract decisions and constraints from bullet lists and callout blocks.
+"""
+
+_CODE_ADDENDUM = """\
+
+Source-specific rules for code:
+  - Focus on interfaces, contracts, and public API shapes — not implementation details.
+  - Extract constraints, invariants, and documented behaviour (e.g. "function X requires Y to be non-null").
+  - Skip boilerplate, imports, and auto-generated code.
+"""
+
+
+def _source_addendum(source_type: str) -> str:
+    if source_type == "chat":
+        return _CHAT_ADDENDUM
+    if source_type == "markdown":
+        return _MARKDOWN_ADDENDUM
+    if source_type == "code":
+        return _CODE_ADDENDUM
+    return ""
+
 _SUPERSESSION_SYSTEM = """\
 You are deciding whether a new fact supersedes an existing fact about the same subject. \
 Supersession means the new fact contradicts or replaces the old one — not merely adds to it.
@@ -100,6 +141,8 @@ _RELATIVE_PATTERNS: list[tuple[re.Pattern, Any]] = [
      lambda _, ref: (ref - timedelta(days=30)).strftime("%Y-%m-%d")),
     (re.compile(r'\byesterday\b', re.IGNORECASE),
      lambda _, ref: (ref - timedelta(days=1)).strftime("%Y-%m-%d")),
+    (re.compile(r'\btoday\b', re.IGNORECASE),
+     lambda _, ref: ref.strftime("%Y-%m-%d")),
 ]
 
 _WEEKDAY_NAMES = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
@@ -270,8 +313,9 @@ def _extract_atoms(segment: _Segment, metadata: dict, ref: datetime) -> list[dic
     text = segment.text
     if segment.context:
         text = f"Context: {segment.context}\n\n{text}"
+    system = _SYSTEM + _source_addendum(segment.source_type)
     messages = [
-        {"role": "system", "content": _SYSTEM},
+        {"role": "system", "content": system},
         {
             "role": "user",
             "content": f"Today's date: {ref.date().isoformat()}\n\n---\n\n{text}",
@@ -347,11 +391,11 @@ def ingest(source: str, metadata: dict | None = None, db: LatticeDB | None = Non
     if db is None:
         db = LatticeDB()
     metadata = metadata or {}
-    ref = _today()
     source_id = str(metadata.get("source_id") or uuid.uuid4())
     observed_at = _parse_datetime(
         metadata.get("observed_at") or metadata.get("date") or metadata.get("timestamp")
     )
+    ref = observed_at or _today()
 
     segments = _segments_for_source(source, metadata)
     workers = max(1, int(os.environ.get("LATTICE_INGEST_WORKERS", "1")))

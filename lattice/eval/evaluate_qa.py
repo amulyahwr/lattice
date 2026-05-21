@@ -8,14 +8,19 @@ import openai
 from openai import AsyncOpenAI
 import numpy as np
 
-CONCURRENCY = 20
+CONCURRENCY = 5
 
 model_zoo = {
     "gpt-4o-mini": ("gpt-4o-mini-2024-07-18", "openai"),
     "gpt-4o": ("gpt-4o-2024-08-06", "openai"),
     "qwen2.5:14b": ("qwen2.5:14b", "ollama"),
     "qwen3.5:4b": ("qwen3.5:4b", "ollama"),
+    "phi4-mini": ("phi4-mini", "ollama"),
+    "phi4-mini-judge": ("phi4-mini-judge", "ollama"),
 }
+
+# Per-model extra kwargs for chat.completions.create
+_MODEL_EXTRA_KWARGS: dict = {}
 
 
 @backoff.on_exception(backoff.expo, (openai.RateLimitError, openai.APIError))
@@ -49,6 +54,7 @@ async def _eval_entry(
     sem: asyncio.Semaphore,
     metric_client: AsyncOpenAI,
     metric_model: str,
+    metric_model_short: str,
     entry: dict,
     qid2qdata: dict,
     qid2qtype: dict,
@@ -70,6 +76,7 @@ async def _eval_entry(
         prompt = get_anscheck_prompt(
             qtype, q, ans, hyp, abstention="_abs" in entry["question_id"]
         )
+        extra = _MODEL_EXTRA_KWARGS.get(metric_model_short, {})
         completion = await chat_completions_with_backoff(
             metric_client,
             model=metric_model,
@@ -77,6 +84,7 @@ async def _eval_entry(
             n=1,
             temperature=0,
             max_tokens=512,
+            **extra,
         )
         eval_response = completion.choices[0].message.content.strip()
         label = "yes" in eval_response.lower()
@@ -128,7 +136,7 @@ async def main() -> None:
 
     sem = asyncio.Semaphore(CONCURRENCY)
     tasks = [
-        _eval_entry(sem, metric_client, metric_model, entry, qid2qdata, qid2qtype)
+        _eval_entry(sem, metric_client, metric_model, metric_model_short, entry, qid2qdata, qid2qtype)
         for entry in hypotheses
     ]
 

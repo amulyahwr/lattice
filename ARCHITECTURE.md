@@ -13,7 +13,11 @@ lattice_ingest(source, metadata)
    Segmentation          split by source type (markdown headings / chat turns / sliding window)
         │
         ▼
-   LLM Extraction        one atom per fact: subject, kind, content, valid_from/until
+   LLM Extraction        source-type-aware prompt (chat/markdown/code addenda);
+                         one atom per fact: subject, kind, content, valid_from/until;
+                         chat logs: User turns → facts/events; Assistant turns skipped;
+                         relative dates ("yesterday", "today") resolved to ISO dates
+                         using observed_at (session date) as reference, not system date
         │
         ▼
    Dedup + Supersession  skip exact hash matches; LLM decides if new atom supersedes existing
@@ -50,8 +54,9 @@ lattice_answer(query, atom_ids?, as_of)
         └── no atom_ids → run lattice_select first
                 │
                 ▼
-           LLM Synthesis    prose answer with temporal reasoning; explicit uncertainty
-                            when selected atoms are weak or conflicting
+           Synthesis agent  tool-calling agent loop (raw OpenAI-compat API, up to 5 rounds);
+                            date_diff(date1, date2) tool for exact date arithmetic;
+                            query_date passed as agent's "today" reference
 ```
 
 ---
@@ -67,8 +72,8 @@ lattice_answer(query, atom_ids?, as_of)
 | `lattice/util.py` | Shared low-level helpers: `_normalized_subject()`, `_write_json_atomic()`. |
 | `lattice/ingest.py` | Segments source text → LLM extracts atoms → dedup + supersession check → write to DB. |
 | `lattice/selection.py` | BM25 pre-filter → graph BFS expansion via `LatticeGraph.bfs_expand()` → collapse superseded/duplicate groups. Falls back to `evidence_pack()` if graph is empty. Exports `_atom_to_dict()` for consistent atom serialization. |
-| `lattice/synthesis.py` | Takes atom dicts + query → LLM produces prose answer. |
-| `lattice/llm.py` | Thin litellm wrapper. Single `complete(messages) → str` interface. Reads `LLM_PROVIDER` / `LLM_MODEL` / `LLM_API_KEY` from env. Raises `EnvironmentError` eagerly if API key missing. |
+| `lattice/synthesis.py` | Tool-calling agent using raw OpenAI-compat SDK. Exposes `date_diff` tool for exact date arithmetic. Returns `SynthesisResult(answer, raw_response, tool_calls)`. Supports `ollama` and `openai` providers. |
+| `lattice/llm.py` | Thin litellm wrapper. Single `complete(messages) → str` interface. Used by ingest, selection, and supersession — not synthesis. Reads `LLM_PROVIDER` / `LLM_MODEL` / `LLM_API_KEY` from env. |
 
 ---
 
@@ -145,12 +150,12 @@ LATTICE_DIR/
 - **Committed snapshots.** Selection reads stable graph/BM25 snapshots; it never waits for active ingest.
 - **Superseded atoms stay on disk** with `is_superseded=true` and bidirectional links. History is preserved, not deleted.
 - **Expensive enrichment is optional.** Embeddings, semantic relation enrichment, and hub labeling are roadmap items that must remain off by default for Ollama users.
-- **LLM calls are mockable at the module level.** Tests patch `lattice.ingest.complete`, `lattice.selection.complete`, `lattice.synthesis.complete` — not `lattice.llm.complete`.
+- **LLM calls are mockable at the module level.** Ingest/selection/supersession patch `lattice.ingest.complete` / `lattice.selection.complete`. Synthesis patches `lattice.synthesis.OpenAI` (raw OpenAI client) — not `lattice.llm.complete`.
 
 ---
 
 ## Roadmap Direction
 
-Current state (P6 done): BM25 seeds → graph BFS expansion → collapse superseded/duplicates → LLM answer.
+Current state (P8 done): source-aware ingest with date resolution → BM25 seeds → graph BFS expansion → collapse superseded/duplicates → synthesis agent with date_diff tool.
 
-Next: optional semantic relation enrichment (P8), topic hubs (P9), embeddings (P11). Full roadmap in `lattice/eval/PRIORITIES.md`.
+Next: local ingest jobs + status UX (P9), optional semantic relation enrichment (P9), topic hubs (P10). Full roadmap in `lattice/eval/PRIORITIES.md`.

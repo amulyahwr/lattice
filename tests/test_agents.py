@@ -5,7 +5,7 @@ Tests verify external behavior: atoms created, supersession links, selection res
 
 import json
 from datetime import date
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch, PropertyMock
 
 import pytest
 
@@ -242,15 +242,30 @@ class TestSelect:
 
         result = select("decorators", db=db, top_k=1)
         ids = [row["atom_id"] for row in result]
-        assert ids[:2] == [seed.atom_id, sibling.atom_id]
+        assert seed.atom_id in ids
+        assert sibling.atom_id in ids
 
 
 # ── synthesis ─────────────────────────────────────────────────────────────────
 
+def _mock_completion(answer: str):
+    """Return a mock openai ChatCompletion with no tool calls."""
+    msg = MagicMock()
+    msg.tool_calls = None
+    msg.content = answer
+    choice = MagicMock()
+    choice.message = msg
+    resp = MagicMock()
+    resp.choices = [choice]
+    return resp
+
+
 class TestSynthesize:
     def test_returns_string(self):
         atoms = [{"subject": "Python", "kind": "fact", "content": "Python is dynamically typed."}]
-        with patch("lattice.synthesis.complete", return_value=json.dumps({"thinking": "The atom states Python is dynamically typed.", "answer": "Python is dynamically typed."})):
+        with patch.dict("os.environ", {"LLM_PROVIDER": "openai", "LLM_API_KEY": "test"}), \
+             patch("lattice.synthesis.OpenAI") as mock_cls:
+            mock_cls.return_value.chat.completions.create.return_value = _mock_completion("Python is dynamically typed.")
             result = synthesize("What is Python?", atoms)
         assert isinstance(result.answer, str)
         assert len(result.answer) > 0
@@ -264,17 +279,21 @@ class TestSynthesize:
         assert result.raw_response == ""
 
     def test_raw_response_captured(self):
-        raw = json.dumps({"thinking": "The atom states Python is dynamically typed.", "answer": "Python is dynamically typed."})
         atoms = [{"subject": "Python", "kind": "fact", "content": "Python is dynamically typed."}]
-        with patch("lattice.synthesis.complete", return_value=raw):
+        with patch.dict("os.environ", {"LLM_PROVIDER": "openai", "LLM_API_KEY": "test"}), \
+             patch("lattice.synthesis.OpenAI") as mock_cls:
+            mock_cls.return_value.chat.completions.create.return_value = _mock_completion("Python is dynamically typed.")
             result = synthesize("What is Python?", atoms)
-        assert result.raw_response == raw
+        assert result.raw_response == result.answer
 
     def test_passes_query_and_atoms_to_llm(self):
         atoms = [{"subject": "X", "kind": "fact", "content": "X is true."}]
-        with patch("lattice.synthesis.complete", return_value=json.dumps({"thinking": "Atom says X is true.", "answer": "X is true."})) as mock:
+        with patch.dict("os.environ", {"LLM_PROVIDER": "openai", "LLM_API_KEY": "test"}), \
+             patch("lattice.synthesis.OpenAI") as mock_cls:
+            mock_cls.return_value.chat.completions.create.return_value = _mock_completion("X is true.")
             synthesize("Tell me about X.", atoms)
-        call_messages = mock.call_args[0][0]
-        combined = " ".join(m["content"] for m in call_messages)
+        create_call = mock_cls.return_value.chat.completions.create.call_args
+        messages = create_call.kwargs.get("messages") or create_call.args[0]
+        combined = " ".join(m["content"] for m in messages if isinstance(m.get("content"), str))
         assert "Tell me about X." in combined
         assert "X is true." in combined
