@@ -1,6 +1,7 @@
-lattice/__pycache__/*
+__pycache__/
 .venv/
 *.pyc
+*.pyo
 lattice_store/
 .claude/
 .python-version
