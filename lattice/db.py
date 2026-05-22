@@ -7,6 +7,7 @@ import tempfile
 from datetime import date
 from pathlib import Path
 
+from rapidfuzz.fuzz import token_sort_ratio
 from rank_bm25 import BM25Okapi
 
 from lattice.graph import LatticeGraph
@@ -64,6 +65,15 @@ class LatticeDB:
 
     def lookup_subject(self, subject: str) -> str | None:
         return self._load_subjects().get(subject.lower().strip())
+
+    def fuzzy_subject_candidates(self, subject: str, threshold: int = 80) -> list[str]:
+        """Return atom_ids whose registered subject fuzzy-matches the given subject."""
+        key = subject.lower().strip()
+        subjects = self._load_subjects()
+        return [
+            atom_id for s, atom_id in subjects.items()
+            if s != key and token_sort_ratio(key, s) >= threshold
+        ]
 
     # ── path helpers ──────────────────────────────────────────────────────
 
