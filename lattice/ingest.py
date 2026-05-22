@@ -366,7 +366,20 @@ def _detect_supersession(db: LatticeDB, new_atom: Atom) -> str | None:
     # Slow path: scan by subject (handles hand-edited atoms)
     existing = [a for a in db.by_subject(new_atom.subject) if not a.is_superseded]
     if not existing:
-        return None
+        # Fuzzy path: find semantically similar subjects via token overlap
+        threshold = int(os.environ.get("LATTICE_SUBJECT_FUZZY_THRESHOLD", "80"))
+        fuzzy_ids = db.fuzzy_subject_candidates(new_atom.subject, threshold)
+        fuzzy_candidates = []
+        for aid in fuzzy_ids:
+            try:
+                a = db.read(aid)
+                if not a.is_superseded:
+                    fuzzy_candidates.append(a)
+            except Exception:
+                pass
+        if not fuzzy_candidates:
+            return None
+        existing = fuzzy_candidates
 
     candidates_text = "\n".join(f"[{a.atom_id}] {a.content}" for a in existing)
     messages = [

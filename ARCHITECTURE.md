@@ -20,7 +20,9 @@ lattice_ingest(source, metadata)
                          using observed_at (session date) as reference, not system date
         │
         ▼
-   Dedup + Supersession  skip exact hash matches; LLM decides if new atom supersedes existing
+   Dedup + Supersession  skip exact hash matches; fuzzy subject match via rapidfuzz
+                         token_sort_ratio (threshold=80, env-tunable via
+                         LATTICE_SUBJECT_FUZZY_THRESHOLD); LLM decides if candidate supersedes
         │
         ▼
    LatticeDB.write()     atomic write to LATTICE_DIR/<atom_id>.md
@@ -156,6 +158,6 @@ LATTICE_DIR/
 
 ## Roadmap Direction
 
-Current state (P8 done): source-aware ingest with date resolution → BM25 seeds → graph BFS expansion → collapse superseded/duplicates → synthesis agent with date_diff tool.
+Current state (P9 done): source-aware ingest with date resolution → fuzzy subject supersession via rapidfuzz → BM25 seeds → graph BFS expansion → collapse superseded/duplicates → synthesis agent with date_diff tool.
 
-Next: local ingest jobs + status UX (P9), optional semantic relation enrichment (P9), topic hubs (P10). Full roadmap in `lattice/eval/PRIORITIES.md`.
+Next: assistant-turn extraction + synthesis preference application (P10), retrieval topic drift fix (P11). Full roadmap in `lattice/eval/PRIORITIES.md`.
