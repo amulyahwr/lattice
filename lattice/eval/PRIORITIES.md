@@ -23,7 +23,7 @@ Product constraints:
 | P6 ✅ | `selection.py`, `graph.py`, `db.py` | **Graph-seeded selection over committed snapshots**: selection reads the latest committed graph/BM25 snapshot and never waits for active ingest. BM25 seeds atoms/subjects/sources, then bounded BFS expands evidence packs through source/segment/subject/update edges. Collapse duplicate/supersession groups before synthesis; keep any LLM scoring optional and non-authoritative. | Generalizes pack retrieval onto the graph, improves relevance and latency, reduces duplicate context waste, and enables query-while-ingest. |
 | P7 ✅ | `ingest.py`, `synthesis.py`, `run_eval.py` | **Role-aware ingest + synthesis agent with date_diff tool**: (1) Ingest prompt now distinguishes user turns (personal events/facts) from assistant turns (generic advice) in chat logs — personal events extracted as `kind=event` atoms. (2) Synthesis rewritten as a tool-calling agent using raw OpenAI-compat API; `date_diff(date1, date2)` tool enables exact date arithmetic. (3) `query_date` threaded through from eval harness using `_parse_datetime` to correctly parse LongMemEval's `YYYY/MM/DD (Day) HH:MM` format. | Overall +11pp over P6 (19%→30%). Temporal 0%→7.7%. Role-aware ingest raised avg atoms created from ~4 to 14 per session. |
 | P8 ✅ | `ingest.py` | **Ingest date resolution fixes**: (1) Use `observed_at` (session date) as `ref` for `_resolve_dates` instead of system date — fixes atoms storing wrong absolute dates. (2) Add `\btoday\b` to `_RELATIVE_PATTERNS` so "today" in atom content resolves to the session ISO date. (3) Add instruction to `_CHAT_ADDENDUM` to preserve explicit dates verbatim and resolve "today"/"this morning" to ISO date using the prompt's "Today's date:" header. | Fixes root cause of temporal-reasoning failures: atoms were storing 2026-05-21 (system date) instead of session dates like 2023-03-22. |
-| P9 | `ingest.py`, `db.py` | **Supersession by semantic subject overlap**: current fast-path only fires when subject strings match exactly — misses updates where phrasing differs (e.g. "Bike ownership" vs "bikes traveling"). Add normalized subject similarity check (token overlap or fuzzy match) before the LLM supersession call so semantically-equivalent subjects are compared. Prevents old and new versions of the same fact coexisting silently. | Core product reliability: a lattice that accumulates conflicting versions of the same fact is not trustworthy for real users. |
+| P9 ✅ | `ingest.py`, `db.py` | **Supersession by semantic subject overlap**: current fast-path only fires when subject strings match exactly — misses updates where phrasing differs (e.g. "Bike ownership" vs "bikes traveling"). Add normalized subject similarity check (token overlap or fuzzy match) before the LLM supersession call so semantically-equivalent subjects are compared. Prevents old and new versions of the same fact coexisting silently. | Core product reliability: a lattice that accumulates conflicting versions of the same fact is not trustworthy for real users. |
 | P10 | `ingest.py`, `synthesis.py` | **Assistant-turn extraction + synthesis preference application**: (1) Loosen `_CHAT_ADDENDUM` rule — extract user-specific outputs from assistant turns (specific recommendations, links, named examples) as `kind=recommendation` atoms, not just generic advice. (2) Synthesis should act on stored preferences when answering, not just describe them ("you prefer almond milk" → suggest almond-milk recipes). | Both fix the product value prop: the lattice should capture what the assistant said *to this user specifically*, and answers should be personalized rather than generic. |
 | P11 | `selection.py` | **Retrieval topic drift fix**: when BM25 returns atoms that are clearly off-topic for the query (different entity, different domain), fall back to a stricter subject-match filter or re-rank by query-subject overlap before expanding packs. Prevents pulling large packs of irrelevant atoms that crowd out relevant ones. | Real UX problem: wrong-topic context produces confidently wrong answers and wastes the selection budget. |
 | P12 | `ingest.py`, `server.py`, `db.py` | **Local ingest jobs + status UX**: keep simple `lattice_ingest` for small sync inputs. Add persistent status for batch/background ingest: `job_id`, indexed/active/failed source counts, enrichment pending, `graph_version`, `last_commit_at`. If MCP client concurrency works well, expose `lattice_ingest_start` and `lattice_ingest_status`; otherwise keep status internal/debug. | Local users need to know what has been indexed and should be able to query committed memory without waiting for a large ingest to finish. |
@@ -53,7 +53,7 @@ LongMemEval is used to measure whether product changes improve retrieval and ans
 
 Current baseline:
 
-- 62.0% accuracy, 100 questions
+- 69.0% accuracy, 100 questions
 - inference: `gemma4:e4b`
 - judge: `phi4-mini-judge` (phi4-mini with num_ctx=4096 Modelfile)
 - harness: `longmemeval_oracle`
@@ -94,19 +94,20 @@ Evaluation method:
 | p6-graph | Graph BFS selection (P5+P6) | 19.0% | Overall +1pp, task-avg 21.81%. knowledge-update 43.75% (↑↑ from 25%). multi-session dropped to 11.1%. temporal-reasoning still 0% — null valid_from is root cause. |
 | p7 | Role-aware ingest + synthesis agent + query_date fix | 30.0% (qwen) / **49.0% (phi4)** | qwen judge: overall +11pp, task-avg 30.4%. phi4 judge: 49.0%, task-avg 49.8%. temporal 38.5%, knowledge-update 68.75%, multi-session 48.1%. Avg atoms/session 4→14. |
 | p8 | Ingest date resolution fixes (observed_at as ref, today pattern, preserve explicit dates) | **62.0% (phi4)** | Overall +13pp over p7 (phi4 judge). task-avg 60.1%. temporal 38.5%→65.4% (+27pp). knowledge-update 68.75%→56.25% (-12pp, supersession chain disruption). multi-session 62.9%. abstention 100%. |
+| p9 | Fuzzy supersession via rapidfuzz token_sort_ratio (threshold=80, env-tunable) | **69.0% (phi4)** | Overall +7pp. task-avg 66.75%. knowledge-update 56.25%→93.75% (+37pp — fuzzy matching correctly catches subject-phrasing drift). multi-session 74.1% (+11pp). 4 true regressions vs P8, none caused by fuzzy matching: 2 assistant-turn extraction failures (P10 fix) and 2 fragile synthesis cases. |
 
 ## Category Tracker
 
 Note: p1–p6-graph used `qwen3.5:4b` judge. p7 and p8 use `phi4-mini-judge` (not directly comparable to earlier runs).
 
-| Category | baseline | p1 | p2 | p3 | p5 | p6 | p3.5-select | p3.5-bm25 | p4-pack | p6-graph | p7 (phi4) | p8 (phi4) |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| overall | 15.0% | 23.8% | 19.0% | 18.0% | 16.0% | 22.0% | 13.0% | 15.0% | 18.0% | 19.0% | 49.0% | **62.0%** |
-| task-avg | - | 25.2% | 23.1% | 20.1% | 18.2% | - | 15.03% | 17.51% | 20.19% | 21.81% | 49.8% | **60.1%** |
-| single-session-user | - | 35.7% | 42.9% | 35.7% | 14.3% | 42.9% | 21.4% | 42.9% | 35.7% | 21.43% | 57.1% | **71.4%** |
-| single-session-preference | - | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 50.0% | **50.0%** |
-| single-session-assistant | - | 54.5% | 54.5% | 36.4% | 54.5% | 36.4% | 36.4% | 27.3% | 45.5% | 54.55% | 36.4% | **54.5%** |
-| multi-session | - | 22.2% | 3.7% | 11.1% | 7.4% | 14.8% | 7.4% | 3.7% | 11.1% | 11.11% | 48.1% | **62.9%** |
-| temporal-reasoning | - | 7.4% | 0.0% | 0.0% | 7.7% | 7.7% | 0.0% | 0.0% | 3.85% | 0.0% | 38.5% | **65.4%** |
-| knowledge-update | - | 31.3% | 37.5% | 37.5% | 25.0% | 37.5% | 25.0% | 31.3% | 25.0% | 43.75% | **68.75%** | 56.25% |
-| abstention | - | 28.6% | 0.0% | 28.6% | 42.9% | - | 42.9% | 57.1% | 42.9% | 28.57% | 100% | **100%** |
+| Category | baseline | p1 | p2 | p3 | p5 | p6 | p3.5-select | p3.5-bm25 | p4-pack | p6-graph | p7 (phi4) | p8 (phi4) | p9 (phi4) |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| overall | 15.0% | 23.8% | 19.0% | 18.0% | 16.0% | 22.0% | 13.0% | 15.0% | 18.0% | 19.0% | 49.0% | 62.0% | **69.0%** |
+| task-avg | - | 25.2% | 23.1% | 20.1% | 18.2% | - | 15.03% | 17.51% | 20.19% | 21.81% | 49.8% | 60.1% | **66.75%** |
+| single-session-user | - | 35.7% | 42.9% | 35.7% | 14.3% | 42.9% | 21.4% | 42.9% | 35.7% | 21.43% | 57.1% | **71.4%** | 64.3% |
+| single-session-preference | - | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 0.0% | 50.0% | 50.0% | **66.7%** |
+| single-session-assistant | - | 54.5% | 54.5% | 36.4% | 54.5% | 36.4% | 36.4% | 27.3% | 45.5% | 54.55% | 36.4% | **54.5%** | 36.4% |
+| multi-session | - | 22.2% | 3.7% | 11.1% | 7.4% | 14.8% | 7.4% | 3.7% | 11.1% | 11.11% | 48.1% | 62.9% | **74.1%** |
+| temporal-reasoning | - | 7.4% | 0.0% | 0.0% | 7.7% | 7.7% | 0.0% | 0.0% | 3.85% | 0.0% | 38.5% | **65.4%** | 65.4% |
+| knowledge-update | - | 31.3% | 37.5% | 37.5% | 25.0% | 37.5% | 25.0% | 31.3% | 25.0% | 43.75% | **68.75%** | 56.25% | **93.75%** |
+| abstention | - | 28.6% | 0.0% | 28.6% | 42.9% | - | 42.9% | 57.1% | 42.9% | 28.57% | 100% | **100%** | **100%** |
