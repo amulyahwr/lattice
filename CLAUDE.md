@@ -31,9 +31,16 @@ lattice/
                    Node types: atom:<id>, source:<id>, segment:<cid>:<sid>, subject:<norm>.
                    Edge types: source_contains_segment, segment_contains_atom,
                    atom_has_subject, same_subject_as, same_hash, supersedes.
-  ingest.py        LLM extracts atoms from raw text, then checks supersession per atom.
-  selection.py     BM25 pre-filter (top_k=20) → LLM re-ranks → returns atom dicts.
-  synthesis.py     LLM generates prose answer from a list of atom dicts.
+  parsers/         Source-aware pre-ingest segmentation. `infer_source_type()` detects chat/
+                   markdown/code. `parse()` returns list[Segment] with role, context, span.
+                   chat.py preserves turn windowing + role field. markdown.py splits on headings.
+  ingest.py        Segments source via parsers/, then LLM extracts atoms per segment,
+                   then checks supersession per atom.
+  selection.py     BM25 pre-filter (top_k=20) → LLM re-ranks → recommendation cap (max 5
+                   kind=recommendation slots, tunable via LATTICE_RECOMMENDATION_CAP) → atom dicts.
+  synthesis.py     LLM generates prose answer from atom dicts. Uses SYNTHESIS_MODEL env var
+                   (falls back to LLM_MODEL). Ollama path uses OpenAI-compat client with
+                   num_ctx=4096 and tool calls for date_diff.
 ```
 
 ### Product roadmap guardrails
@@ -55,9 +62,9 @@ lattice/
 
 **BM25**: built fresh on each `db.search()` call from all non-superseded atoms. No persistent BM25 index.
 
-**Graph sidecars**: `LatticeGraph` (P5) writes `LATTICE_DIR/graph/` on every atom write. `db.preload()` loads from sidecars if manifest atom_count matches; otherwise rebuilds. Access via `db.graph`. P6 will use this for BFS-based evidence pack expansion instead of the current O(n) scan in `evidence_pack()`.
+**Graph sidecars**: `LatticeGraph` writes `LATTICE_DIR/graph/` on every atom write. `db.preload()` loads from sidecars if manifest atom_count matches; otherwise rebuilds. Access via `db.graph`. Selection uses BFS over graph edges to expand evidence packs from BM25 seeds.
 
-This is current MVP behavior, not the target product shape. Roadmap priorities in `lattice/eval/PRIORITIES.md` move search toward graph-seeded selection (P6 is next).
+This is current MVP behavior, not the target product shape. Roadmap priorities in `lattice/eval/PRIORITIES.md` track next steps.
 
 ### Test conventions
 

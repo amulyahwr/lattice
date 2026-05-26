@@ -10,14 +10,18 @@ lattice-mcp is a local-first MCP server that gives AI coding assistants persiste
 lattice_ingest(source, metadata)
         │
         ▼
-   Segmentation          split by source type (markdown headings / chat turns / sliding window)
+   Segmentation          lattice/parsers/ — infer_source_type() detects chat/markdown/code;
+                         parse() returns list[Segment] with role, context, span fields.
+                         chat.py: window by turn count, role field set when window is
+                         single-role. markdown.py: split on headings, heading in context.
         │
         ▼
    LLM Extraction        source-type-aware prompt (chat/markdown/code addenda);
                          one atom per fact: subject, kind, content, valid_from/until;
-                         chat logs: User turns → facts/events; Assistant turns skipped;
-                         relative dates ("yesterday", "today") resolved to ISO dates
-                         using observed_at (session date) as reference, not system date
+                         chat: User turns → facts/events/preferences;
+                         Assistant turns → kind=recommendation only when a specific
+                         proper noun (brand/venue/person/title) is named for this user;
+                         relative dates resolved to ISO dates using observed_at as reference
         │
         ▼
    Dedup + Supersession  skip exact hash matches; fuzzy subject match via rapidfuzz
@@ -43,7 +47,9 @@ lattice_select(query, as_of)
         │
         ▼
    Collapse + filter     drop superseded atoms; deduplicate by normalized hash;
-                         apply as_of temporal filter
+                         apply as_of temporal filter;
+                         recommendation cap: max 5 kind=recommendation atoms
+                         (tunable via LATTICE_RECOMMENDATION_CAP)
         │
         ▼
    Return atom dicts     with full provenance fields
@@ -58,6 +64,7 @@ lattice_answer(query, atom_ids?, as_of)
                 ▼
            Synthesis agent  tool-calling agent loop (raw OpenAI-compat API, up to 5 rounds);
                             date_diff(date1, date2) tool for exact date arithmetic;
+                            sum_numbers(numbers[]) tool for exact numeric aggregation;
                             query_date passed as agent's "today" reference
 ```
 
@@ -72,9 +79,10 @@ lattice_answer(query, atom_ids?, as_of)
 | `lattice/db.py` | `LatticeDB` — one `.md` file per atom in `LATTICE_DIR`. In-memory `_atom_cache`. `subjects.json` for O(1) subject lookup. Holds a `LatticeGraph` instance; updates it on every `write()` and `supersede()`. |
 | `lattice/graph.py` | `LatticeGraph` — `networkx.MultiDiGraph` backed by committed sidecars. Incrementally updated; full rebuild triggered when manifest atom count diverges from disk. |
 | `lattice/util.py` | Shared low-level helpers: `_normalized_subject()`, `_write_json_atomic()`. |
-| `lattice/ingest.py` | Segments source text → LLM extracts atoms → dedup + supersession check → write to DB. |
-| `lattice/selection.py` | BM25 pre-filter → graph BFS expansion via `LatticeGraph.bfs_expand()` → collapse superseded/duplicate groups. Falls back to `evidence_pack()` if graph is empty. Exports `_atom_to_dict()` for consistent atom serialization. |
-| `lattice/synthesis.py` | Tool-calling agent using raw OpenAI-compat SDK. Exposes `date_diff` tool for exact date arithmetic. Returns `SynthesisResult(answer, raw_response, tool_calls)`. Supports `ollama` and `openai` providers. |
+| `lattice/parsers/` | Source-aware segmentation. `infer_source_type()` detects chat/markdown/code. `parse()` returns `list[Segment]` (frozen dataclass with `text`, `role`, `source_type`, `context`, `start`, `end`). `chat.py` handles windowed turn parsing with role tagging. `markdown.py` splits on headings. |
+| `lattice/ingest.py` | Segments source via `parsers/` → LLM extracts atoms per segment → dedup + supersession check → write to DB. |
+| `lattice/selection.py` | BM25 pre-filter → graph BFS expansion via `LatticeGraph.bfs_expand()` → collapse superseded/duplicate groups → recommendation cap. Falls back to `evidence_pack()` if graph is empty. Exports `_atom_to_dict()` for consistent atom serialization. |
+| `lattice/synthesis.py` | Tool-calling agent using raw OpenAI-compat SDK. Model read from `SYNTHESIS_MODEL` env var (falls back to `LLM_MODEL`). Exposes `date_diff` (date arithmetic) and `sum_numbers` (numeric aggregation) tools. Returns `SynthesisResult(answer, raw_response, tool_calls)`. Supports `ollama` and `openai` providers. |
 | `lattice/llm.py` | Thin litellm wrapper. Single `complete(messages) → str` interface. Used by ingest, selection, and supersession — not synthesis. Reads `LLM_PROVIDER` / `LLM_MODEL` / `LLM_API_KEY` from env. |
 
 ---
@@ -158,6 +166,6 @@ LATTICE_DIR/
 
 ## Roadmap Direction
 
-Current state (P9 done): source-aware ingest with date resolution → fuzzy subject supersession via rapidfuzz → BM25 seeds → graph BFS expansion → collapse superseded/duplicates → synthesis agent with date_diff tool.
+Current state (P17 done, 79% LongMemEval): structured `parsers/` layer → LLM extraction with proper-noun assistant-turn rule → fuzzy supersession via rapidfuzz → BM25 seeds → graph BFS expansion → recommendation cap → collapse superseded/duplicates → synthesis agent (SYNTHESIS_MODEL) with date_diff + sum_numbers tools.
 
-Next: assistant-turn extraction + synthesis preference application (P10), retrieval topic drift fix (P11). Full roadmap in `lattice/eval/PRIORITIES.md`.
+Next: dense seed augmentation (P16) to address BM25 vocabulary mismatch; semantic relation enrichment (P13) for multi-session aggregation. Full roadmap in `lattice/eval/PRIORITIES.md`.
