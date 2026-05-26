@@ -59,7 +59,7 @@ def _make_client() -> OpenAI:
     provider = os.environ.get("LLM_PROVIDER", "anthropic")
     api_key = os.environ.get("LLM_API_KEY")
     if provider == "ollama":
-        return OpenAI(base_url="http://localhost:11434/v1", api_key="ollama")
+        return OpenAI(base_url="http://localhost:11434/v1", api_key="ollama", timeout=90.0)
     if provider == "openai":
         return OpenAI(api_key=api_key)
     raise NotImplementedError(
@@ -101,7 +101,7 @@ def synthesize(
         for a in atoms
     )
 
-    model = os.environ.get("LLM_MODEL", "gemma4:e4b")
+    model = os.environ.get("SYNTHESIS_MODEL") or os.environ.get("LLM_MODEL", "gemma4:e4b")
     client = _make_client()
     messages: list[dict] = [
         {"role": "system", "content": _SYSTEM},
@@ -111,7 +111,8 @@ def synthesize(
     # Agent loop: up to 5 rounds to allow chained tool calls
     for _ in range(5):
         resp = client.chat.completions.create(
-            model=model, messages=messages, tools=_TOOLS, tool_choice="auto"
+            model=model, messages=messages, tools=_TOOLS, tool_choice="auto",
+            extra_body={"num_ctx": 4096},
         )
         msg = resp.choices[0].message
         messages.append(msg)
@@ -131,6 +132,6 @@ def synthesize(
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
 
     # Fallback: ask for final answer after max rounds
-    resp = client.chat.completions.create(model=model, messages=messages)
+    resp = client.chat.completions.create(model=model, messages=messages, extra_body={"num_ctx": 4096})
     answer = resp.choices[0].message.content or ""
     return SynthesisResult(answer=answer, raw_response=answer, tool_calls=tool_calls_log)

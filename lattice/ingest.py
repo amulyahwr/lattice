@@ -5,7 +5,6 @@ import os
 import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from hashlib import sha256
 from typing import Any, Optional
@@ -15,6 +14,7 @@ from pydantic import BaseModel
 from lattice.db import LatticeDB
 from lattice.llm import complete
 from lattice.models import Atom
+from lattice.parsers import Segment, infer_source_type, parse
 
 
 class _ExtractedAtom(BaseModel):
@@ -65,8 +65,18 @@ _CHAT_ADDENDUM = """\
 Source-specific rules for chat/conversation (User: / Assistant: / System: turns):
   - USER turns are the primary source — extract personal facts, events, decisions, and preferences \
 from them. These are things the specific person did, owns, experienced, or prefers.
-  - ASSISTANT turns contain generic advice — DO NOT extract atoms from them unless they explicitly \
-reference something specific about the user (e.g. "Since you prefer X..." or "Given that you bought Y...").
+  - ASSISTANT turns: extract ONLY when a specific proper noun is named for this user. \
+The item must be a brand, product, venue, person, or title with a real name — not a generic category or technique.
+    ✓ EXTRACT as kind=recommendation: "I recommend Notion for notes", "Try the Honda Civic", \
+"Alberta Street Pub is great for you", "Read 'On The Line' by Joseph Piqué" \
+→ subject = "<ProperName> recommendation"
+    ✗ DO NOT EXTRACT: generic techniques ("use puns", "try self-deprecation"), generic categories \
+("joint supplements", "dental chews", "healthy treats"), generic advice \
+("maintain a healthy weight", "drink more water", "exercise regularly"), \
+tips that apply to anyone regardless of who they are.
+    (b) A statement that directly references the user's own situation or preference (e.g. \
+"Since you prefer X…", "Given that you bought Y…") → extract normally with the appropriate kind.
+  - If in doubt whether something is a proper noun recommendation vs generic advice — DO NOT extract it.
   - Personal events in USER turns (e.g. "I just bought a car", "I downloaded Ibotta", \
 "I attended a class") must be captured as kind="event" atoms with the subject being the event \
 (e.g. "Ibotta adoption", "car purchase", "baking class attendance").
@@ -114,15 +124,6 @@ Return a JSON object: {"superseded_atom_id": "<atom_id>"} for the one superseded
 or {"superseded_atom_id": null} if none are superseded.
 """
 
-
-@dataclass(frozen=True)
-class _Segment:
-    segment_id: str
-    text: str
-    source_type: str
-    start: int
-    end: int
-    context: str = ""
 
 # ── date resolution ───────────────────────────────────────────────────────────
 
@@ -222,91 +223,9 @@ def _hash_text(text: str) -> str:
     return sha256(text.encode("utf-8")).hexdigest()
 
 
-def _infer_source_type(text: str, metadata: dict) -> str:
-    if metadata.get("source_type"):
-        return str(metadata["source_type"])
-    if re.search(r"^#{1,6}\s+\S", text, flags=re.MULTILINE):
-        return "markdown"
-    if re.search(r"^\s*(user|assistant|system|developer)\s*:", text, flags=re.IGNORECASE | re.MULTILINE):
-        return "chat"
-    if "```" in text or re.search(r"\b(def|class|function|import|from)\s+\w+", text):
-        return "code"
-    return "plain"
-
-
-def _segment_plain(text: str, source_type: str, max_chars: int) -> list[_Segment]:
-    if len(text) <= max_chars:
-        return [_Segment("s0", text, source_type, 0, len(text))]
-
-    segments: list[_Segment] = []
-    overlap = min(300, max_chars // 5)
-    start = 0
-    idx = 0
-    while start < len(text):
-        end = min(len(text), start + max_chars)
-        if end < len(text):
-            boundary = max(text.rfind("\n\n", start, end), text.rfind(". ", start, end))
-            if boundary > start + max_chars // 2:
-                end = boundary + 1
-        chunk = text[start:end].strip()
-        if chunk:
-            segments.append(_Segment(f"s{idx}", chunk, source_type, start, end))
-            idx += 1
-        if end >= len(text):
-            break
-        start = max(0, end - overlap)
-    return segments
-
-
-def _segment_markdown(text: str, max_chars: int) -> list[_Segment]:
-    headings = list(re.finditer(r"^#{1,6}\s+.+$", text, flags=re.MULTILINE))
-    if len(text) <= max_chars or not headings:
-        return _segment_plain(text, "markdown", max_chars)
-
-    segments: list[_Segment] = []
-    for idx, match in enumerate(headings):
-        start = match.start()
-        end = headings[idx + 1].start() if idx + 1 < len(headings) else len(text)
-        chunk = text[start:end].strip()
-        heading = match.group(0).strip()
-        if len(chunk) > max_chars:
-            for part in _segment_plain(chunk, "markdown", max_chars):
-                part_start = start + part.start
-                segments.append(_Segment(f"s{len(segments)}", part.text, "markdown", part_start, start + part.end, heading))
-        elif chunk:
-            segments.append(_Segment(f"s{len(segments)}", chunk, "markdown", start, end, heading))
-    return segments
-
-
-def _segment_chat(text: str, max_chars: int) -> list[_Segment]:
-    # Keep complete turns together when possible; fall back to plain windows for very long logs.
-    turns = list(re.finditer(r"^\s*(user|assistant|system|developer)\s*:", text, flags=re.IGNORECASE | re.MULTILINE))
-    if len(text) <= max_chars or not turns:
-        return _segment_plain(text, "chat", max_chars)
-
-    segments: list[_Segment] = []
-    start = turns[0].start()
-    current_start = start
-    for idx, turn in enumerate(turns[1:], start=1):
-        if turn.start() - current_start >= max_chars:
-            chunk = text[current_start:turn.start()].strip()
-            if chunk:
-                segments.append(_Segment(f"s{len(segments)}", chunk, "chat", current_start, turn.start()))
-            current_start = turn.start()
-    chunk = text[current_start:].strip()
-    if chunk:
-        segments.append(_Segment(f"s{len(segments)}", chunk, "chat", current_start, len(text)))
-    return segments
-
-
-def _segments_for_source(source: str, metadata: dict) -> list[_Segment]:
-    max_chars = int(os.environ.get("LATTICE_SEGMENT_CHARS", "12000"))
-    source_type = _infer_source_type(source, metadata)
-    if source_type == "markdown":
-        return _segment_markdown(source, max_chars)
-    if source_type == "chat":
-        return _segment_chat(source, max_chars)
-    return _segment_plain(source, source_type, max_chars)
+def _segments_for_source(source: str, metadata: dict) -> list[Segment]:
+    source_type = infer_source_type(source, metadata)
+    return parse(source, source_type)
 
 
 def _extract_atoms(segment: _Segment, metadata: dict, ref: datetime) -> list[dict]:

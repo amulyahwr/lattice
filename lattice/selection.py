@@ -1,9 +1,25 @@
 from __future__ import annotations
 
+import os
 from datetime import date
 
 from lattice.db import LatticeDB
 from lattice.models import Atom
+
+_RECOMMENDATION_CAP = int(os.environ.get("LATTICE_RECOMMENDATION_CAP", "5"))
+
+
+def _apply_recommendation_cap(atoms: list[dict]) -> list[dict]:
+    rec_seen = 0
+    result = []
+    for atom in atoms:
+        if atom.get("kind") == "recommendation":
+            if rec_seen < _RECOMMENDATION_CAP:
+                result.append(atom)
+                rec_seen += 1
+        else:
+            result.append(atom)
+    return result
 
 
 def _atom_to_dict(a: Atom) -> dict:
@@ -63,7 +79,7 @@ def select(
     graph = db.graph
 
     if graph.graph.number_of_nodes() > 0:
-        return _graph_select(seeds, graph, db, as_of, max_atoms)
+        return _apply_recommendation_cap(_graph_select(seeds, graph, db, as_of, max_atoms))
 
     # Fallback: P4 evidence_pack expansion
     selected = []
@@ -75,8 +91,8 @@ def select(
             selected.append(atom)
             seen.add(atom.atom_id)
             if len(selected) >= max_atoms:
-                return [_atom_to_dict(a) for a in selected]
-    return [_atom_to_dict(a) for a in selected]
+                return _apply_recommendation_cap([_atom_to_dict(a) for a in selected])
+    return _apply_recommendation_cap([_atom_to_dict(a) for a in selected])
 
 
 def _graph_select(

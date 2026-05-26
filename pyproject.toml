@@ -26,6 +26,7 @@ packages = ["lattice", "server.py"]
 
 [dependency-groups]
 dev = ["pytest>=8"]
+semantic = ["fastembed>=0.4"]
 eval = [
     "python-dotenv>=1.0",
     "tqdm>=4.0",
