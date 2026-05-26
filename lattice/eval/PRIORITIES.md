@@ -39,7 +39,7 @@ Reordered after P10.5 (qwen3.5:4b synthesis, 76% stable). Synthesis variance is 
 | P14 | `selection.py`, `lattice/query.py` | **Query-shape-aware retrieval**: detect query shape (temporal / preference / recommendation / factual). Post-BFS: (1) recommendation cap (5 slots) for non-recommendation queries; (2) kind-fallback graph scan via `db.list_by_kind()` when primary-kind count == 0. Pre-BFS seed reordering confirmed harmful — post-BFS contract only. | Recommendation cap is half-implemented in P10; P14 adds the kind-fallback path and formalizes the query-shape contract. |
 | P13 | `graph.py`, `db.py`, `ingest.py`, `selection.py` | **Optional semantic relation enrichment**: high-confidence edges after graph indexing: `updates`, `contradicts`, `supports`, `elaborates`, `temporally_before`. Off by default for Ollama. | Deeper graph paths for multi-session aggregation without blocking local ingest/query. |
 | P12 | `ingest.py`, `server.py`, `db.py` | **Local ingest jobs + status UX**: persistent status: `job_id`, indexed/active/failed source counts, `graph_version`, `last_commit_at`. | Product UX — local users need visibility into what is indexed without waiting for large ingest runs. |
-| P17 | `synthesis.py`, `server.py` | **Product answer contract**: concise answer, optional citations, explicit uncertainty when atoms are weak or conflicting. | qwen3.5:4b handles this better than gemma already; reduced urgency. Still needed for trustworthy production behavior. |
+| P17 ✅ | `synthesis.py` | **sum_numbers tool + counting/rounding guidance**: `sum_numbers(numbers[])` tool for exact numeric aggregation; enumerate-then-count prompt for counting questions; round week/month durations to nearest integer. | single-session-assistant +18pp (54.5%→72.7%). Full product answer contract (citations, uncertainty) deferred. |
 | P21 | `graph.py`, `selection.py` | **Topic hubs / community index**: hub nodes from connected components; store aliases, member atoms, latest `observed_at`, centroid text. Depends on P13. | Broad queries land on coarse concepts before drilling into atoms. |
 | P18 | `selection.py`, `server.py` | **Selection debug/status mode**: graph version, BM25 ranks/scores, BFS expansion paths, fallback trigger, include reasons. | Makes memory behavior explainable during debugging. |
 | P19 | `selection.py`, `synthesis.py`, `server.py` | **Source-grounded answer mode**: citations/snippets via `source_title`, `source_id`, `source_span`. | Builds user trust. |
@@ -61,7 +61,7 @@ LongMemEval is used to measure whether product changes improve retrieval and ans
 
 Current baseline:
 
-- **78% accuracy** (p12-5b, fresh ingest, gemma4:e4b ingest + qwen3.5:4b synthesis), 100 questions
+- **79% accuracy** (p17, replay over p12-5b atoms, qwen3.5:4b synthesis + sum_numbers tool), 100 questions
 - inference: `gemma4:e4b` (ingest/select) + `qwen3.5:4b` (synthesis)
 - judge: `phi4-mini-judge` (phi4-mini with num_ctx=4096 Modelfile)
 - harness: `longmemeval_oracle`
@@ -121,19 +121,20 @@ Evaluation method:
 | p10-5c | Replication: replay over p9-base atoms | **76.0% (phi4)** | Confirms stability independent of ingest path. 3 consecutive runs at 76% — synthesis variance resolved. |
 | p10 | Named-item recommendation extraction rule + unconditional cap (max 5 recommendation atoms) | **74.0% (phi4)** | -2pp vs p10-5c baseline, within synthesis variance (6 regressions, 4 recoveries, none caused by cap). p9-base has 1 question with recommendation atoms; cap was a no-op. Ingest rule untestable via replay — effect will show on fresh ingest. Changes kept as product improvements. |
 | p12-5b | Source-aware parsing layer (parsers/) + P10 proper-noun recommendation rule + qwen3.5:4b synthesis, fresh ingest | **78.0% (phi4)** | +2pp vs 76% replay baseline, +9pp vs P9 (69%). temporal-reasoning +11.5pp (73.1%→84.6%), single-session-user +7pp (85.7%→92.9%), multi-session +3.7pp. knowledge-update -12.5pp (100%→87.5%) and single-session-assistant -9pp (63.6%→54.5%) — both from fresh ingest noise + supersession fragility, not from the new parsers. |
+| p17 | sum_numbers tool + counting/rounding guidance in synthesis (replay over p12-5b atoms) | **79.0% (phi4)** | +1pp overall vs p12-5b. single-session-assistant +18pp (54.5%→72.7%), knowledge-update +6pp (87.5%→93.75%). temporal-reasoning -7.7pp (84.6%→76.9%) — caused by synthesis using observed_at instead of event dates in date_diff calls (pre-existing fragility, not regression from this change). sum_numbers tool firing correctly on numeric aggregation questions. |
 
 ## Category Tracker
 
 Note: p1–p6-graph used `qwen3.5:4b` judge. p7+ use `phi4-mini-judge`. p9-base onward use fixed atoms (reused lattice dirs) — category variance reflects synthesis noise only. p10-5+ use qwen3.5:4b synthesis.
 
-| Category | p8 (phi4) | p9 (phi4) | p9-base | p9-base-mv | p10-5c (qwen synth) | p10 | p12-5b |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| overall | 62.0% | **69.0%** | 62.0% | 63.0% | **76.0%** | 74.0% | **78.0%** |
-| task-avg | 60.1% | **66.75%** | 60.7% | 59.4% | **76.0%** | 72.5% | 76.1% |
-| single-session-user | **71.4%** | 64.3% | 64.3% | 57.1% | **85.7%** | 85.7% | **92.9%** |
-| single-session-preference | 50.0% | **66.7%** | 50.0% | 50.0% | **66.7%** | 50.0% | 66.7% |
-| single-session-assistant | **54.5%** | 36.4% | 45.5% | 36.4% | **63.6%** | 63.6% | 54.5% |
-| multi-session | 62.9% | **74.1%** | 55.6% | **70.4%** | 66.7% | 66.7% | 70.4% |
-| temporal-reasoning | **65.4%** | 65.4% | 61.5% | 61.5% | **73.1%** | 69.2% | **84.6%** |
-| knowledge-update | 56.25% | **93.75%** | 87.5% | 81.25% | **100%** | 100% | 87.5% |
-| abstention | **100%** | **100%** | **100%** | **100%** | **100%** | — | **100%** |
+| Category | p8 (phi4) | p9 (phi4) | p9-base | p10-5c (qwen synth) | p12-5b | p17 |
+| --- | --- | --- | --- | --- | --- | --- |
+| overall | 62.0% | **69.0%** | 62.0% | **76.0%** | 78.0% | **79.0%** |
+| task-avg | 60.1% | **66.75%** | 60.7% | **76.0%** | 76.1% | **78.9%** |
+| single-session-user | **71.4%** | 64.3% | 64.3% | **85.7%** | 92.9% | 92.9% |
+| single-session-preference | 50.0% | **66.7%** | 50.0% | **66.7%** | 66.7% | 66.7% |
+| single-session-assistant | **54.5%** | 36.4% | 45.5% | **63.6%** | 54.5% | **72.7%** |
+| multi-session | 62.9% | **74.1%** | 55.6% | 66.7% | 70.4% | 70.4% |
+| temporal-reasoning | **65.4%** | 65.4% | 61.5% | **73.1%** | **84.6%** | 76.9% |
+| knowledge-update | 56.25% | **93.75%** | 87.5% | **100%** | 87.5% | 93.75% |
+| abstention | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** |

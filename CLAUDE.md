@@ -40,7 +40,7 @@ lattice/
                    kind=recommendation slots, tunable via LATTICE_RECOMMENDATION_CAP) → atom dicts.
   synthesis.py     LLM generates prose answer from atom dicts. Uses SYNTHESIS_MODEL env var
                    (falls back to LLM_MODEL). Ollama path uses OpenAI-compat client with
-                   num_ctx=4096 and tool calls for date_diff.
+                   num_ctx=4096 and tool calls for date_diff + sum_numbers.
 ```
 
 ### Product roadmap guardrails
