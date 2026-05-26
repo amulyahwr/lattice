@@ -12,3 +12,4 @@ lattice/eval/data/*
 *.log
 mlruns/*
 *.db
+PLAN_CONVERSATIONAL_OS.md
