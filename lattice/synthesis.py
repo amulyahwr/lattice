@@ -28,8 +28,14 @@ Guidelines:
     Use `observed_at` as the reference date — it records when the fact was stated in the source.
     Resolve relative expressions ("last Saturday", "two months ago") by offsetting from `observed_at`.
     Use the `date_diff` tool to compute exact durations between two ISO dates.
+    When reporting a duration in weeks or months, round to the nearest integer (e.g. 2.85 weeks → 3 weeks).
 - For time-bounded facts: if `valid_from` is non-null, use it to determine temporal validity.
 - For conflicting facts: present both versions with their `observed_at` dates and let the answer reflect the change.
+- For counting or totaling questions ("how many", "total", "sum"):
+    First enumerate every distinct item or value from the atoms explicitly.
+    Then call `sum_numbers` with those values to get the exact total — do not add them yourself.
+- For preference or recommendation questions: ground your answer in the user's known context \
+(their preferences, constraints, or situation) as recorded in the atoms before giving advice.
 - If atoms are present, always derive an answer from them. Do not say "no information found."
 - If atoms only partially answer the question, give a best-effort answer and note the gap.
 - Only return "no information" if the atoms list is literally empty.
@@ -51,7 +57,25 @@ _TOOLS = [
                 "required": ["date1", "date2"],
             },
         },
-    }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "sum_numbers",
+            "description": "Return the exact sum of a list of numbers. Use for totaling counts, weights, distances, money amounts, or any numeric aggregation — do not add numbers yourself.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "numbers": {
+                        "type": "array",
+                        "items": {"type": "number"},
+                        "description": "The numbers to sum, e.g. [50, 20] or [1200, 800, 1000]",
+                    },
+                },
+                "required": ["numbers"],
+            },
+        },
+    },
 ]
 
 
@@ -72,9 +96,11 @@ def _execute_tool(name: str, args: dict) -> str:
     # Strip model-specific prefixes some models add (e.g. "google:gemma:date_diff")
     bare_name = name.rsplit(":", 1)[-1]
     if bare_name == "date_diff":
-        d1 = date.fromisoformat(args["date1"])
-        d2 = date.fromisoformat(args["date2"])
+        d1 = date.fromisoformat(args["date1"][:10])
+        d2 = date.fromisoformat(args["date2"][:10])
         return str((d2 - d1).days)
+    if bare_name == "sum_numbers":
+        return str(sum(float(n) for n in args["numbers"]))
     return f"unknown tool: {name}"
 
 

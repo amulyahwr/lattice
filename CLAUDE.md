@@ -16,7 +16,7 @@ Required env vars for running the server: `LLM_PROVIDER`, `LLM_MODEL`, `LATTICE_
 
 ## Architecture
 
-The pipeline is: **ingest → select → synthesize**, each backed by an LLM call via `lattice/llm.py`.
+The current pipeline is: **ingest → select → synthesize**, each backed by an LLM call via `lattice/llm.py`. The product direction is local-first lattice-mcp: source-aware ingest, provenance, deterministic graph sidecars, graph-seeded selection, and optional enrichment that never blocks local querying.
 
 ```
 server.py          MCP stdio entrypoint. Owns one shared LatticeDB instance.
@@ -25,10 +25,32 @@ lattice/
   models.py        Atom pydantic model + markdown serialization (python-frontmatter).
   db.py            File-based store: one .md file per atom in LATTICE_DIR. BM25 search.
                    subjects.json is a subject→atom_id index for O(1) supersession lookups.
-  ingest.py        LLM extracts atoms from raw text, then checks supersession per atom.
-  selection.py     BM25 pre-filter (top_k=20) → LLM re-ranks → returns atom dicts.
-  synthesis.py     LLM generates prose answer from a list of atom dicts.
+                   Holds a LatticeGraph instance; updated on every write/supersede/preload.
+  graph.py         Heterogeneous graph index (networkx MultiDiGraph). Writes committed
+                   sidecars to LATTICE_DIR/graph/{nodes.jsonl,edges.jsonl,manifest.json}.
+                   Node types: atom:<id>, source:<id>, segment:<cid>:<sid>, subject:<norm>.
+                   Edge types: source_contains_segment, segment_contains_atom,
+                   atom_has_subject, same_subject_as, same_hash, supersedes.
+  parsers/         Source-aware pre-ingest segmentation. `infer_source_type()` detects chat/
+                   markdown/code. `parse()` returns list[Segment] with role, context, span.
+                   chat.py preserves turn windowing + role field. markdown.py splits on headings.
+  ingest.py        Segments source via parsers/, then LLM extracts atoms per segment,
+                   then checks supersession per atom.
+  selection.py     BM25 pre-filter (top_k=20) → LLM re-ranks → recommendation cap (max 5
+                   kind=recommendation slots, tunable via LATTICE_RECOMMENDATION_CAP) → atom dicts.
+  synthesis.py     LLM generates prose answer from atom dicts. Uses SYNTHESIS_MODEL env var
+                   (falls back to LLM_MODEL). Ollama path uses OpenAI-compat client with
+                   num_ctx=4096 and tool calls for date_diff + sum_numbers.
 ```
+
+### Product roadmap guardrails
+
+- Keep architecture local-first: no hosted service, no required daemon, no external DB.
+- Keep atoms human-readable and git-trackable.
+- Treat LongMemEval as an eval yardstick only; do not add benchmark-shaped hacks to product paths.
+- Prefer provenance fields and graph edges over mutating atom content for retrieval.
+- Query paths should use committed snapshots and should not wait for active ingest/enrichment.
+- Expensive relation enrichment, embeddings, and hub labeling must remain optional, especially for Ollama users.
 
 ### Key data flow details
 
@@ -38,7 +60,11 @@ lattice/
 
 **Atom storage**: every atom is a `.md` file with YAML frontmatter. `LatticeDB` has an in-memory cache (`_atom_cache`). Cache is per-instance; `server.py` reuses one instance per process.
 
-**BM25**: built fresh on each `db.search()` call from all non-superseded atoms. No persistent index.
+**BM25**: built fresh on each `db.search()` call from all non-superseded atoms. No persistent BM25 index.
+
+**Graph sidecars**: `LatticeGraph` writes `LATTICE_DIR/graph/` on every atom write. `db.preload()` loads from sidecars if manifest atom_count matches; otherwise rebuilds. Access via `db.graph`. Selection uses BFS over graph edges to expand evidence packs from BM25 seeds.
+
+This is current MVP behavior, not the target product shape. Roadmap priorities in `lattice/eval/PRIORITIES.md` track next steps.
 
 ### Test conventions
 

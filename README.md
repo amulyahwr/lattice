@@ -19,9 +19,10 @@ Set via environment variables:
 | Variable | Default | Description |
 |---|---|---|
 | `LLM_PROVIDER` | `anthropic` | `anthropic` \| `openai` \| `ollama` |
-| `LLM_MODEL` | `claude-sonnet-4-6` | Model ID |
+| `LLM_MODEL` | `claude-sonnet-4-6` | Model ID for ingest + selection |
 | `LLM_API_KEY` | — | API key (not required for Ollama) |
 | `LATTICE_DIR` | `./lattice` | Directory where atoms are stored |
+| `SYNTHESIS_MODEL` | _(LLM_MODEL)_ | Override model for synthesis only |
 
 ## Claude Code
 
@@ -61,7 +62,7 @@ metadata  — optional dict (title, url, author, date, …)
 → { atoms_created: N, atom_ids: [...] }
 ```
 
-Each atom carries full provenance: `source_id`, `segment_id`, `source_span`, `content_hash`, and `observed_at`. Exact duplicates are skipped before write.
+Source text is split into typed segments (chat turns, markdown sections, code blocks) before extraction. Chat logs distinguish user turns (facts, events, preferences) from assistant turns (named recommendations only — proper nouns like products, venues, people). Exact duplicates are skipped; atoms with the same subject are checked for supersession via fuzzy matching. Each atom carries full provenance: `source_id`, `segment_id`, `source_span`, `content_hash`, and `observed_at`.
 
 ### `lattice_select(query, as_of?)`
 
@@ -88,7 +89,7 @@ as_of     — optional ISO date; passed to selection when atom_ids not provided
 → answer string
 ```
 
-Synthesis runs as a tool-calling agent (raw OpenAI-compat API). A `date_diff(date1, date2)` tool is available so the model can perform exact date arithmetic without hallucinating day counts. The `as_of` date is passed as the agent's reference "today".
+Synthesis runs as a tool-calling agent (raw OpenAI-compat API). Two tools are available: `date_diff(date1, date2)` for exact date arithmetic and `sum_numbers(numbers[])` for exact numeric totals (counts, weights, distances, money). The `as_of` date is passed as the agent's reference "today".
 
 ## Atom format
 
