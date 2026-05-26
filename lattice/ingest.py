@@ -127,6 +127,15 @@ or {"superseded_atom_id": null} if none are superseded.
 
 # ── date resolution ───────────────────────────────────────────────────────────
 
+_WRITTEN_NUMBERS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+}
+_WRITTEN_NUMBER_PATTERN = re.compile(
+    r'\b(' + '|'.join(_WRITTEN_NUMBERS) + r')\s+(days?|weeks?|months?)\s+ago\b',
+    re.IGNORECASE,
+)
+
 _RELATIVE_PATTERNS: list[tuple[re.Pattern, Any]] = [
     (re.compile(r'\b(\d+)\s+days?\s+ago\b', re.IGNORECASE),
      lambda m, ref: (ref - timedelta(days=int(m.group(1)))).strftime("%Y-%m-%d")),
@@ -134,6 +143,14 @@ _RELATIVE_PATTERNS: list[tuple[re.Pattern, Any]] = [
      lambda m, ref: (ref - timedelta(weeks=int(m.group(1)))).strftime("%Y-%m-%d")),
     (re.compile(r'\b(\d+)\s+months?\s+ago\b', re.IGNORECASE),
      lambda m, ref: (ref - timedelta(days=int(m.group(1)) * 30)).strftime("%Y-%m-%d")),
+    (re.compile(r'\ba\s+day\s+ago\b', re.IGNORECASE),
+     lambda _, ref: (ref - timedelta(days=1)).strftime("%Y-%m-%d")),
+    (re.compile(r'\ba\s+week\s+ago\b', re.IGNORECASE),
+     lambda _, ref: (ref - timedelta(weeks=1)).strftime("%Y-%m-%d")),
+    (re.compile(r'\ba\s+month\s+ago\b', re.IGNORECASE),
+     lambda _, ref: (ref - timedelta(days=30)).strftime("%Y-%m-%d")),
+    (re.compile(r'\ba\s+year\s+ago\b', re.IGNORECASE),
+     lambda _, ref: str(ref.year - 1)),
     (re.compile(r'\blast\s+year\b', re.IGNORECASE),
      lambda _, ref: str(ref.year - 1)),
     (re.compile(r'\blast\s+week\b', re.IGNORECASE),
@@ -154,6 +171,12 @@ _WEEKDAY_PATTERN = re.compile(
 
 def _resolve_dates(content: str, ref: datetime) -> str:
     """Replace relative date expressions in atom content with absolute ISO dates."""
+    def _normalize_written(m: re.Match) -> str:
+        n = _WRITTEN_NUMBERS[m.group(1).lower()]
+        return f"{n} {m.group(2)} ago"
+
+    content = _WRITTEN_NUMBER_PATTERN.sub(_normalize_written, content)
+
     for pattern, resolver in _RELATIVE_PATTERNS:
         content = pattern.sub(lambda m, _r=ref, _res=resolver: _res(m, _r), content)
 

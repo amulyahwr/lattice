@@ -145,6 +145,11 @@ def synthesize(
 
         if not msg.tool_calls:
             answer = msg.content or ""
+            if not answer and tool_calls_log:
+                # Model returned empty after tool use — re-prompt for final answer
+                messages.append({"role": "user", "content": "Based on the tool results above, give your final answer now."})
+                resp2 = client.chat.completions.create(model=model, messages=messages, extra_body={"num_ctx": 4096})
+                answer = resp2.choices[0].message.content or ""
             return SynthesisResult(answer=answer, raw_response=answer, tool_calls=tool_calls_log)
 
         for tc in msg.tool_calls:
@@ -157,7 +162,8 @@ def synthesize(
             })
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
 
-    # Fallback: ask for final answer after max rounds
+    # Fallback: explicitly request a final answer after max tool-call rounds
+    messages.append({"role": "user", "content": "Based on the tool results above, give your final answer now."})
     resp = client.chat.completions.create(model=model, messages=messages, extra_body={"num_ctx": 4096})
     answer = resp.choices[0].message.content or ""
     return SynthesisResult(answer=answer, raw_response=answer, tool_calls=tool_calls_log)
