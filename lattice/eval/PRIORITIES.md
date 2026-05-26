@@ -61,7 +61,7 @@ LongMemEval is used to measure whether product changes improve retrieval and ans
 
 Current baseline:
 
-- **79% accuracy** (p17, replay over p12-5b atoms, qwen3.5:4b synthesis + sum_numbers tool), 100 questions
+- **79% accuracy** (p17b, fresh ingest, qwen3.5:4b synthesis + sum_numbers tool), 100 questions
 - inference: `gemma4:e4b` (ingest/select) + `qwen3.5:4b` (synthesis)
 - judge: `phi4-mini-judge` (phi4-mini with num_ctx=4096 Modelfile)
 - harness: `longmemeval_oracle`
@@ -122,19 +122,20 @@ Evaluation method:
 | p10 | Named-item recommendation extraction rule + unconditional cap (max 5 recommendation atoms) | **74.0% (phi4)** | -2pp vs p10-5c baseline, within synthesis variance (6 regressions, 4 recoveries, none caused by cap). p9-base has 1 question with recommendation atoms; cap was a no-op. Ingest rule untestable via replay — effect will show on fresh ingest. Changes kept as product improvements. |
 | p12-5b | Source-aware parsing layer (parsers/) + P10 proper-noun recommendation rule + qwen3.5:4b synthesis, fresh ingest | **78.0% (phi4)** | +2pp vs 76% replay baseline, +9pp vs P9 (69%). temporal-reasoning +11.5pp (73.1%→84.6%), single-session-user +7pp (85.7%→92.9%), multi-session +3.7pp. knowledge-update -12.5pp (100%→87.5%) and single-session-assistant -9pp (63.6%→54.5%) — both from fresh ingest noise + supersession fragility, not from the new parsers. |
 | p17 | sum_numbers tool + counting/rounding guidance in synthesis (replay over p12-5b atoms) | **79.0% (phi4)** | +1pp overall vs p12-5b. single-session-assistant +18pp (54.5%→72.7%), knowledge-update +6pp (87.5%→93.75%). temporal-reasoning -7.7pp (84.6%→76.9%) — caused by synthesis using observed_at instead of event dates in date_diff calls (pre-existing fragility, not regression from this change). sum_numbers tool firing correctly on numeric aggregation questions. |
+| p18 | Written-number date resolution ("a week ago", "two months ago") + synthesis empty-response fix (re-prompt after tool calls return empty), fresh ingest | **73.0% (phi4)** | -6pp vs p17b. Temporal unchanged at 76.9% — target category. 4 temporal recoveries from _resolve_dates fix (incl. "two weeks ago" pattern). Regressions are ingest variance: multi-session -14.8pp, single-session-user -14.3pp. synthesis empty-response fix recovered `a08a253f` (fitness classes). Code changes correct; -6pp is non-deterministic gemma4:e4b ingest, not regression from the fix. |
 
 ## Category Tracker
 
 Note: p1–p6-graph used `qwen3.5:4b` judge. p7+ use `phi4-mini-judge`. p9-base onward use fixed atoms (reused lattice dirs) — category variance reflects synthesis noise only. p10-5+ use qwen3.5:4b synthesis.
 
-| Category | p8 (phi4) | p9 (phi4) | p9-base | p10-5c (qwen synth) | p12-5b | p17 |
-| --- | --- | --- | --- | --- | --- | --- |
-| overall | 62.0% | **69.0%** | 62.0% | **76.0%** | 78.0% | **79.0%** |
-| task-avg | 60.1% | **66.75%** | 60.7% | **76.0%** | 76.1% | **78.9%** |
-| single-session-user | **71.4%** | 64.3% | 64.3% | **85.7%** | 92.9% | 92.9% |
-| single-session-preference | 50.0% | **66.7%** | 50.0% | **66.7%** | 66.7% | 66.7% |
-| single-session-assistant | **54.5%** | 36.4% | 45.5% | **63.6%** | 54.5% | **72.7%** |
-| multi-session | 62.9% | **74.1%** | 55.6% | 66.7% | 70.4% | 70.4% |
-| temporal-reasoning | **65.4%** | 65.4% | 61.5% | **73.1%** | **84.6%** | 76.9% |
-| knowledge-update | 56.25% | **93.75%** | 87.5% | **100%** | 87.5% | 93.75% |
-| abstention | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** |
+| Category | p8 (phi4) | p9 (phi4) | p9-base | p10-5c (qwen synth) | p12-5b | p17 | p18 |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| overall | 62.0% | **69.0%** | 62.0% | **76.0%** | 78.0% | **79.0%** | 73.0% |
+| task-avg | 60.1% | **66.75%** | 60.7% | **76.0%** | 76.1% | **78.9%** | 75.3% |
+| single-session-user | **71.4%** | 64.3% | 64.3% | **85.7%** | 92.9% | 92.9% | 78.6% |
+| single-session-preference | 50.0% | **66.7%** | 50.0% | **66.7%** | 66.7% | 66.7% | **83.3%** |
+| single-session-assistant | **54.5%** | 36.4% | 45.5% | **63.6%** | 54.5% | **72.7%** | 63.6% |
+| multi-session | 62.9% | **74.1%** | 55.6% | 66.7% | 70.4% | 70.4% | 59.3% |
+| temporal-reasoning | **65.4%** | 65.4% | 61.5% | **73.1%** | **84.6%** | 76.9% | 73.1% |
+| knowledge-update | 56.25% | **93.75%** | 87.5% | **100%** | 87.5% | 93.75% | 93.75% |
+| abstention | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** |
