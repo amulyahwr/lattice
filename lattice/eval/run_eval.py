@@ -1,42 +1,30 @@
 """
 LongMemEval evaluation harness for lattice-mcp.
 
-Usage:
-    python -m lattice.eval.run_eval                             # full run (inference + judge)
-    python -m lattice.eval.run_eval --phase ingest              # ingest only (saves lattice dirs, no synthesis)
-    python -m lattice.eval.run_eval --phase inference           # inference only (select + synthesize)
-    python -m lattice.eval.run_eval --phase judge               # judge only (needs results file)
-    python -m lattice.eval.run_eval --stratify 10               # quick smoke test (10 questions)
-    python -m lattice.eval.run_eval --out results/myrun.jsonl   # custom output path
-    python -m lattice.eval.run_eval --keep-lattice-dirs         # keep per-question atom dirs
-    python -m lattice.eval.run_eval --retrieval-mode bm25       # bypass LLM selection
-    python -m lattice.eval.run_eval --retrieval-mode all        # bypass retrieval; synthesize over all atoms
-    python -m lattice.eval.run_eval --reuse-lattice-root results/p3-select/run.lattices
+Three independent phases — run them in order:
 
-    # stdout + stderr are tee'd to a log file automatically:
-    python -m lattice.eval.run_eval --phase inference
-    python -m lattice.eval.run_eval --phase judge
-    python -m lattice.eval.run_eval --phase all
-    python -m lattice.eval.run_eval --log logs/custom.log       # custom log path
+    # 1. Ingest: load gemma once, ingest all 100 questions, save lattice dirs
+    python -m lattice.eval.run_eval --phase ingest --priority p18
 
-    # file naming convention (auto-derived):
-    #   results/<llm>_<judge>_<dataset>_<phase>.jsonl
-    #   logs/run_<llm>_<judge>_<dataset>_<phase>.log
-    # e.g.: results/gemma4e4b_qwen2514b_longmemeval_oracle_inference.jsonl
+    # 2. Inference: load qwen once, run select+synthesize over saved lattice dirs
+    python -m lattice.eval.run_eval --phase inference --priority p18 \\
+        --reuse-lattice-root results/p18/gemma4e4b_longmemeval_oracle_inference.lattices
 
-    # Debug viewer — browse results by question, failure mode, atoms:
-    uv run --group eval streamlit run lattice/eval/debug_viewer.py
+    # 3. Judge: score hypotheses
+    python -m lattice.eval.run_eval --phase judge --priority p18
 
-Defaults (overridable via CLI flags or env vars in .env.eval):
+Other options:
+    --stratify 10               quick smoke test (10 questions)
+    --retrieval-mode bm25       bypass LLM re-ranking in inference
+    --retrieval-mode all        bypass retrieval; synthesize over all atoms
+    --replay-debug path.jsonl   re-run synthesis over atoms from a prior debug file
+
+Defaults (overridable via CLI flags or .env.eval):
     dataset  : lattice/eval/data/longmemeval_oracle.json
-    out      : results/<model-slug>_baseline.jsonl  (auto-derived from LLM_MODEL)
     stratify : 100 questions, stratified by question_type
     seed     : 42
-    retrieval: select; set RETRIEVAL_MODE=select|bm25|all
-    top_k    : 20; set TOP_K or --top-k
-    keep dirs: false; set KEEP_LATTICE_EVAL_DIRS=1 or --keep-lattice-dirs
-
-Required env vars (set in .env.eval): LLM_PROVIDER, LLM_MODEL, LLM_API_KEY (non-ollama).
+    retrieval: select (BM25 + graph BFS + LLM re-rank)
+    top_k    : 20
 """
 
 from __future__ import annotations
@@ -48,7 +36,6 @@ import random
 import shutil
 import subprocess
 import sys
-import tempfile
 import time
 from collections import Counter
 from datetime import date
@@ -85,25 +72,13 @@ def _logs_dir(priority: str) -> str:
     return f"logs/{priority}" if priority else "logs"
 
 
-def _default_out(
-    llm_model: str, dataset: str, priority: str, retrieval_mode: str = "select"
-) -> str:
-    """Inference output path. Always named by llm_slug only — judge slug appears in eval-results filename."""
+def _default_out(llm_model: str, dataset: str, priority: str, retrieval_mode: str = "select") -> str:
     ds = Path(dataset).stem
-    suffix = (
-        "_inference" if retrieval_mode == "select" else f"_{retrieval_mode}_inference"
-    )
+    suffix = "_inference" if retrieval_mode == "select" else f"_{retrieval_mode}_inference"
     return f"{_results_dir(priority)}/{_slug(llm_model)}_{ds}{suffix}.jsonl"
 
 
-def _default_log(
-    llm_model: str,
-    judge_model: str,
-    dataset: str,
-    phase: str,
-    priority: str,
-    retrieval_mode: str = "select",
-) -> str:
+def _default_log(llm_model: str, judge_model: str, dataset: str, phase: str, priority: str, retrieval_mode: str = "select") -> str:
     ds = Path(dataset).stem
     base = _logs_dir(priority)
     mode = "" if retrieval_mode == "select" else f"_{retrieval_mode}"
@@ -119,8 +94,6 @@ def _default_log(
 
 
 class _Tee:
-    """Write to multiple streams simultaneously."""
-
     def __init__(self, *streams):
         self.streams = streams
 
@@ -146,16 +119,10 @@ def _load_config(args: argparse.Namespace) -> dict:
     retrieval_mode = args.retrieval_mode or os.environ.get("RETRIEVAL_MODE", "select")
     if retrieval_mode not in {"select", "bm25", "all"}:
         raise ValueError("RETRIEVAL_MODE must be one of: select, bm25, all")
-    cfg = {
+    return {
         "dataset": dataset,
-        "out": args.out
-        or os.environ.get(
-            "OUT", _default_out(model, dataset, priority, retrieval_mode)
-        ),
-        "log": args.log
-        or os.environ.get(
-            "LOG", _default_log(model, judge, dataset, phase, priority, retrieval_mode)
-        ),
+        "out": args.out or os.environ.get("OUT", _default_out(model, dataset, priority, retrieval_mode)),
+        "log": args.log or os.environ.get("LOG", _default_log(model, judge, dataset, phase, priority, retrieval_mode)),
         "priority": priority,
         "stratify": args.stratify or int(os.environ.get("STRATIFY", "100")),
         "seed": args.seed or int(os.environ.get("SEED", "42")),
@@ -164,21 +131,12 @@ def _load_config(args: argparse.Namespace) -> dict:
         "llm_provider": os.environ.get("LLM_PROVIDER", "ollama"),
         "llm_model": model,
         "judge_model": judge,
-        "litellm_port": int(os.environ.get("LITELLM_PORT", "4000")),
-        "evaluate_script": args.evaluate_script
-        or os.environ.get("EVALUATE_SCRIPT", ""),
-        "print_qa_script": args.print_qa_script
-        or os.environ.get("PRINT_QA_SCRIPT", ""),
-        "print_retrieval_script": args.print_retrieval_script
-        or os.environ.get("PRINT_RETRIEVAL_SCRIPT", ""),
-        "keep_lattice_dirs": args.keep_lattice_dirs
-        or os.environ.get("KEEP_LATTICE_EVAL_DIRS", "").lower() in {"1", "true", "yes"},
-        "reuse_lattice_root": args.reuse_lattice_root
-        or os.environ.get("REUSE_LATTICE_ROOT", ""),
+        "evaluate_script": args.evaluate_script or os.environ.get("EVALUATE_SCRIPT", ""),
+        "print_qa_script": args.print_qa_script or os.environ.get("PRINT_QA_SCRIPT", ""),
+        "reuse_lattice_root": args.reuse_lattice_root or os.environ.get("REUSE_LATTICE_ROOT", ""),
         "replay_debug": args.replay_debug or os.environ.get("REPLAY_DEBUG", ""),
         "replay_rerank": args.replay_rerank,
     }
-    return cfg
 
 
 # ── stratified sampling ───────────────────────────────────────────────────────
@@ -200,7 +158,6 @@ def _stratify(data: list[dict], n: int, seed: int) -> list[dict]:
         sample.extend(shuffled[:quota])
         remainder.extend(shuffled[quota:])
 
-    # top up or trim to exactly n
     shortfall = n - len(sample)
     if shortfall > 0:
         sample.extend(rng.sample(remainder, min(shortfall, len(remainder))))
@@ -216,7 +173,6 @@ def _stratify(data: list[dict], n: int, seed: int) -> list[dict]:
 
 
 def _load_done_ids(out_path: Path) -> set[str]:
-    """Return question_ids that completed successfully (excludes ERROR entries so they re-run)."""
     if not out_path.exists():
         return set()
     done = set()
@@ -231,7 +187,7 @@ def _load_done_ids(out_path: Path) -> set[str]:
     return done
 
 
-# ── inference phase ───────────────────────────────────────────────────────────
+# ── debug helpers ─────────────────────────────────────────────────────────────
 
 
 def _atom_debug_dict(atom, preview_chars: int | None = None) -> dict:
@@ -288,26 +244,21 @@ def _session_retrieval_metrics(item: dict, atoms: list[dict]) -> dict:
         return metrics
 
     first_rank = next(
-        (i + 1 for i, session_id in enumerate(retrieved) if session_id in gold),
-        None,
+        (i + 1 for i, sid in enumerate(retrieved) if sid in gold), None
     )
-    gold_hits = [session_id for session_id in retrieved if session_id in gold]
-    metrics.update(
-        {
-            "session_hit": bool(gold & retrieved_set),
-            "session_recall": len(gold & retrieved_set) / len(gold),
-            "session_precision": len(gold_hits) / len(retrieved) if retrieved else 0.0,
-            "session_mrr": 1 / first_rank if first_rank else 0.0,
-        }
-    )
+    gold_hits = [sid for sid in retrieved if sid in gold]
+    metrics.update({
+        "session_hit": bool(gold & retrieved_set),
+        "session_recall": len(gold & retrieved_set) / len(gold),
+        "session_precision": len(gold_hits) / len(retrieved) if retrieved else 0.0,
+        "session_mrr": 1 / first_rank if first_rank else 0.0,
+    })
     return metrics
 
 
 def _answer_turn_summary(item: dict, preview_chars: int = 240) -> dict:
     sessions = item.get("haystack_sessions", [])
-    session_ids = item.get(
-        "haystack_session_ids", [f"s{i}" for i in range(len(sessions))]
-    )
+    session_ids = item.get("haystack_session_ids", [f"s{i}" for i in range(len(sessions))])
     answer_session_ids = set(item.get("answer_session_ids") or [])
     counts: dict[str, int] = {}
     previews: list[dict] = []
@@ -318,15 +269,12 @@ def _answer_turn_summary(item: dict, preview_chars: int = 240) -> dict:
             if turn.get("has_answer") is not True:
                 continue
             count += 1
-            content = str(turn.get("content", ""))
-            previews.append(
-                {
-                    "session_id": session_id,
-                    "turn_index": turn_index,
-                    "role": turn.get("role"),
-                    "content": content[:preview_chars],
-                }
-            )
+            previews.append({
+                "session_id": session_id,
+                "turn_index": turn_index,
+                "role": turn.get("role"),
+                "content": str(turn.get("content", ""))[:preview_chars],
+            })
         if count:
             counts[session_id] = count
 
@@ -338,15 +286,9 @@ def _answer_turn_summary(item: dict, preview_chars: int = 240) -> dict:
 
 
 def _answer_token_recall(gold_answer: str, atoms: list[dict]) -> float:
-    """Deterministic retrieval metric: token recall of gold answer against selected atoms.
-
-    Returns the fraction of gold answer tokens that appear in any selected atom's content.
-    No LLM involved — measures whether the right information was retrieved.
-    """
     if not gold_answer or not atoms:
         return 0.0
     gold_tokens = set(str(gold_answer).lower().split())
-    # Strip stopwords that add noise without signal
     stopwords = {"i", "a", "an", "the", "is", "was", "are", "were", "of", "in",
                  "to", "and", "or", "my", "me", "you", "your", "it", "this", "that"}
     gold_tokens -= stopwords
@@ -384,7 +326,6 @@ def _format_retrieval_totals(name: str, totals: dict[str, float]) -> str:
 
 
 def _graph_stats(db: LatticeDB) -> dict:
-    from collections import Counter
     g = db.graph.graph
     node_counts = dict(Counter(d.get("type", "unknown") for _, d in g.nodes(data=True)))
     edge_counts = dict(Counter(d.get("type", "unknown") for _, _, d in g.edges(data=True)))
@@ -397,7 +338,6 @@ def _graph_stats(db: LatticeDB) -> dict:
 
 
 def _ingest_summary(db: LatticeDB) -> dict:
-    from collections import Counter
     all_atoms = db.all()
     kinds = dict(Counter(a.kind for a in all_atoms))
     superseded = sum(1 for a in all_atoms if a.is_superseded)
@@ -414,18 +354,100 @@ def _valid_as_of(atom, as_of: date | None) -> bool:
     )
 
 
-def _run_inference(cfg: dict) -> None:
+def _unload_models(cfg: dict) -> None:
+    ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+    models = {cfg["llm_model"]}
+    synthesis_model = os.environ.get("SYNTHESIS_MODEL")
+    if synthesis_model:
+        models.add(synthesis_model)
+    for m in models:
+        requests.post(f"{ollama_host}/api/generate", json={"model": m, "keep_alive": 0})
+        print(f"Unloaded {m} from GPU.")
+
+
+# ── phase 1: ingest ───────────────────────────────────────────────────────────
+
+
+def _run_ingest(cfg: dict) -> None:
+    """Ingest all questions into per-question lattice dirs. Resumable."""
     out_path = Path(cfg["out"])
-    debug_path = out_path.with_suffix("").with_name(out_path.stem + ".debug.jsonl")
     lattice_root = out_path.with_suffix("").with_name(out_path.stem + ".lattices")
-    reuse_lattice_root = (
-        Path(cfg["reuse_lattice_root"]) if cfg["reuse_lattice_root"] else None
-    )
+    lattice_root.mkdir(parents=True, exist_ok=True)
+
+    os.environ["LLM_PROVIDER"] = cfg["llm_provider"]
+    os.environ["LLM_MODEL"] = cfg["llm_model"]
+
+    print(f"Loading dataset: {cfg['dataset']}")
+    with open(cfg["dataset"]) as f:
+        data = json.load(f)
+
+    sample = _stratify(data, cfg["stratify"], cfg["seed"])
+    type_counts = Counter(q["question_type"] for q in sample)
+    print(f"Stratified sample: {len(sample)} questions")
+    for qtype, count in sorted(type_counts.items()):
+        print(f"  {qtype}: {count}")
+    print(f"Lattice root: {lattice_root}")
+    print()
+
+    n_done = n_skip = 0
+    atoms_total = 0
+
+    with tqdm(total=len(sample), unit="q") as pbar:
+        for item in sample:
+            qid = item["question_id"]
+            qtype = item["question_type"]
+            pbar.set_description(qtype[:24])
+
+            tmpdir = str(lattice_root / qid)
+            db_check = LatticeDB(lattice_dir=tmpdir)
+            if Path(tmpdir).exists() and db_check.all():
+                n_skip += 1
+                pbar.update(1)
+                continue
+
+            shutil.rmtree(tmpdir, ignore_errors=True)
+            Path(tmpdir).mkdir(parents=True, exist_ok=True)
+            db = LatticeDB(lattice_dir=tmpdir)
+
+            sessions = item.get("haystack_sessions", [])
+            session_ids = item.get("haystack_session_ids", [f"s{i}" for i in range(len(sessions))])
+            dates = item.get("haystack_dates", ["" for _ in sessions])
+
+            atoms_created = 0
+            for session, sid, ts in zip(sessions, session_ids, dates):
+                text = format_session(session, sid, ts)
+                result = ingest(
+                    text,
+                    metadata={"source": "conversation", "date": ts, "session_id": sid},
+                    db=db,
+                )
+                atoms_created += result["atoms_created"]
+
+            atoms_total += atoms_created
+            n_done += 1
+            pbar.update(1)
+
+    print(f"\nIngest complete: {n_done} ingested, {n_skip} skipped (resumable)")
+    print(f"Total atoms: {atoms_total}  |  Avg per question: {atoms_total / max(n_done, 1):.1f}")
+    print(f"\nNext — run inference:")
+    print(f"  python -m lattice.eval.run_eval --phase inference --priority {cfg['priority'] or '<priority>'} \\")
+    print(f"    --reuse-lattice-root {lattice_root}")
+
+    _unload_models(cfg)
+
+
+# ── phase 2: inference (select + synthesize) ──────────────────────────────────
+
+
+def _run_inference(cfg: dict) -> None:
+    """Select + synthesize over pre-ingested lattice dirs. Requires --reuse-lattice-root."""
+    reuse_lattice_root = Path(cfg["reuse_lattice_root"])
+    if not reuse_lattice_root.exists():
+        sys.exit(f"ERROR: lattice root not found: {reuse_lattice_root}\nRun --phase ingest first.")
+
+    out_path = Path(cfg["out"])
+    debug_path = out_path.with_name(out_path.stem + ".debug.jsonl")
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    if cfg["keep_lattice_dirs"]:
-        lattice_root.mkdir(parents=True, exist_ok=True)
-    if reuse_lattice_root and not reuse_lattice_root.exists():
-        raise FileNotFoundError(f"reuse lattice root not found: {reuse_lattice_root}")
 
     os.environ["LLM_PROVIDER"] = cfg["llm_provider"]
     os.environ["LLM_MODEL"] = cfg["llm_model"]
@@ -444,7 +466,7 @@ def _run_inference(cfg: dict) -> None:
     print(f"Already done: {len(done_ids)} — will skip")
 
     n_done = n_err = 0
-    atoms_created_total = atoms_selected_total = bm25_candidates_total = 0
+    atoms_selected_total = bm25_candidates_total = 0
     bm25_retrieval_totals = _new_retrieval_totals()
     selected_retrieval_totals = _new_retrieval_totals()
 
@@ -461,67 +483,17 @@ def _run_inference(cfg: dict) -> None:
             qtype = item["question_type"]
             pbar.set_description(qtype[:24])
 
-            if reuse_lattice_root:
-                tmpdir = str(reuse_lattice_root / qid)
-                if not Path(tmpdir).exists():
-                    raise FileNotFoundError(
-                        f"missing reused lattice dir for {qid}: {tmpdir}"
-                    )
-            elif cfg["keep_lattice_dirs"]:
-                tmpdir = str(lattice_root / qid)
-                shutil.rmtree(tmpdir, ignore_errors=True)
-                Path(tmpdir).mkdir(parents=True, exist_ok=True)
-            else:
-                tmpdir = tempfile.mkdtemp(prefix="lattice-eval-")
+            lattice_dir = str(reuse_lattice_root / qid)
+            if not Path(lattice_dir).exists():
+                out_f.write(json.dumps({"question_id": qid, "hypothesis": f"ERROR: missing lattice dir"}) + "\n")
+                out_f.flush()
+                n_err += 1
+                pbar.update(1)
+                continue
+
             try:
-                db = LatticeDB(lattice_dir=tmpdir)
-
-                sessions = item.get("haystack_sessions", [])
-                session_ids = item.get(
-                    "haystack_session_ids", [f"s{i}" for i in range(len(sessions))]
-                )
-                dates = item.get("haystack_dates", ["" for _ in sessions])
-
-                atoms_created = 0
-                duplicates_skipped = 0
-                ingest_results: list[dict] = []
-                all_atoms: list[dict] = []
-
-                if reuse_lattice_root:
-                    db.preload()
-                    atoms_created = len(db.all())
-                else:
-                    for session, sid, ts in zip(sessions, session_ids, dates):
-                        text = format_session(session, sid, ts)
-                        ingest_result = ingest(
-                            text,
-                            metadata={
-                                "source": "conversation",
-                                "date": ts,
-                                "session_id": sid,
-                            },
-                            db=db,
-                        )
-                        atoms_created += ingest_result["atoms_created"]
-                        duplicates_skipped += ingest_result.get("duplicates_skipped", 0)
-                        ingest_results.append(
-                            {
-                                "session_id": sid,
-                                "date": ts,
-                                "source_id": ingest_result.get("source_id"),
-                                "segments_processed": ingest_result.get(
-                                    "segments_processed"
-                                ),
-                                "atoms_created": ingest_result.get("atoms_created"),
-                                "atom_ids": ingest_result.get("atom_ids", []),
-                                "duplicates_skipped": ingest_result.get(
-                                    "duplicates_skipped", 0
-                                ),
-                                "duplicate_atom_ids": ingest_result.get(
-                                    "duplicate_atom_ids", []
-                                ),
-                            }
-                        )
+                db = LatticeDB(lattice_dir=lattice_dir)
+                db.preload()
 
                 question_date_str: str | None = item.get("question_date")
                 as_of: date | None = None
@@ -530,118 +502,72 @@ def _run_inference(cfg: dict) -> None:
                     if dt:
                         as_of = dt.date()
 
-                bm25_atoms = db.search(
-                    item["question"], as_of=as_of, top_k=cfg["top_k"]
-                )
-                bm25_candidates = [
-                    _atom_debug_dict(atom, preview_chars=240) for atom in bm25_atoms
-                ]
+                bm25_atoms = db.search(item["question"], as_of=as_of, top_k=cfg["top_k"])
+                bm25_candidates = [_atom_debug_dict(atom, preview_chars=240) for atom in bm25_atoms]
                 bm25_seed_subjects = [a.subject for a in bm25_atoms]
 
                 if cfg["retrieval_mode"] == "select":
-                    selected = select(
-                        item["question"],
-                        as_of=as_of,
-                        db=db,
-                        top_k=cfg["top_k"],
-                    )
+                    selected = select(item["question"], as_of=as_of, db=db, top_k=cfg["top_k"])
                 elif cfg["retrieval_mode"] == "bm25":
                     selected = [_atom_debug_dict(atom) for atom in bm25_atoms]
                 else:
-                    selected = [
-                        _atom_debug_dict(atom)
-                        for atom in db.all()
-                        if _valid_as_of(atom, as_of)
-                    ]
+                    selected = [_atom_debug_dict(atom) for atom in db.all() if _valid_as_of(atom, as_of)]
 
-                answer_oracle = _answer_turn_summary(item)
                 retrieval_oracle = {
                     "bm25": _session_retrieval_metrics(item, bm25_candidates),
                     "selected": _session_retrieval_metrics(item, selected),
                 }
                 answer_token_recall = _answer_token_recall(item.get("answer", ""), selected)
-
                 synthesis = synthesize(item["question"], selected, query_date=as_of)
 
                 all_atoms = [_atom_debug_dict(a, preview_chars=240) for a in db.all()]
-                reranked_seed_subjects = [a["subject"] for a in selected[:len(bm25_seed_subjects)]]
                 ingest_summary = _ingest_summary(db)
                 session_hit = retrieval_oracle["selected"].get("session_hit", False)
 
-                out_f.write(
-                    json.dumps({"question_id": qid, "hypothesis": synthesis.answer})
-                    + "\n"
-                )
+                out_f.write(json.dumps({"question_id": qid, "hypothesis": synthesis.answer}) + "\n")
                 out_f.flush()
 
-                dbg_f.write(
-                    json.dumps(
-                        {
-                            "question_id": qid,
-                            "question": item["question"],
-                            "gold_answer": item.get("answer", ""),
-                            "question_type": qtype,
-                            "session_hit": session_hit,
-                            "lattice_dir": tmpdir,
-                            "lattice_dir_kept": bool(
-                                cfg["keep_lattice_dirs"] or reuse_lattice_root
-                            ),
-                            "atoms_reused": bool(reuse_lattice_root),
-                            "reuse_lattice_root": (
-                                str(reuse_lattice_root) if reuse_lattice_root else None
-                            ),
-                            "sessions_ingested": len(sessions),
-                            "retrieval_mode": cfg["retrieval_mode"],
-                            "top_k": cfg["top_k"],
-                            "ingest_results": ingest_results,
-                            "atoms_created": atoms_created,
-                            "duplicates_skipped": duplicates_skipped,
-                            "atoms_by_kind": ingest_summary["atoms_by_kind"],
-                            "superseded_count": ingest_summary["superseded_count"],
-                            "atoms": all_atoms,
-                            "answer_oracle": answer_oracle,
-                            "retrieval_oracle": retrieval_oracle,
-                            "answer_token_recall": answer_token_recall,
-                            "bm25_candidates": bm25_candidates,
-                            "bm25_candidate_ids": [
-                                atom["atom_id"] for atom in bm25_candidates
-                            ],
-                            "bm25_seed_subjects": bm25_seed_subjects,
-                            "reranked_seed_subjects": reranked_seed_subjects,
-                            "atoms_selected": [a["atom_id"] for a in selected],
-                            "selected_atoms": selected,
-                            "synthesis_raw": synthesis.raw_response,
-                            "synthesis_tool_calls": synthesis.tool_calls,
-                            "hypothesis": synthesis.answer,
-                            "graph_stats": _graph_stats(db),
-                        }
-                    )
-                    + "\n"
-                )
+                dbg_f.write(json.dumps({
+                    "question_id": qid,
+                    "question": item["question"],
+                    "gold_answer": item.get("answer", ""),
+                    "question_type": qtype,
+                    "session_hit": session_hit,
+                    "lattice_dir": lattice_dir,
+                    "atoms_reused": True,
+                    "reuse_lattice_root": str(reuse_lattice_root),
+                    "sessions_ingested": len(item.get("haystack_sessions", [])),
+                    "retrieval_mode": cfg["retrieval_mode"],
+                    "top_k": cfg["top_k"],
+                    "atoms_created": len(db.all()),
+                    "atoms_by_kind": ingest_summary["atoms_by_kind"],
+                    "superseded_count": ingest_summary["superseded_count"],
+                    "atoms": all_atoms,
+                    "answer_oracle": _answer_turn_summary(item),
+                    "retrieval_oracle": retrieval_oracle,
+                    "answer_token_recall": answer_token_recall,
+                    "bm25_candidates": bm25_candidates,
+                    "bm25_candidate_ids": [a["atom_id"] for a in bm25_candidates],
+                    "bm25_seed_subjects": bm25_seed_subjects,
+                    "atoms_selected": [a["atom_id"] for a in selected],
+                    "selected_atoms": selected,
+                    "synthesis_raw": synthesis.raw_response,
+                    "synthesis_tool_calls": synthesis.tool_calls,
+                    "hypothesis": synthesis.answer,
+                    "graph_stats": _graph_stats(db),
+                }) + "\n")
                 dbg_f.flush()
 
-                atoms_created_total += atoms_created
                 atoms_selected_total += len(selected)
                 bm25_candidates_total += len(bm25_candidates)
-                _add_retrieval_totals(
-                    bm25_retrieval_totals, retrieval_oracle["bm25"]
-                )
-                _add_retrieval_totals(
-                    selected_retrieval_totals, retrieval_oracle["selected"]
-                )
+                _add_retrieval_totals(bm25_retrieval_totals, retrieval_oracle["bm25"])
+                _add_retrieval_totals(selected_retrieval_totals, retrieval_oracle["selected"])
                 n_done += 1
 
             except Exception as exc:
-                out_f.write(
-                    json.dumps({"question_id": qid, "hypothesis": f"ERROR: {exc}"})
-                    + "\n"
-                )
+                out_f.write(json.dumps({"question_id": qid, "hypothesis": f"ERROR: {exc}"}) + "\n")
                 out_f.flush()
                 n_err += 1
-
-            finally:
-                if not cfg["keep_lattice_dirs"] and not reuse_lattice_root:
-                    shutil.rmtree(tmpdir, ignore_errors=True)
 
             pbar.update(1)
 
@@ -649,10 +575,8 @@ def _run_inference(cfg: dict) -> None:
     print(f"  Processed : {n_done}")
     print(f"  Errors    : {n_err}")
     print(f"  Retrieval : {cfg['retrieval_mode']} (top_k={cfg['top_k']})")
-    if reuse_lattice_root:
-        print(f"  Reuse DBs : {reuse_lattice_root}")
+    print(f"  Reuse DBs : {reuse_lattice_root}")
     if n_done:
-        print(f"  Avg atoms created  : {atoms_created_total / n_done:.1f}")
         print(f"  Avg BM25 candidates: {bm25_candidates_total / n_done:.1f}")
         print(f"  Avg atoms selected : {atoms_selected_total / n_done:.1f}")
         print("  Session oracle:")
@@ -660,28 +584,15 @@ def _run_inference(cfg: dict) -> None:
         print(_format_retrieval_totals("Selected", selected_retrieval_totals))
     print(f"  Results   : {out_path}")
     print(f"  Debug     : {debug_path}")
-    if cfg["keep_lattice_dirs"] and not reuse_lattice_root:
-        print(f"  Lattices  : {lattice_root}")
 
-    ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-    models_to_unload = {cfg["llm_model"]}
-    synthesis_model = os.environ.get("SYNTHESIS_MODEL")
-    if synthesis_model:
-        models_to_unload.add(synthesis_model)
-    for m in models_to_unload:
-        requests.post(f"{ollama_host}/api/generate", json={"model": m, "keep_alive": 0})
-        print(f"Unloaded {m} from GPU.")
+    _unload_models(cfg)
 
 
 # ── replay inference (synthesis-only over debug atoms) ───────────────────────
 
 
 def _run_replay_inference(cfg: dict) -> None:
-    """Replay synthesis over atoms from a prior debug file.
-
-    Skips ingest + selection entirely. Useful for isolating whether atom
-    reranking or synthesis changes affect score independent of ingest variance.
-    """
+    """Re-run synthesis over atoms from a prior debug file. Skips ingest + selection."""
     replay_path = Path(cfg["replay_debug"])
     if not replay_path.exists():
         sys.exit(f"ERROR: replay debug file not found: {replay_path}")
@@ -707,7 +618,6 @@ def _run_replay_inference(cfg: dict) -> None:
 
     done_ids = _load_done_ids(out_path)
     rerank = cfg["replay_rerank"]
-    print(f"Replay rerank: {rerank}")
     print(f"Questions in debug: {len(replay_by_id)}, already done: {len(done_ids)}")
 
     n_done = n_err = 0
@@ -745,30 +655,23 @@ def _run_replay_inference(cfg: dict) -> None:
                 answer_token_recall = _answer_token_recall(gold_answer, atoms)
                 synthesis = synthesize(question, atoms, query_date=as_of)
 
-                out_f.write(
-                    json.dumps({"question_id": qid, "hypothesis": synthesis.answer}) + "\n"
-                )
+                out_f.write(json.dumps({"question_id": qid, "hypothesis": synthesis.answer}) + "\n")
                 out_f.flush()
 
-                dbg_f.write(
-                    json.dumps(
-                        {
-                            "question_id": qid,
-                            "question": question,
-                            "gold_answer": gold_answer,
-                            "question_type": qtype,
-                            "replay_source": str(replay_path),
-                            "replay_rerank": rerank,
-                            "atoms_replayed": len(atoms),
-                            "selected_atoms": atoms,
-                            "answer_token_recall": answer_token_recall,
-                            "synthesis_raw": synthesis.raw_response,
-                            "synthesis_tool_calls": synthesis.tool_calls,
-                            "hypothesis": synthesis.answer,
-                        }
-                    )
-                    + "\n"
-                )
+                dbg_f.write(json.dumps({
+                    "question_id": qid,
+                    "question": question,
+                    "gold_answer": gold_answer,
+                    "question_type": qtype,
+                    "replay_source": str(replay_path),
+                    "replay_rerank": rerank,
+                    "atoms_replayed": len(atoms),
+                    "selected_atoms": atoms,
+                    "answer_token_recall": answer_token_recall,
+                    "synthesis_raw": synthesis.raw_response,
+                    "synthesis_tool_calls": synthesis.tool_calls,
+                    "hypothesis": synthesis.answer,
+                }) + "\n")
                 dbg_f.flush()
 
                 atoms_selected_total += len(atoms)
@@ -776,9 +679,7 @@ def _run_replay_inference(cfg: dict) -> None:
                 n_done += 1
 
             except Exception as exc:
-                out_f.write(
-                    json.dumps({"question_id": qid, "hypothesis": f"ERROR: {exc}"}) + "\n"
-                )
+                out_f.write(json.dumps({"question_id": qid, "hypothesis": f"ERROR: {exc}"}) + "\n")
                 out_f.flush()
                 n_err += 1
 
@@ -787,101 +688,16 @@ def _run_replay_inference(cfg: dict) -> None:
     print("\n── Replay inference summary ───────────────────────────────────")
     print(f"  Processed : {n_done}")
     print(f"  Errors    : {n_err}")
-    print(f"  Reranked  : {rerank}")
     if n_done:
-        print(f"  Avg atoms replayed: {atoms_selected_total / n_done:.1f}")
+        print(f"  Avg atoms replayed     : {atoms_selected_total / n_done:.1f}")
         print(f"  Avg answer token recall: {token_recall_total / n_done:.3f}")
     print(f"  Results   : {out_path}")
     print(f"  Debug     : {debug_path}")
 
-    ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-    models_to_unload = {cfg["llm_model"]}
-    synthesis_model = os.environ.get("SYNTHESIS_MODEL")
-    if synthesis_model:
-        models_to_unload.add(synthesis_model)
-    for m in models_to_unload:
-        requests.post(f"{ollama_host}/api/generate", json={"model": m, "keep_alive": 0})
-        print(f"Unloaded {m} from GPU.")
+    _unload_models(cfg)
 
 
-# ── ingest-only phase ────────────────────────────────────────────────────────
-
-
-def _run_ingest_only(cfg: dict) -> None:
-    """Ingest all questions into kept lattice dirs without running synthesis.
-
-    Keeps gemma loaded for the full run; a subsequent --phase inference
-    --reuse-lattice-root <lattice_root> then runs selection+synthesis with
-    qwen loaded once — avoiding per-question model swaps.
-    """
-    out_path = Path(cfg["out"])
-    lattice_root = out_path.with_suffix("").with_name(out_path.stem + ".lattices")
-    lattice_root.mkdir(parents=True, exist_ok=True)
-
-    os.environ["LLM_PROVIDER"] = cfg["llm_provider"]
-    os.environ["LLM_MODEL"] = cfg["llm_model"]
-
-    print(f"Loading dataset: {cfg['dataset']}")
-    with open(cfg["dataset"]) as f:
-        data = json.load(f)
-
-    sample = _stratify(data, cfg["stratify"], cfg["seed"])
-    type_counts = Counter(q["question_type"] for q in sample)
-    print(f"Stratified sample: {len(sample)} questions")
-    for qtype, count in sorted(type_counts.items()):
-        print(f"  {qtype}: {count}")
-    print(f"Lattice root: {lattice_root}")
-    print()
-
-    n_done = n_skip = 0
-    atoms_total = 0
-
-    with tqdm(total=len(sample), unit="q") as pbar:
-        for item in sample:
-            qid = item["question_id"]
-            qtype = item["question_type"]
-            pbar.set_description(qtype[:24])
-
-            tmpdir = str(lattice_root / qid)
-            # Resumable: skip if lattice dir already has atoms
-            db_check = LatticeDB(lattice_dir=tmpdir)
-            if Path(tmpdir).exists() and db_check.all():
-                n_skip += 1
-                pbar.update(1)
-                continue
-
-            shutil.rmtree(tmpdir, ignore_errors=True)
-            Path(tmpdir).mkdir(parents=True, exist_ok=True)
-            db = LatticeDB(lattice_dir=tmpdir)
-
-            sessions = item.get("haystack_sessions", [])
-            session_ids = item.get("haystack_session_ids", [f"s{i}" for i in range(len(sessions))])
-            dates = item.get("haystack_dates", ["" for _ in sessions])
-
-            atoms_created = 0
-            for session, sid, ts in zip(sessions, session_ids, dates):
-                text = format_session(session, sid, ts)
-                result = ingest(
-                    text,
-                    metadata={"source": "conversation", "date": ts, "session_id": sid},
-                    db=db,
-                )
-                atoms_created += result["atoms_created"]
-
-            atoms_total += atoms_created
-            n_done += 1
-            pbar.update(1)
-
-    print(f"\nIngest complete: {n_done} ingested, {n_skip} skipped (already done)")
-    print(f"Total atoms created: {atoms_total}")
-    print(f"Avg atoms/question: {atoms_total / max(n_done, 1):.1f}")
-    print(f"\nNext step — run selection + synthesis:")
-    print(f"  uv run python -m lattice.eval.run_eval \\")
-    print(f"    --phase inference --priority {cfg['priority'] or '<priority>'} \\")
-    print(f"    --reuse-lattice-root {lattice_root}")
-
-
-# ── judge phase ───────────────────────────────────────────────────────────────
+# ── phase 3: judge ────────────────────────────────────────────────────────────
 
 
 def _wait_for_proxy(port: int, timeout: int = 30) -> None:
@@ -907,22 +723,17 @@ def _ensure_model_pulled(model: str) -> None:
 def _run_judge(cfg: dict) -> None:
     out_path = Path(cfg["out"])
     if not out_path.exists():
-        sys.exit(f"ERROR: Results file not found: {out_path}. Run inference first.")
+        sys.exit(f"ERROR: Results file not found: {out_path}. Run --phase inference first.")
 
     evaluate_script = cfg["evaluate_script"]
     if not evaluate_script:
-        sys.exit(
-            "ERROR: EVALUATE_SCRIPT not set. Add path to evaluate_qa.py in .env.eval."
-        )
+        sys.exit("ERROR: EVALUATE_SCRIPT not set. Add path to evaluate_qa.py in .env.eval.")
 
     judge_model = cfg["judge_model"]
     _ensure_model_pulled(judge_model)
 
     ollama_host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
-    env = {
-        **os.environ,
-        "OLLAMA_BASE_URL": f"{ollama_host}/v1",
-    }
+    env = {**os.environ, "OLLAMA_BASE_URL": f"{ollama_host}/v1"}
 
     result_file = str(out_path) + f".eval-results-{judge_model}"
     print(f"Running evaluate_qa.py with judge model: {judge_model}")
@@ -934,25 +745,18 @@ def _run_judge(cfg: dict) -> None:
 
     if Path(result_file).exists():
         print("\n── Scoring summary ────────────────────────────────────────────")
-        for script, args in [
-            (cfg["print_qa_script"], [result_file, cfg["dataset"]]),
-            # (cfg["print_retrieval_script"], [result_file]),
-        ]:
-            if script:
-                out = subprocess.run(
-                    [sys.executable, script, *args],
-                    capture_output=True,
-                    text=True,
-                )
-                if out.stdout:
-                    print(out.stdout, end="")
-                if out.stderr:
-                    print(out.stderr, end="", file=sys.stderr)
+        if cfg["print_qa_script"]:
+            out = subprocess.run(
+                [sys.executable, cfg["print_qa_script"], result_file, cfg["dataset"]],
+                capture_output=True,
+                text=True,
+            )
+            if out.stdout:
+                print(out.stdout, end="")
+            if out.stderr:
+                print(out.stderr, end="", file=sys.stderr)
 
-    requests.post(
-        f"{ollama_host}/api/generate",
-        json={"model": judge_model, "keep_alive": 0},
-    )
+    requests.post(f"{ollama_host}/api/generate", json={"model": judge_model, "keep_alive": 0})
     print(f"Unloaded {judge_model} from GPU.")
 
 
@@ -961,50 +765,25 @@ def _run_judge(cfg: dict) -> None:
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="LongMemEval harness for lattice-mcp")
-    p.add_argument("--phase", choices=["ingest", "inference", "judge", "all"], default="all")
-    p.add_argument(
-        "--priority", default="", help="Iteration label, e.g. baseline, p1, p2"
-    )
+    p.add_argument("--phase", choices=["ingest", "inference", "judge"], required=True,
+                   help="ingest: extract atoms from sessions; inference: select+synthesize; judge: score")
+    p.add_argument("--priority", default="", help="Iteration label, e.g. p18")
     p.add_argument("--dataset", default="")
     p.add_argument("--out", default="", help="Override inference results file path")
     p.add_argument("--log", default="", help="Override log file path")
     p.add_argument("--stratify", type=int, default=0)
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument(
-        "--retrieval-mode",
-        choices=["select", "bm25", "all"],
-        default="",
-        help=(
-            "Selection diagnostic mode: select=BM25+LLM selection, "
-            "bm25=bypass LLM selection, all=bypass retrieval."
-        ),
-    )
-    p.add_argument(
-        "--top-k", type=int, default=0, help="Candidate count for BM25/select"
-    )
+    p.add_argument("--retrieval-mode", choices=["select", "bm25", "all"], default="",
+                   help="select=BM25+graph+LLM (default), bm25=BM25 only, all=no retrieval")
+    p.add_argument("--top-k", type=int, default=0, help="BM25 candidate count (default 20)")
     p.add_argument("--evaluate-script", default="")
     p.add_argument("--print-qa-script", default="")
-    p.add_argument("--print-retrieval-script", default="")
-    p.add_argument(
-        "--keep-lattice-dirs",
-        action="store_true",
-        help="Keep per-question LatticeDB directories so atom markdown files can be inspected.",
-    )
-    p.add_argument(
-        "--reuse-lattice-root",
-        default="",
-        help="Reuse per-question lattice dirs from a previous --keep-lattice-dirs run; skips ingest.",
-    )
-    p.add_argument(
-        "--replay-debug",
-        default="",
-        help="Path to a prior .debug.jsonl file. Skips ingest+selection; replays synthesis over stored atoms.",
-    )
-    p.add_argument(
-        "--replay-rerank",
-        action="store_true",
-        help="When replaying, re-rank atoms by embedding similarity before synthesis.",
-    )
+    p.add_argument("--reuse-lattice-root", default="",
+                   help="Path to lattice dirs from --phase ingest. Required for --phase inference.")
+    p.add_argument("--replay-debug", default="",
+                   help="Path to a prior .debug.jsonl. Skips ingest+selection; re-runs synthesis only.")
+    p.add_argument("--replay-rerank", action="store_true",
+                   help="Re-rank atoms by embedding similarity before replay synthesis.")
     return p.parse_args()
 
 
@@ -1012,7 +791,6 @@ def main() -> None:
     args = _parse_args()
     cfg = _load_config(args)
 
-    # Set up log tee: write to both stdout/stderr and the log file
     log_path = Path(cfg["log"])
     log_path.parent.mkdir(parents=True, exist_ok=True)
     log_f = open(log_path, "w", buffering=1)
@@ -1029,19 +807,21 @@ def main() -> None:
         print(f"Reuse DBs: {cfg['reuse_lattice_root'] or '(none)'}")
         print(f"Out      : {cfg['out']}")
         print(f"Log      : {log_path}")
-        print(f"Keep DBs : {cfg['keep_lattice_dirs']}")
         print()
 
         if args.phase == "ingest":
-            _run_ingest_only(cfg)
-
-        if args.phase in ("inference", "all"):
+            _run_ingest(cfg)
+        elif args.phase == "inference":
             if cfg["replay_debug"]:
                 _run_replay_inference(cfg)
+            elif not cfg["reuse_lattice_root"]:
+                sys.exit(
+                    "ERROR: --phase inference requires --reuse-lattice-root.\n"
+                    "Run --phase ingest first to build lattice dirs."
+                )
             else:
                 _run_inference(cfg)
-
-        if args.phase in ("judge", "all"):
+        elif args.phase == "judge":
             _run_judge(cfg)
     finally:
         sys.stdout = sys.__stdout__
