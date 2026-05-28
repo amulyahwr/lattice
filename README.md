@@ -19,10 +19,12 @@ Set via environment variables:
 | Variable | Default | Description |
 |---|---|---|
 | `LLM_PROVIDER` | `anthropic` | `anthropic` \| `openai` \| `ollama` |
-| `LLM_MODEL` | `claude-sonnet-4-6` | Model ID for ingest + selection |
+| `LLM_MODEL` | `claude-sonnet-4-6` | Base model ID (ingest + selection fallback) |
 | `LLM_API_KEY` | — | API key (not required for Ollama) |
 | `LATTICE_DIR` | `./lattice` | Directory where atoms are stored |
+| `INGEST_MODEL` | _(LLM_MODEL)_ | Override model for ingest only |
 | `SYNTHESIS_MODEL` | _(LLM_MODEL)_ | Override model for synthesis only |
+| `SELECTION_MODEL` | _(LLM_MODEL)_ | Override model for selection agent (ollama/openai only) |
 
 ## Claude Code
 

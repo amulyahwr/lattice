@@ -223,7 +223,10 @@ class TestSelect:
         result = select("price", as_of=date(2024, 6, 1), db=db)
         assert all(r["atom_id"] != expired.atom_id for r in result)
 
-    def test_expands_same_segment_pack(self, db):
+    def test_expands_via_semantic_and_segment_edges(self, db):
+        """Hybrid BFS: same-segment siblings included (structural depth 2);
+        cross-segment atoms included via same_subject_as (semantic);
+        cross-source atoms excluded unless connected by semantic edge."""
         from lattice.models import Atom
         seed = Atom(
             kind="fact", source="user", subject="Python",
@@ -231,19 +234,72 @@ class TestSelect:
             source_id="src-1", session_id="sess-1", segment_id="seg-1",
             source_span={"start": 100, "end": 130},
         )
-        sibling = Atom(
+        # Same segment — included via structural depth-2 expansion
+        same_segment = Atom(
             kind="fact", source="user", subject="Python testing",
             content="Pytest fixtures help test Python code.",
             source_id="src-1", session_id="sess-1", segment_id="seg-1",
             source_span={"start": 131, "end": 180},
         )
+        # Same subject, different segment — included via same_subject_as
+        same_subject = Atom(
+            kind="fact", source="user", subject="Python",
+            content="Python decorators wrap functions at definition time.",
+            source_id="src-1", session_id="sess-1", segment_id="seg-2",
+            source_span={"start": 200, "end": 250},
+        )
+        # Different source, no semantic connection — excluded
+        unrelated = Atom(
+            kind="fact", source="user", subject="JavaScript",
+            content="JavaScript uses arrow functions.",
+            source_id="src-2", session_id="sess-2", segment_id="seg-3",
+            source_span={"start": 0, "end": 50},
+        )
         db.write(seed)
-        db.write(sibling)
+        db.write(same_segment)
+        db.write(same_subject)
+        db.write(unrelated)
 
         result = select("decorators", db=db, top_k=1)
         ids = [row["atom_id"] for row in result]
         assert seed.atom_id in ids
-        assert sibling.atom_id in ids
+        assert same_segment.atom_id in ids    # co-located in same segment — included
+        assert same_subject.atom_id in ids    # semantic neighbor — included
+        assert unrelated.atom_id not in ids   # different source, no connection — excluded
+
+    def test_single_session_triggers_pointed_path(self, db):
+        """All probe seeds from one session → pointed path → atom count ≤ _POINTED_MAX."""
+        from lattice.models import Atom
+        from lattice.selection import _POINTED_MAX
+        for i in range(20):
+            db.write(Atom(
+                kind="fact", source="user", subject=f"widget {i}",
+                content=f"Widget {i} is a component.",
+                session_id="sess-single",
+            ))
+        result = select("widget component", db=db)
+        assert len(result) <= _POINTED_MAX
+
+    def test_multi_session_triggers_expansion_path(self, db):
+        """Probe seeds from multiple sessions → expansion path → atoms from all sessions returned."""
+        from lattice.models import Atom
+        # 3 atoms in sess-A + 4 in sess-B = 7 total, all match query → probe has both sessions
+        ids_a, ids_b = [], []
+        for i in range(3):
+            a = Atom(kind="fact", source="user", subject=f"gadget {i}",
+                     content=f"Gadget {i} is a device.", session_id="sess-A")
+            db.write(a)
+            ids_a.append(a.atom_id)
+        for i in range(4):
+            b = Atom(kind="fact", source="user", subject=f"gadget {i} alt",
+                     content=f"Gadget {i} alt is a device.", session_id="sess-B")
+            db.write(b)
+            ids_b.append(b.atom_id)
+
+        result = select("gadget device", db=db)
+        result_ids = {r["atom_id"] for r in result}
+        assert any(aid in result_ids for aid in ids_a)
+        assert any(aid in result_ids for aid in ids_b)
 
 
 # ── synthesis ─────────────────────────────────────────────────────────────────

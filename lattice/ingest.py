@@ -48,9 +48,14 @@ e.g. "Project Alpha deadline", "auth module", "database schema", "deployment pro
 otherwise infer: "document" for prose/notes/docs, "code" for code snippets, "conversation" for chat logs
 
 Subject naming rules:
-  - Use the most general term that still uniquely identifies the topic.
-  - Use CONSISTENT subject phrasing across atoms — e.g. always "auth module" not sometimes "authentication" \
-or "auth system". Consistent subjects enable supersession when the same fact is updated later.
+  - Use a SHORT SHARED TOPIC LABEL — 1 to 3 words. The subject is a retrieval key, not a summary.
+  - Multiple atoms about the same topic MUST share the same subject string. Two atoms about hiking \
+should both have subject "hiking", not "PCT hike" and "weekend trail run".
+  - Prefer BROAD over SPECIFIC: "hiking" not "hike on Pacific Crest Trail last Tuesday". \
+"cooking" not "pasta recipe attempt". "gym routine" not "leg day at the gym". \
+"travel" not "flight to Denver for conference". "home improvement" not "bathroom tile replacement".
+  - Atoms from different conversations that cover the same topic should produce the SAME subject, \
+enabling them to cluster together for retrieval.
   - valid_from / valid_until: only set if the text explicitly implies temporal bounds (e.g. "valid until end of Q2", \
 "starting next Monday"). Otherwise null.
   - Resolve relative dates (e.g. "last Tuesday", "next month") to ISO 8601 (YYYY-MM-DD) using today's date.
@@ -83,6 +88,27 @@ tips that apply to anyone regardless of who they are.
   - Preserve explicit dates verbatim in atom content (e.g. "on January 10th", "on March 3rd"). \
 Do not drop them. When the user says "today", "this morning", or "tonight", replace with the ISO \
 date provided in "Today's date:" at the top of this prompt.
+
+Subject examples for chat — note how broad subjects cluster across conversations:
+  User: "I went hiking on the Pacific Crest Trail last weekend."
+  → subject: "hiking"  ✓      NOT: "PCT hike last weekend"  ✗
+
+  User: "I attended a baking class at the community center."
+  → subject: "baking"  ✓      NOT: "community center baking class attendance"  ✗
+
+  User: "I signed up for a gym membership at Planet Fitness."
+  → subject: "gym"  ✓         NOT: "Planet Fitness membership signup"  ✗
+
+  User: "I've been struggling with lower back pain lately."
+  → subject: "health"  ✓      NOT: "lower back pain issue"  ✗
+
+  User: "I bought a new couch for the living room."
+  → subject: "home furnishings"  ✓   NOT: "living room couch purchase"  ✗
+
+  User: "I'm planning a trip to Japan in April."
+  → subject: "travel"  ✓      NOT: "Japan trip planning for April"  ✗
+
+The same broad subject should appear on atoms from multiple conversations. That is the goal.
 """
 
 _MARKDOWN_ADDENDUM = """\
@@ -263,7 +289,8 @@ def _extract_atoms(segment: _Segment, metadata: dict, ref: datetime) -> list[dic
             "content": f"Today's date: {ref.date().isoformat()}\n\n---\n\n{text}",
         },
     ]
-    raw = complete(messages, text_format=_AtomList)
+    ingest_model = os.environ.get("INGEST_MODEL") or None
+    raw = complete(messages, text_format=_AtomList, model=ingest_model)
     atoms_data: list[dict] = json.loads(raw)["atoms"]
 
     source_override = metadata.get("source")
@@ -299,7 +326,8 @@ def _detect_supersession(db: LatticeDB, new_atom: Atom) -> str | None:
                 ),
             },
         ]
-        raw = complete(messages, text_format=_SupersessionResult)
+        ingest_model = os.environ.get("INGEST_MODEL") or None
+        raw = complete(messages, text_format=_SupersessionResult, model=ingest_model)
         superseded_id = json.loads(raw).get("superseded_atom_id")
         if not superseded_id:
             return None
@@ -334,7 +362,8 @@ def _detect_supersession(db: LatticeDB, new_atom: Atom) -> str | None:
             ),
         },
     ]
-    raw = complete(messages, text_format=_SupersessionResult)
+    ingest_model = os.environ.get("INGEST_MODEL") or None
+    raw = complete(messages, text_format=_SupersessionResult, model=ingest_model)
     superseded_id = json.loads(raw).get("superseded_atom_id")
     if not superseded_id:
         return None
