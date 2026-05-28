@@ -24,7 +24,8 @@ Set via environment variables:
 | `LATTICE_DIR` | `./lattice` | Directory where atoms are stored |
 | `INGEST_MODEL` | _(LLM_MODEL)_ | Override model for ingest only |
 | `SYNTHESIS_MODEL` | _(LLM_MODEL)_ | Override model for synthesis only |
-| `SELECTION_MODEL` | _(LLM_MODEL)_ | Override model for selection agent (ollama/openai only) |
+| `SELECTION_MODEL` | _(LLM_MODEL)_ | Override model for selection LLM filter (ollama/openai only) |
+| `SELECTION_NUM_CTX` | `8192` | Context window for selection filter calls (ollama only) |
 
 ## Claude Code
 

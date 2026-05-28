@@ -60,22 +60,26 @@ lattice_select(query, as_of)
         │                             (tunable via LATTICE_RECOMMENDATION_CAP);
         │                             kind fallback: if primary_kind absent, scan all
         │
-        └── retrieval_mode=agent ────────────────────────────────────────────
+        └── retrieval_mode=llm_filter ───────────────────────────────────────
                  │
                  ▼
-            Query intent     parse_query() detects shape (temporal/preference/
-                             recommendation/factual) → query_type_hint string
+            select()         BM25 + session probe + graph BFS → candidate atoms
                  │
                  ▼
-            Agent loop       up to 4 rounds; model from SELECTION_MODEL env var
-              tools:
-                search(query, top_k)          → BM25 search, accumulate atom_ids
-                expand(atom_ids, depth, max)  → graph BFS from seeds, accumulate
-                finish(atom_ids)              → return final set (safety net: if
-                                               <5 atoms selected, use all accumulated)
+            Coarse LLM filter   subject + kind + observed_at only (~600 tokens);
+                                _AtomSelectionCoarse: n_selected ge=8 le=25,
+                                atom_ids min_length=8 max_length=25 (grammar-enforced);
+                                up to 2 retries; fallback to candidates[:20]
                  │
                  ▼
-            Recommendation cap + temporal filter applied to final atom set
+            Fine LLM filter     full content (~1800 tokens);
+                                _AtomSelectionFine: n_selected ge=5 le=15,
+                                atom_ids min_length=5 max_length=15 (grammar-enforced);
+                                up to 2 retries; fallback to coarse shortlist if <5 valid
+                 │
+                 ▼
+            FilterResult(atoms, debug)   debug: n_candidates, n_coarse, n_fine,
+                                         coarse_fallback, fine_fallback
         │
         ▼
    Return atom dicts     with full provenance fields (SelectionResult wrapper for agent mode)
@@ -107,7 +111,7 @@ lattice_answer(query, atom_ids?, as_of)
 | `lattice/util.py` | Shared low-level helpers: `_normalized_subject()`, `_write_json_atomic()`. |
 | `lattice/parsers/` | Source-aware segmentation. `infer_source_type()` detects chat/markdown/code. `parse()` returns `list[Segment]` (frozen dataclass with `text`, `role`, `source_type`, `context`, `start`, `end`). `chat.py` handles windowed turn parsing with role tagging. `markdown.py` splits on headings. |
 | `lattice/ingest.py` | Segments source via `parsers/` → LLM extracts atoms per segment → dedup + supersession check → write to DB. |
-| `lattice/selection.py` | Two retrieval paths: (1) `select()` — BM25 pre-filter → session-diversity probe (pointed vs expansion path) → graph BFS → collapse superseded/duplicates → recommendation cap → kind fallback. (2) `select_agent()` — LLM agent loop with search/expand/finish tools; query-type hints from `parse_query()`; safety net fallback; returns `SelectionResult(atoms, agent_tool_calls)`. Model from `SELECTION_MODEL` env var. Falls back to `evidence_pack()` if graph is empty. |
+| `lattice/selection.py` | Two retrieval paths: (1) `select()` — BM25 pre-filter → session-diversity probe (pointed vs expansion path) → graph BFS → collapse superseded/duplicates → recommendation cap → kind fallback. (2) `select_llm_filter()` — `select()` for retrieval, then two-stage LLM filter: coarse (subject+kind, Pydantic `_AtomSelectionCoarse` ge=8 le=25) → fine (full content, `_AtomSelectionFine` ge=5 le=15); Pydantic constraints enforced at grammar level; falls back to previous stage on failure; returns `FilterResult(atoms, debug)`. Model from `SELECTION_MODEL` env var, context window from `SELECTION_NUM_CTX`. Falls back to `evidence_pack()` if graph is empty. |
 | `lattice/query.py` | `parse_query()` — detect query shape (`temporal`/`preference`/`recommendation`/`factual`) and `primary_kind` from question text. Returns `QueryIntent`. Used by both `select()` and `select_agent()`. |
 | `lattice/synthesis.py` | Tool-calling agent using raw OpenAI-compat SDK. Model read from `SYNTHESIS_MODEL` env var (falls back to `LLM_MODEL`). Exposes `date_diff` (date arithmetic) and `sum_numbers` (numeric aggregation) tools. Returns `SynthesisResult(answer, raw_response, tool_calls)`. Supports `ollama` and `openai` providers. |
 | `lattice/llm.py` | Thin litellm wrapper. Single `complete(messages) → str` interface. Used by ingest, selection, and supersession — not synthesis. Reads `LLM_PROVIDER` / `LLM_MODEL` / `LLM_API_KEY` from env. |
@@ -193,6 +197,6 @@ LATTICE_DIR/
 
 ## Roadmap Direction
 
-Current state (p22-agent, 73% / 75.1% task-avg LongMemEval): structured `parsers/` layer → LLM extraction with proper-noun assistant-turn rule → fuzzy supersession via rapidfuzz → BM25 seeds → session-diversity probe (pointed/expansion paths) → graph BFS expansion → recommendation cap → collapse superseded/duplicates → synthesis agent (`SYNTHESIS_MODEL`) with date_diff + sum_numbers tools. Optional: `select_agent()` LLM-driven retrieval with search/expand/finish tools (`SELECTION_MODEL`).
+Current state (p24-llmfilter, 76% / 79.9% task-avg LongMemEval): structured `parsers/` layer → LLM extraction with proper-noun assistant-turn rule → fuzzy supersession via rapidfuzz → BM25 seeds → session-diversity probe (pointed/expansion paths) → graph BFS expansion → recommendation cap → collapse superseded/duplicates → two-stage LLM filter (`select_llm_filter()`, `SELECTION_MODEL`, `SELECTION_NUM_CTX`) → synthesis agent (`SYNTHESIS_MODEL`) with date_diff + sum_numbers tools.
 
-Next: intent-gated auto-expand in `select_agent()` (force expand for knowledge-update and multi-session queries in code, not relying on LLM decision); dense seed augmentation (P16) to address BM25 vocabulary mismatch. Full roadmap in `lattice/eval/PRIORITIES.md`.
+Next: multi-session aggregation — fine filter cuts atoms needed for counting totals; fix candidate is skipping fine stage for detected "how many / total" queries. Dense seed augmentation (P16) to address BM25 vocabulary mismatch. Full roadmap in `lattice/eval/PRIORITIES.md`.

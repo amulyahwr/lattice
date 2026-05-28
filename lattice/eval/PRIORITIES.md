@@ -61,16 +61,16 @@ LongMemEval is used to measure whether product changes improve retrieval and ans
 
 Current baseline:
 
-- **73% accuracy / 75.1% task-avg** (p22-agent, fresh ingest, qwen3.5:4b synthesis + selection agent), 100 questions
-- inference: `qwen3-8b-ingest` (ingest) + `qwen3.5:4b` (select agent + synthesis)
+- **76% accuracy / 79.9% task-avg** (p24-llmfilter, reused p21 lattice dirs, qwen3.5:4b two-stage LLM filter + synthesis), 100 questions
+- inference: `qwen3-8b-ingest` (ingest) + `qwen3.5:4b` (selection filter + synthesis)
 - judge: `phi4-mini-judge` (phi4-mini with num_ctx=4096 Modelfile)
 - harness: `longmemeval_oracle`
-- lattice dirs: `results/p22-agent/` (kept — qwen-ingested, 33 atoms/session — reuse for selection/synthesis experiments)
-- previous baseline: p19, 73% overall / 72.5% task-avg, lattice dirs at `results/p19/`
+- lattice dirs: `results/p21-broad-subjects/` (reused — qwen-ingested, 33 atoms/session)
+- previous baseline: p22-agent, 73% overall / 75.1% task-avg
 
 Note: switched ingest model to `qwen3-8b-ingest` after p19/p19-replay experiments. qwen extracts ~33 atoms/session vs gemma's ~18, improving coverage but requiring stronger selection filtering. p19-replay (same atoms, fresh synthesis) scored 72% — confirms atom set is stable, category swings in p19 vs p18 were synthesis variance. Selection is the next bottleneck.
 
-Note: p22-agent 100% single-session-assistant is the best result on that category. The agent's `finish` tool consistently selects the right atoms for single-session queries. Multi-session and knowledge-update are the remaining bottlenecks — the LLM skips `expand` 74% of the time even when query type hints mandate it; next step is intent-gated auto-expand in code.
+Note: p24-llmfilter 100% single-session-assistant matches p22-agent. Two-stage LLM filter with Pydantic grammar constraints achieves 0/100 fallbacks and avg 8.6 fine atoms. Multi-session aggregation is the remaining ceiling: 13/27 failures are counting/total questions where fine filter cuts atoms needed for full enumeration (e.g. 92 total_selected → fine=7). Fix candidate: skip fine filter for detected aggregation queries, or raise fine min to all coarse atoms for "how many / total" query shapes.
 
 Note: the original P9 run scored 69% — a lucky ingest run. A fresh ingest with identical code gives 62%. Ingest non-determinism produces ~7pp overall variance and up to 19pp on individual categories.
 
@@ -133,19 +133,21 @@ Evaluation method:
 | p19-replay | Replay synthesis over fixed p19 qwen atoms (reuse-lattice-root) | **72.0% (phi4)** | Isolates synthesis variance from ingest. single-session-assistant +27pp (63.6→90.9%), temporal same (76.9%). multi-session -11pp (63→51.9%), knowledge-update -19pp (100→81.25%). Category swings across p19 fresh vs p19-replay as large as p18 vs p19 — confirms p19 category shifts were synthesis variance. qwen atom set stable; selection is the bottleneck at 29 avg atoms passed to synthesis. Lattice dirs kept at results/p19/...lattices/ as new canonical baseline for selection/synthesis experiments. |
 | p21-broad-subjects | Broad topic hubs: inject general subject labels ("hiking", "cooking") alongside specific subjects to create `same_subject_as` edges across sessions | **67.0% (phi4)** | -6pp regression. task-avg 69.4%. multi-session -15pp (63→48.2%) — broad subjects over-connect atoms from unrelated queries, flooding synthesis with cross-session noise. single-session-assistant +18pp (63.6→81.8%) — accidentally helps by adding subject edges within a session. Confirmed: broad same_subject_as edges hurt precision more than they help recall. |
 | p22-agent | LLM-driven selection agent: search/expand/finish tools with query-type hints; safety net fallback when agent under-retrieves | **73.0% (phi4)** | task-avg **75.1% (best)**. single-session-assistant 100% (+36pp vs p19), temporal 84.6% (+20pp). multi-session 51.9% (-11pp vs p19) — agent under-uses expand (74% of queries: search→finish without expand). knowledge-update 68.75% (-31pp vs p19) — same cause. `SELECTION_MODEL=qwen3.5:4b`. Retrieval mode `--retrieval-mode agent` in run_eval. |
+| p23-autoexpand | Intent-gated auto-expand in `select_agent()`: force `expand` call in code for knowledge-update and preference queries | **69.0% (phi4)** | -4pp regression. Keyword triggers in `_needs_expand` fired for ALL preference queries including single-session → flooded synthesis with cross-session atoms. session_id diversity gate considered but rejected (LongMemEval-specific). Agent formulation abandoned. |
+| p24-llmfilter | Replace `select_agent()` with two-stage LLM filter: BM25+BFS retrieval → coarse LLM filter (subject+kind, picks 8–25) → fine LLM filter (full content, picks 5–15). Pydantic structured output with Field range constraints enforced at grammar level. `SELECTION_NUM_CTX=8192`. | **76.0% (phi4)** | task-avg **79.9% (new best)**. +3pp vs p22-agent overall, +4.9pp task-avg. knowledge-update +12.5pp (68.75%→81.25%), preference +16.7pp, temporal +7.7pp. multi-session flat (51.9%). 0/100 fallbacks; fine filter avg 8.6 atoms. Remaining failures: multi-session aggregation (13 fails — fine filter cuts atoms needed for counting totals), 2–3 ingest misses (TV size/bike count not extracted), 3 knowledge-update (conflicting same-date atoms), 4 temporal (date arithmetic). |
 
 ## Category Tracker
 
 Note: p1–p6-graph used `qwen3.5:4b` judge. p7+ use `phi4-mini-judge`. p9-base onward use fixed atoms (reused lattice dirs) — category variance reflects synthesis noise only. p10-5+ use qwen3.5:4b synthesis. p19+ use qwen3-8b-ingest.
 
-| Category | p9-base | p10-5c (qwen synth) | p12-5b | p17 | p18 | p19 (qwen ingest) | p19-replay | p21-broad | p22-agent |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| overall | 62.0% | **76.0%** | 78.0% | **79.0%** | 73.0% | 73.0% | 72.0% | 67.0% | 73.0% |
-| task-avg | 60.7% | **76.0%** | 76.1% | **78.9%** | 75.3% | 72.5% | 72.8% | 69.4% | **75.1%** |
-| single-session-user | 64.3% | **85.7%** | 92.9% | 92.9% | 78.6% | **92.9%** | 85.7% | 71.4% | 78.6% |
-| single-session-preference | 50.0% | **66.7%** | 66.7% | 66.7% | **83.3%** | 50.0% | 50.0% | **66.7%** | **66.7%** |
-| single-session-assistant | 45.5% | 63.6% | 54.5% | **72.7%** | 63.6% | 63.6% | **90.9%** | 81.8% | **100%** |
-| multi-session | 55.6% | 66.7% | 70.4% | 70.4% | 59.3% | **63.0%** | 51.9% | 48.2% | 51.9% |
-| temporal-reasoning | 61.5% | 73.1% | **84.6%** | 76.9% | 73.1% | 65.4% | **76.9%** | 73.1% | **84.6%** |
-| knowledge-update | 87.5% | **100%** | 87.5% | 93.75% | 93.75% | **100%** | 81.25% | 75.0% | 68.75% |
-| abstention | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** |
+| Category | p9-base | p10-5c (qwen synth) | p12-5b | p17 | p18 | p19 (qwen ingest) | p19-replay | p21-broad | p22-agent | p23-autoexpand | p24-llmfilter |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| overall | 62.0% | **76.0%** | 78.0% | **79.0%** | 73.0% | 73.0% | 72.0% | 67.0% | 73.0% | 69.0% | **76.0%** |
+| task-avg | 60.7% | **76.0%** | 76.1% | **78.9%** | 75.3% | 72.5% | 72.8% | 69.4% | **75.1%** | — | **79.9%** |
+| single-session-user | 64.3% | **85.7%** | 92.9% | 92.9% | 78.6% | **92.9%** | 85.7% | 71.4% | 78.6% | — | 78.6% |
+| single-session-preference | 50.0% | **66.7%** | 66.7% | 66.7% | **83.3%** | 50.0% | 50.0% | **66.7%** | **66.7%** | — | **83.3%** |
+| single-session-assistant | 45.5% | 63.6% | 54.5% | **72.7%** | 63.6% | 63.6% | **90.9%** | 81.8% | **100%** | — | **100%** |
+| multi-session | 55.6% | 66.7% | 70.4% | 70.4% | 59.3% | **63.0%** | 51.9% | 48.2% | 51.9% | — | 51.9% |
+| temporal-reasoning | 61.5% | 73.1% | **84.6%** | 76.9% | 73.1% | 65.4% | **76.9%** | 73.1% | **84.6%** | — | **84.6%** |
+| knowledge-update | 87.5% | **100%** | 87.5% | 93.75% | 93.75% | **100%** | 81.25% | 75.0% | 68.75% | — | 81.25% |
+| abstention | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** | — | **100%** |
