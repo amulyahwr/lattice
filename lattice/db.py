@@ -168,6 +168,9 @@ class LatticeDB:
                 result.append(a.subject)
         return result
 
+    def list_by_kind(self, kind: str, as_of: date | None = None) -> list[Atom]:
+        return [a for a in self._valid_atoms(as_of=as_of) if a.kind == kind]
+
     # ── supersession ──────────────────────────────────────────────────────
 
     def supersede(self, old_id: str, new_atom: Atom) -> None:

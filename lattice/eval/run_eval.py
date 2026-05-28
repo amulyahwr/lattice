@@ -3,7 +3,7 @@ LongMemEval evaluation harness for lattice-mcp.
 
 Three independent phases — run them in order:
 
-    # 1. Ingest: load gemma once, ingest all 100 questions, save lattice dirs
+    # 1. Ingest all 100 questions, save lattice dirs
     python -m lattice.eval.run_eval --phase ingest --priority p18
 
     # 2. Inference: load qwen once, run select+synthesize over saved lattice dirs
@@ -49,7 +49,7 @@ from lattice.db import LatticeDB
 from lattice.embed import rerank_atom_dicts
 from lattice.eval.session_formatter import format_session
 from lattice.ingest import _parse_datetime, ingest
-from lattice.selection import select
+from lattice.selection import select, select_agent
 from lattice.synthesis import synthesize
 
 # ── config ────────────────────────────────────────────────────────────────────
@@ -78,12 +78,13 @@ def _default_out(llm_model: str, dataset: str, priority: str, retrieval_mode: st
     return f"{_results_dir(priority)}/{_slug(llm_model)}_{ds}{suffix}.jsonl"
 
 
-def _default_log(llm_model: str, judge_model: str, dataset: str, phase: str, priority: str, retrieval_mode: str = "select") -> str:
+def _default_log(llm_model: str, judge_model: str, dataset: str, phase: str, priority: str, retrieval_mode: str = "select", ingest_model: str = "") -> str:
     ds = Path(dataset).stem
     base = _logs_dir(priority)
     mode = "" if retrieval_mode == "select" else f"_{retrieval_mode}"
     if phase == "ingest":
-        name = f"run_{_slug(llm_model)}_{ds}{mode}_ingest.log"
+        ingest_slug = _slug(ingest_model) if ingest_model else _slug(llm_model)
+        name = f"run_{ingest_slug}_{ds}{mode}_ingest.log"
     elif phase == "inference":
         name = f"run_{_slug(llm_model)}_{ds}{mode}_inference.log"
     elif phase == "judge":
@@ -111,18 +112,19 @@ class _Tee:
 
 def _load_config(args: argparse.Namespace) -> dict:
     load_dotenv(".env.eval", override=False)
-    model = os.environ.get("LLM_MODEL", "gemma4:e4b")
+    model = os.environ.get("LLM_MODEL", "qwen3.5:4b")
+    ingest_model = os.environ.get("INGEST_MODEL", "")
     judge = os.environ.get("JUDGE_MODEL", "qwen3.5:4b")
     dataset = args.dataset or os.environ.get("DATASET", _DEFAULT_DATASET)
     phase = args.phase
     priority = args.priority or os.environ.get("PRIORITY", "")
     retrieval_mode = args.retrieval_mode or os.environ.get("RETRIEVAL_MODE", "select")
-    if retrieval_mode not in {"select", "bm25", "all"}:
-        raise ValueError("RETRIEVAL_MODE must be one of: select, bm25, all")
+    if retrieval_mode not in {"select", "bm25", "all", "agent"}:
+        raise ValueError("RETRIEVAL_MODE must be one of: select, bm25, all, agent")
     return {
         "dataset": dataset,
         "out": args.out or os.environ.get("OUT", _default_out(model, dataset, priority, retrieval_mode)),
-        "log": args.log or os.environ.get("LOG", _default_log(model, judge, dataset, phase, priority, retrieval_mode)),
+        "log": args.log or os.environ.get("LOG", _default_log(model, judge, dataset, phase, priority, retrieval_mode, ingest_model)),
         "priority": priority,
         "stratify": args.stratify or int(os.environ.get("STRATIFY", "100")),
         "seed": args.seed or int(os.environ.get("SEED", "42")),
@@ -130,6 +132,7 @@ def _load_config(args: argparse.Namespace) -> dict:
         "top_k": args.top_k or int(os.environ.get("TOP_K", "20")),
         "llm_provider": os.environ.get("LLM_PROVIDER", "ollama"),
         "llm_model": model,
+        "ingest_model": ingest_model,
         "judge_model": judge,
         "evaluate_script": args.evaluate_script or os.environ.get("EVALUATE_SCRIPT", ""),
         "print_qa_script": args.print_qa_script or os.environ.get("PRINT_QA_SCRIPT", ""),
@@ -504,10 +507,14 @@ def _run_inference(cfg: dict) -> None:
 
                 bm25_atoms = db.search(item["question"], as_of=as_of, top_k=cfg["top_k"])
                 bm25_candidates = [_atom_debug_dict(atom, preview_chars=240) for atom in bm25_atoms]
-                bm25_seed_subjects = [a.subject for a in bm25_atoms]
 
+                selection_tool_calls: list[dict] = []
                 if cfg["retrieval_mode"] == "select":
                     selected = select(item["question"], as_of=as_of, db=db, top_k=cfg["top_k"])
+                elif cfg["retrieval_mode"] == "agent":
+                    agent_result = select_agent(item["question"], as_of=as_of, db=db, top_k=cfg["top_k"])
+                    selected = agent_result.atoms
+                    selection_tool_calls = agent_result.agent_tool_calls
                 elif cfg["retrieval_mode"] == "bm25":
                     selected = [_atom_debug_dict(atom) for atom in bm25_atoms]
                 else:
@@ -523,6 +530,8 @@ def _run_inference(cfg: dict) -> None:
                 all_atoms = [_atom_debug_dict(a, preview_chars=240) for a in db.all()]
                 ingest_summary = _ingest_summary(db)
                 session_hit = retrieval_oracle["selected"].get("session_hit", False)
+                atom_count_total = len(db.all())
+                atom_count_active = atom_count_total - ingest_summary["superseded_count"]
 
                 out_f.write(json.dumps({"question_id": qid, "hypothesis": synthesis.answer}) + "\n")
                 out_f.flush()
@@ -534,12 +543,12 @@ def _run_inference(cfg: dict) -> None:
                     "question_type": qtype,
                     "session_hit": session_hit,
                     "lattice_dir": lattice_dir,
-                    "atoms_reused": True,
                     "reuse_lattice_root": str(reuse_lattice_root),
                     "sessions_ingested": len(item.get("haystack_sessions", [])),
                     "retrieval_mode": cfg["retrieval_mode"],
                     "top_k": cfg["top_k"],
-                    "atoms_created": len(db.all()),
+                    "atom_count_total": atom_count_total,
+                    "atom_count_active": atom_count_active,
                     "atoms_by_kind": ingest_summary["atoms_by_kind"],
                     "superseded_count": ingest_summary["superseded_count"],
                     "atoms": all_atoms,
@@ -547,10 +556,8 @@ def _run_inference(cfg: dict) -> None:
                     "retrieval_oracle": retrieval_oracle,
                     "answer_token_recall": answer_token_recall,
                     "bm25_candidates": bm25_candidates,
-                    "bm25_candidate_ids": [a["atom_id"] for a in bm25_candidates],
-                    "bm25_seed_subjects": bm25_seed_subjects,
-                    "atoms_selected": [a["atom_id"] for a in selected],
                     "selected_atoms": selected,
+                    "selection_tool_calls": selection_tool_calls,
                     "synthesis_raw": synthesis.raw_response,
                     "synthesis_tool_calls": synthesis.tool_calls,
                     "hypothesis": synthesis.answer,
@@ -773,7 +780,7 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--log", default="", help="Override log file path")
     p.add_argument("--stratify", type=int, default=0)
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--retrieval-mode", choices=["select", "bm25", "all"], default="",
+    p.add_argument("--retrieval-mode", choices=["select", "bm25", "all", "agent"], default="",
                    help="select=BM25+graph+LLM (default), bm25=BM25 only, all=no retrieval")
     p.add_argument("--top-k", type=int, default=0, help="BM25 candidate count (default 20)")
     p.add_argument("--evaluate-script", default="")
@@ -801,6 +808,8 @@ def main() -> None:
         print(f"Priority : {cfg['priority'] or '(none)'}")
         print(f"Phase    : {args.phase}")
         print(f"LLM      : {cfg['llm_model']}")
+        if cfg.get("ingest_model"):
+            print(f"Ingest   : {cfg['ingest_model']}")
         print(f"Judge    : {cfg['judge_model']}")
         print(f"Dataset  : {Path(cfg['dataset']).stem}")
         print(f"Retrieve : {cfg['retrieval_mode']} (top_k={cfg['top_k']})")

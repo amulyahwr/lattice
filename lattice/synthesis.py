@@ -93,7 +93,7 @@ def _make_client() -> OpenAI:
 
 
 def _execute_tool(name: str, args: dict) -> str:
-    # Strip model-specific prefixes some models add (e.g. "google:gemma:date_diff")
+    # Strip model-specific prefixes some models add (e.g. "modelname:date_diff")
     bare_name = name.rsplit(":", 1)[-1]
     if bare_name == "date_diff":
         d1 = date.fromisoformat(args["date1"][:10])
@@ -127,7 +127,7 @@ def synthesize(
         for a in atoms
     )
 
-    model = os.environ.get("SYNTHESIS_MODEL") or os.environ.get("LLM_MODEL", "gemma4:e4b")
+    model = os.environ.get("SYNTHESIS_MODEL") or os.environ.get("LLM_MODEL", "qwen3.5:4b")
     client = _make_client()
     messages: list[dict] = [
         {"role": "system", "content": _SYSTEM},

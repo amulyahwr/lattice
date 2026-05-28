@@ -37,22 +37,48 @@ lattice_ingest(source, metadata)
 
 lattice_select(query, as_of)
         │
-        ▼
-   BM25 search           top-20 non-superseded atoms scored on subject+content
+        ├── retrieval_mode=select (default) ──────────────────────────────────
+        │        │
+        │        ▼
+        │   BM25 search           top-20 non-superseded atoms scored on subject+content
+        │        │
+        │        ▼
+        │   Session probe         top-7 seeds → count distinct session_ids
+        │        │
+        │        ├── 1 session (pointed path): probe seeds only, max 14 atoms
+        │        └── >1 session (expansion path): all seeds, full BFS
+        │                 │
+        │                 ▼
+        │        Graph BFS expansion  bounded BFS (depth=4, max atoms) through
+        │                             committed graph snapshot — traverses segment,
+        │                             source, subject, supersedes, same_hash edges
+        │                 │
+        │                 ▼
+        │        Collapse + filter    drop superseded; deduplicate by normalized hash;
+        │                             apply as_of temporal filter;
+        │                             recommendation cap: max 5 kind=recommendation
+        │                             (tunable via LATTICE_RECOMMENDATION_CAP);
+        │                             kind fallback: if primary_kind absent, scan all
+        │
+        └── retrieval_mode=agent ────────────────────────────────────────────
+                 │
+                 ▼
+            Query intent     parse_query() detects shape (temporal/preference/
+                             recommendation/factual) → query_type_hint string
+                 │
+                 ▼
+            Agent loop       up to 4 rounds; model from SELECTION_MODEL env var
+              tools:
+                search(query, top_k)          → BM25 search, accumulate atom_ids
+                expand(atom_ids, depth, max)  → graph BFS from seeds, accumulate
+                finish(atom_ids)              → return final set (safety net: if
+                                               <5 atoms selected, use all accumulated)
+                 │
+                 ▼
+            Recommendation cap + temporal filter applied to final atom set
         │
         ▼
-   Graph BFS expansion   bounded BFS (depth=4, max=60 atoms) through committed
-                         graph snapshot — traverses segment, source, subject,
-                         supersedes, and same_hash edges in both directions
-        │
-        ▼
-   Collapse + filter     drop superseded atoms; deduplicate by normalized hash;
-                         apply as_of temporal filter;
-                         recommendation cap: max 5 kind=recommendation atoms
-                         (tunable via LATTICE_RECOMMENDATION_CAP)
-        │
-        ▼
-   Return atom dicts     with full provenance fields
+   Return atom dicts     with full provenance fields (SelectionResult wrapper for agent mode)
 
 
 lattice_answer(query, atom_ids?, as_of)
@@ -81,7 +107,8 @@ lattice_answer(query, atom_ids?, as_of)
 | `lattice/util.py` | Shared low-level helpers: `_normalized_subject()`, `_write_json_atomic()`. |
 | `lattice/parsers/` | Source-aware segmentation. `infer_source_type()` detects chat/markdown/code. `parse()` returns `list[Segment]` (frozen dataclass with `text`, `role`, `source_type`, `context`, `start`, `end`). `chat.py` handles windowed turn parsing with role tagging. `markdown.py` splits on headings. |
 | `lattice/ingest.py` | Segments source via `parsers/` → LLM extracts atoms per segment → dedup + supersession check → write to DB. |
-| `lattice/selection.py` | BM25 pre-filter → graph BFS expansion via `LatticeGraph.bfs_expand()` → collapse superseded/duplicate groups → recommendation cap. Falls back to `evidence_pack()` if graph is empty. Exports `_atom_to_dict()` for consistent atom serialization. |
+| `lattice/selection.py` | Two retrieval paths: (1) `select()` — BM25 pre-filter → session-diversity probe (pointed vs expansion path) → graph BFS → collapse superseded/duplicates → recommendation cap → kind fallback. (2) `select_agent()` — LLM agent loop with search/expand/finish tools; query-type hints from `parse_query()`; safety net fallback; returns `SelectionResult(atoms, agent_tool_calls)`. Model from `SELECTION_MODEL` env var. Falls back to `evidence_pack()` if graph is empty. |
+| `lattice/query.py` | `parse_query()` — detect query shape (`temporal`/`preference`/`recommendation`/`factual`) and `primary_kind` from question text. Returns `QueryIntent`. Used by both `select()` and `select_agent()`. |
 | `lattice/synthesis.py` | Tool-calling agent using raw OpenAI-compat SDK. Model read from `SYNTHESIS_MODEL` env var (falls back to `LLM_MODEL`). Exposes `date_diff` (date arithmetic) and `sum_numbers` (numeric aggregation) tools. Returns `SynthesisResult(answer, raw_response, tool_calls)`. Supports `ollama` and `openai` providers. |
 | `lattice/llm.py` | Thin litellm wrapper. Single `complete(messages) → str` interface. Used by ingest, selection, and supersession — not synthesis. Reads `LLM_PROVIDER` / `LLM_MODEL` / `LLM_API_KEY` from env. |
 
@@ -166,6 +193,6 @@ LATTICE_DIR/
 
 ## Roadmap Direction
 
-Current state (P17 done, 79% LongMemEval): structured `parsers/` layer → LLM extraction with proper-noun assistant-turn rule → fuzzy supersession via rapidfuzz → BM25 seeds → graph BFS expansion → recommendation cap → collapse superseded/duplicates → synthesis agent (SYNTHESIS_MODEL) with date_diff + sum_numbers tools.
+Current state (p22-agent, 73% / 75.1% task-avg LongMemEval): structured `parsers/` layer → LLM extraction with proper-noun assistant-turn rule → fuzzy supersession via rapidfuzz → BM25 seeds → session-diversity probe (pointed/expansion paths) → graph BFS expansion → recommendation cap → collapse superseded/duplicates → synthesis agent (`SYNTHESIS_MODEL`) with date_diff + sum_numbers tools. Optional: `select_agent()` LLM-driven retrieval with search/expand/finish tools (`SELECTION_MODEL`).
 
-Next: dense seed augmentation (P16) to address BM25 vocabulary mismatch; semantic relation enrichment (P13) for multi-session aggregation. Full roadmap in `lattice/eval/PRIORITIES.md`.
+Next: intent-gated auto-expand in `select_agent()` (force expand for knowledge-update and multi-session queries in code, not relying on LLM decision); dense seed augmentation (P16) to address BM25 vocabulary mismatch. Full roadmap in `lattice/eval/PRIORITIES.md`.

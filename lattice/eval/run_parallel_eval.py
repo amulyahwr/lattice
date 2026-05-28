@@ -69,7 +69,7 @@ def _default_out(llm_model: str, dataset: str, priority: str, variant: str) -> P
 
 def _load_config(args: argparse.Namespace) -> dict:
     load_dotenv(_REPO_ROOT / ".env.eval", override=False)
-    model = os.environ.get("LLM_MODEL", "gemma4:e2b")
+    model = os.environ.get("LLM_MODEL", "qwen3.5:4b")
     judge = os.environ.get("JUDGE_MODEL", "qwen3.5:4b")
     dataset = args.dataset or os.environ.get("DATASET", _DEFAULT_DATASET)
     return {

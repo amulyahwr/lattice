@@ -187,40 +187,70 @@ class LatticeGraph:
 
         return lg
 
+    # Semantic edges carry meaning between atoms — traverse at full depth.
+    # Structural edges (source/segment containment) encode provenance, not
+    # relevance. Capped at depth 2: seeds → segment → same-segment siblings.
+    # Beyond depth 2, structural edges explode to the entire source document.
+    _SEMANTIC_EDGE_TYPES = frozenset({"same_subject_as", "supersedes", "same_hash"})
+    _STRUCTURAL_DEPTH_CAP = 2
+
+    def _typed_neighbors(self, node: str) -> list[tuple[str, bool]]:
+        """Return (neighbor_node, is_structural) for all edges from node."""
+        neighbors = []
+        for _, nbr, data in self._g.out_edges(node, data=True):
+            neighbors.append((nbr, data.get("type") not in self._SEMANTIC_EDGE_TYPES))
+        for src, _, data in self._g.in_edges(node, data=True):
+            neighbors.append((src, data.get("type") not in self._SEMANTIC_EDGE_TYPES))
+        return neighbors
+
     def bfs_expand(
         self,
         seed_atom_ids: list[str],
         max_depth: int = 4,
         max_atoms: int = 60,
     ) -> list[str]:
-        """BFS from seed atoms through all edge types. Returns atom IDs in visit order."""
+        """Hybrid BFS: semantic edges at full depth, structural edges capped at depth 2.
+
+        Semantic edges (same_subject_as, supersedes, same_hash) traverse up to
+        max_depth — needed for supersession chains and subject clustering.
+
+        Structural edges (source_contains_segment, segment_contains_atom,
+        atom_has_subject) are limited to depth 2: seeds → segment → same-segment
+        siblings only. Depth 3+ via structural edges explodes to the entire
+        source document and is blocked.
+        """
         from collections import deque
 
         visited: set[str] = set()
         result: list[str] = []
-        queue: deque[tuple[str, int]] = deque()
+        # Queue: (node, semantic_depth, structural_depth)
+        queue: deque[tuple[str, int, int]] = deque()
 
         for aid in seed_atom_ids:
             node = f"atom:{aid}"
             if node in self._g.nodes and node not in visited:
                 visited.add(node)
                 result.append(aid)
-                queue.append((node, 0))
+                queue.append((node, 0, 0))
                 if len(result) >= max_atoms:
                     return result
 
         while queue:
-            node, depth = queue.popleft()
-            if depth >= max_depth:
-                continue
+            node, sem_depth, struct_depth = queue.popleft()
 
-            neighbors: set[str] = set()
-            neighbors.update(self._g.successors(node))
-            neighbors.update(self._g.predecessors(node))
-
-            for nbr in neighbors:
+            for nbr, is_structural in self._typed_neighbors(node):
                 if nbr in visited:
                     continue
+
+                if is_structural:
+                    if struct_depth >= self._STRUCTURAL_DEPTH_CAP:
+                        continue
+                    new_sem, new_struct = sem_depth, struct_depth + 1
+                else:
+                    if sem_depth >= max_depth:
+                        continue
+                    new_sem, new_struct = sem_depth + 1, struct_depth
+
                 visited.add(nbr)
                 if nbr not in self._g.nodes:
                     continue
@@ -228,7 +258,7 @@ class LatticeGraph:
                     result.append(nbr[len("atom:"):])
                     if len(result) >= max_atoms:
                         return result
-                queue.append((nbr, depth + 1))
+                queue.append((nbr, new_sem, new_struct))
 
         return result
 
