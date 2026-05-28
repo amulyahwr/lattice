@@ -228,9 +228,10 @@ class TestSelect:
         cross-segment atoms included via same_subject_as (semantic);
         cross-source atoms excluded unless connected by semantic edge."""
         from lattice.models import Atom
+        # "xyzdecorator" appears only in seed — guarantees BM25 top_k=1 always returns seed
         seed = Atom(
             kind="fact", source="user", subject="Python",
-            content="Python supports decorators.",
+            content="Python supports xyzdecorators.",
             source_id="src-1", session_id="sess-1", segment_id="seg-1",
             source_span={"start": 100, "end": 130},
         )
@@ -244,7 +245,7 @@ class TestSelect:
         # Same subject, different segment — included via same_subject_as
         same_subject = Atom(
             kind="fact", source="user", subject="Python",
-            content="Python decorators wrap functions at definition time.",
+            content="Python wraps functions at definition time.",
             source_id="src-1", session_id="sess-1", segment_id="seg-2",
             source_span={"start": 200, "end": 250},
         )
@@ -260,7 +261,7 @@ class TestSelect:
         db.write(same_subject)
         db.write(unrelated)
 
-        result = select("decorators", db=db, top_k=1)
+        result = select("xyzdecorators", db=db, top_k=1)
         ids = [row["atom_id"] for row in result]
         assert seed.atom_id in ids
         assert same_segment.atom_id in ids    # co-located in same segment — included
