@@ -268,35 +268,33 @@ class TestSelect:
         assert same_subject.atom_id in ids    # semantic neighbor — included
         assert unrelated.atom_id not in ids   # different source, no connection — excluded
 
-    def test_single_session_triggers_pointed_path(self, db):
-        """All probe seeds from one session → pointed path → atom count ≤ _POINTED_MAX."""
+    def test_single_source_triggers_pointed_path(self, db):
+        """All probe seeds from one source → pointed path → atom count ≤ _POINTED_MAX."""
         from lattice.models import Atom
         from lattice.selection import _POINTED_MAX
         for i in range(20):
             db.write(Atom(
                 kind="fact", source="user", subject=f"widget {i}",
                 content=f"Widget {i} is a component.",
-                session_id="sess-single",
+                source_id="src-single",
             ))
         result = select("widget component", db=db)
         assert len(result) <= _POINTED_MAX
 
-    def test_multi_session_triggers_expansion_path(self, db):
-        """Probe seeds from multiple sessions → expansion path → atoms from all sessions returned."""
+    def test_multi_source_triggers_expansion_path(self, db):
+        """Probe seeds from multiple sources → expansion path → atoms from all sources returned."""
         from lattice.models import Atom
-        # 3 atoms in sess-A + 4 in sess-B = 7 total, all match query → probe has both sessions
         ids_a, ids_b = [], []
         for i in range(3):
             a = Atom(kind="fact", source="user", subject=f"gadget {i}",
-                     content=f"Gadget {i} is a device.", session_id="sess-A")
+                     content=f"Gadget {i} is a device.", source_id="src-A")
             db.write(a)
             ids_a.append(a.atom_id)
         for i in range(4):
             b = Atom(kind="fact", source="user", subject=f"gadget {i} alt",
-                     content=f"Gadget {i} alt is a device.", session_id="sess-B")
+                     content=f"Gadget {i} alt is a device.", source_id="src-B")
             db.write(b)
             ids_b.append(b.atom_id)
-
         result = select("gadget device", db=db)
         result_ids = {r["atom_id"] for r in result}
         assert any(aid in result_ids for aid in ids_a)

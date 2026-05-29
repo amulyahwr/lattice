@@ -12,6 +12,10 @@ from lattice.llm import complete
 from lattice.models import Atom
 from lattice.query import parse_query
 
+_PROBE_K = 7        # seeds used to measure source diversity
+_POINTED_MAX = 14   # max atoms when query is concentrated in one source
+_BFS_MAX_ATOMS = 60 # max atoms for multi-source expansion path
+
 
 class _AtomSelectionCoarse(BaseModel):
     n_selected: int = Field(ge=8, le=25)
@@ -28,8 +32,6 @@ class FilterResult:
     debug: dict = field(default_factory=dict)
 
 _RECOMMENDATION_CAP = int(os.environ.get("LATTICE_RECOMMENDATION_CAP", "5"))
-_PROBE_K = 7       # seeds used to measure session diversity
-_POINTED_MAX = 14  # max atoms for single-session path (allows supersession expansion)
 
 
 def _apply_recommendation_cap(atoms: list[dict]) -> list[dict]:
@@ -85,9 +87,8 @@ def _atom_to_dict(a: Atom) -> dict:
     }
 
 
-def _session_diversity(seeds: list[Atom]) -> int:
-    """Count distinct session_ids in the probe seeds."""
-    return len({a.session_id for a in seeds if a.session_id})
+def _source_diversity(seeds: list[Atom]) -> int:
+    return len({a.source_id for a in seeds if a.source_id})
 
 
 def select(
@@ -104,21 +105,13 @@ def select(
     if not seeds:
         return []
 
-    # Session-diversity probe: top _PROBE_K seeds tell us whether the answer
-    # is concentrated in one session (pointed) or spread across sessions (expand).
+    # Source-diversity probe: top _PROBE_K seeds tell us whether the answer
+    # lives in one source (pointed) or spans multiple sources (expansion).
     probe = seeds[:_PROBE_K]
-    n_sessions = _session_diversity(probe)
-
-    if n_sessions <= 1:
-        # Pointed path: answer concentrated in one session. Use probe seeds only
-        # with small max_atoms to allow supersession chain traversal but suppress
-        # cross-session noise.
-        active_seeds = probe
-        max_atoms = _POINTED_MAX
+    if _source_diversity(probe) <= 1:
+        active_seeds, max_atoms = probe, _POINTED_MAX
     else:
-        # Expansion path: answer spans sessions. Full BFS needed.
-        active_seeds = seeds
-        max_atoms = max(top_k, top_k * 3)
+        active_seeds, max_atoms = seeds, _BFS_MAX_ATOMS
 
     graph = db.graph
 

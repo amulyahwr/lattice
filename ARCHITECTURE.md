@@ -43,22 +43,16 @@ lattice_select(query, as_of)
         │   BM25 search           top-20 non-superseded atoms scored on subject+content
         │        │
         │        ▼
-        │   Session probe         top-7 seeds → count distinct session_ids
+        │   Graph BFS expansion   bounded BFS (depth=4, max=60) through committed
+        │                         graph snapshot — traverses segment, source, subject,
+        │                         supersedes, same_hash edges
         │        │
-        │        ├── 1 session (pointed path): probe seeds only, max 14 atoms
-        │        └── >1 session (expansion path): all seeds, full BFS
-        │                 │
-        │                 ▼
-        │        Graph BFS expansion  bounded BFS (depth=4, max atoms) through
-        │                             committed graph snapshot — traverses segment,
-        │                             source, subject, supersedes, same_hash edges
-        │                 │
-        │                 ▼
-        │        Collapse + filter    drop superseded; deduplicate by normalized hash;
-        │                             apply as_of temporal filter;
-        │                             recommendation cap: max 5 kind=recommendation
-        │                             (tunable via LATTICE_RECOMMENDATION_CAP);
-        │                             kind fallback: if primary_kind absent, scan all
+        │        ▼
+        │   Collapse + filter     drop superseded; deduplicate by normalized hash;
+        │                         apply as_of temporal filter;
+        │                         recommendation cap: max 5 kind=recommendation
+        │                         (tunable via LATTICE_RECOMMENDATION_CAP);
+        │                         kind fallback: if primary_kind absent, scan all
         │
         └── retrieval_mode=llm_filter ───────────────────────────────────────
                  │
@@ -111,10 +105,10 @@ lattice_answer(query, atom_ids?, as_of)
 | `lattice/util.py` | Shared low-level helpers: `_normalized_subject()`, `_write_json_atomic()`. |
 | `lattice/parsers/` | Source-aware segmentation. `infer_source_type()` detects chat/markdown/code. `parse()` returns `list[Segment]` (frozen dataclass with `text`, `role`, `source_type`, `context`, `start`, `end`). `chat.py` handles windowed turn parsing with role tagging. `markdown.py` splits on headings. |
 | `lattice/ingest.py` | Segments source via `parsers/` → LLM extracts atoms per segment → dedup + supersession check → write to DB. |
-| `lattice/selection.py` | Two retrieval paths: (1) `select()` — BM25 pre-filter → session-diversity probe (pointed vs expansion path) → graph BFS → collapse superseded/duplicates → recommendation cap → kind fallback. (2) `select_llm_filter()` — `select()` for retrieval, then two-stage LLM filter: coarse (subject+kind, Pydantic `_AtomSelectionCoarse` ge=8 le=25) → fine (full content, `_AtomSelectionFine` ge=5 le=15); Pydantic constraints enforced at grammar level; falls back to previous stage on failure; returns `FilterResult(atoms, debug)`. Model from `SELECTION_MODEL` env var, context window from `SELECTION_NUM_CTX`. Falls back to `evidence_pack()` if graph is empty. |
+| `lattice/selection.py` | `select()` — BM25 top-k seeds → graph BFS (depth=4, max=60) → collapse superseded/duplicates → recommendation cap → kind fallback. Returns raw candidate atoms. `select_llm_filter()` — calls `select()` then applies two-stage LLM filter: coarse (subject+kind, `_AtomSelectionCoarse` ge=8 le=25) → fine (full content, `_AtomSelectionFine` ge=5 le=15); Pydantic constraints grammar-enforced by ollama; falls back to previous stage on LLM failure; returns `FilterResult(atoms, debug)`. Model from `SELECTION_MODEL`, context window from `SELECTION_NUM_CTX`. Falls back to `evidence_pack()` if graph is empty. |
 | `lattice/query.py` | `parse_query()` — detect query shape (`temporal`/`preference`/`recommendation`/`factual`) and `primary_kind` from question text. Returns `QueryIntent`. Used by both `select()` and `select_agent()`. |
-| `lattice/synthesis.py` | Tool-calling agent using raw OpenAI-compat SDK. Model read from `SYNTHESIS_MODEL` env var (falls back to `LLM_MODEL`). Exposes `date_diff` (date arithmetic) and `sum_numbers` (numeric aggregation) tools. Returns `SynthesisResult(answer, raw_response, tool_calls)`. Supports `ollama` and `openai` providers. |
-| `lattice/llm.py` | Thin litellm wrapper. Single `complete(messages) → str` interface. Used by ingest, selection, and supersession — not synthesis. Reads `LLM_PROVIDER` / `LLM_MODEL` / `LLM_API_KEY` from env. |
+| `lattice/synthesis.py` | Tool-calling agent using raw OpenAI-compat SDK. Model read from `SYNTHESIS_MODEL` env var (falls back to `LLM_MODEL`, default `qwen3.5:4b`). Exposes `date_diff` (date arithmetic) and `sum_numbers` (numeric aggregation) tools. Returns `SynthesisResult(answer, raw_response, tool_calls)`. Supports `ollama` and `openai` providers. **Gap:** `anthropic` provider not yet supported — raises `NotImplementedError`. |
+| `lattice/llm.py` | Thin litellm wrapper. Single `complete(messages) → str` interface. Used by ingest, selection, and supersession — not synthesis. Reads `LLM_PROVIDER` / `LLM_MODEL` / `LLM_API_KEY` from env. Supports `anthropic`, `openai`, `ollama`. `LLM_API_KEY` required for non-ollama providers. |
 
 ---
 
