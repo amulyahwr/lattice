@@ -1,4 +1,4 @@
-# lattice-mcp Product Priorities
+# lattice Product Priorities
 
 Goal: build a local-first MCP server for persistent, inspectable knowledge that works well with coding assistants and local models. LongMemEval is an evaluation yardstick, not the product target.
 

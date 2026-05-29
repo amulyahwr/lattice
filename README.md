@@ -1,4 +1,4 @@
-# lattice-mcp
+# lattice
 
 A local-first personal memory OS. Everything you tell it becomes a typed, timestamped **atom** — one fact per file, stored as human-readable markdown in a directory you control. A persistent daemon watches an inbox folder for new content, ingests it automatically, and serves a local web UI for recall.
 
@@ -10,7 +10,7 @@ MCP integration lets any MCP-compatible AI assistant (Claude Code, Cursor, Cline
 
 ```bash
 # Install
-uvx lattice-mcp
+uvx lattice
 
 # Start the daemon (inbox watcher + web UI + MCP server)
 lattice-daemon
@@ -78,7 +78,7 @@ Add to your project's `.mcp.json`:
   "mcpServers": {
     "lattice": {
       "command": "uvx",
-      "args": ["lattice-mcp"],
+      "args": ["lattice"],
       "env": {
         "LLM_PROVIDER": "ollama",
         "LLM_MODEL": "qwen3:7b",
@@ -201,7 +201,7 @@ One `.md` file per atom in `LATTICE_DIR`. Human-readable, hand-editable, git-tra
 
 ```bash
 git clone https://github.com/amulyahwr/lattice
-cd lattice-mcp
+cd lattice
 uv sync
 uv run pytest
 

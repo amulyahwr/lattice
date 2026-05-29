@@ -1,5 +1,5 @@
 """
-LongMemEval evaluation harness for lattice-mcp.
+LongMemEval evaluation harness for lattice.
 
 Three independent phases — run them in order:
 
@@ -771,7 +771,7 @@ def _run_judge(cfg: dict) -> None:
 
 
 def _parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="LongMemEval harness for lattice-mcp")
+    p = argparse.ArgumentParser(description="LongMemEval harness for lattice")
     p.add_argument("--phase", choices=["ingest", "inference", "judge"], required=True,
                    help="ingest: extract atoms from sessions; inference: select+synthesize; judge: score")
     p.add_argument("--priority", default="", help="Iteration label, e.g. p18")

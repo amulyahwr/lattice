@@ -17,7 +17,7 @@ from lattice.db import AtomNotFound, LatticeDB
 from lattice.selection import _atom_to_dict, select
 from lattice.synthesis import synthesize
 
-app = Server("lattice-mcp")
+app = Server("lattice")
 _db = LatticeDB()
 _db.preload()
 
@@ -155,7 +155,7 @@ def main() -> None:
                 read_stream,
                 write_stream,
                 InitializationOptions(
-                    server_name="lattice-mcp",
+                    server_name="lattice",
                     server_version="0.1.0",
                     capabilities=app.get_capabilities(
                         notification_options=None,

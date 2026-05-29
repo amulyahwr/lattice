@@ -397,7 +397,7 @@ def _print_summary(results: dict[str, VariantResult]) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Run retrieval variants for lattice-mcp eval")
+    p = argparse.ArgumentParser(description="Run retrieval variants for lattice eval")
     p.add_argument("--priority", default="p3", help="Base label. Outputs use <priority>-<variant>.")
     p.add_argument("--variants", nargs="+", choices=_VARIANTS, default=list(_VARIANTS))
     p.add_argument("--phase", choices=["inference", "judge", "all"], default="all")

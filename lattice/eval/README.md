@@ -1,13 +1,13 @@
 # Evaluation Harness
 
-Runs lattice-mcp against the [LongMemEval](https://github.com/xiaowu0162/LongMemEval) benchmark. This is a yardstick for long-memory pressure, not the product target. Benchmark-specific code lives under `lattice/eval/` and should not drive core product architecture.
+Runs lattice against the [LongMemEval](https://github.com/xiaowu0162/LongMemEval) benchmark. This is a yardstick for long-memory pressure, not the product target. Benchmark-specific code lives under `lattice/eval/` and should not drive core product architecture.
 
 ## Prerequisites
 
 - A local machine or remote box capable of running your chosen inference/judge models
 - Ollama installed and running, if using local models
 - LongMemEval repo cloned (for dataset + scorer scripts)
-- lattice-mcp repo cloned
+- lattice repo cloned
 
 ## Setup
 

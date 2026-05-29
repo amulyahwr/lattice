@@ -9,14 +9,14 @@ uv sync                        # install deps
 uv run pytest                  # all tests
 uv run pytest tests/test_db.py # single file
 uv run pytest -k test_supersession_links_atoms  # single test
-uv run lattice-mcp             # run MCP server (requires env vars)
+uv run lattice             # run MCP server (requires env vars)
 ```
 
 Required env vars for running the server: `LLM_PROVIDER`, `LLM_MODEL`, `LATTICE_DIR`. `LLM_API_KEY` is required for all providers except `ollama` — `complete()` raises `EnvironmentError` eagerly if missing.
 
 ## Architecture
 
-The current pipeline is: **ingest → select → synthesize**, each backed by an LLM call via `lattice/llm.py`. The product direction is local-first lattice-mcp: source-aware ingest, provenance, deterministic graph sidecars, graph-seeded selection, and optional enrichment that never blocks local querying.
+The current pipeline is: **ingest → select → synthesize**, each backed by an LLM call via `lattice/llm.py`. The product direction is local-first lattice: source-aware ingest, provenance, deterministic graph sidecars, graph-seeded selection, and optional enrichment that never blocks local querying.
 
 ```
 server.py          MCP stdio entrypoint. Owns one shared LatticeDB instance.
