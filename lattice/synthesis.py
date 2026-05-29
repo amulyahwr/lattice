@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
+from typing import Generator
 
 from openai import OpenAI
 
@@ -19,11 +21,14 @@ _SYSTEM = """\
 You are a knowledge synthesis agent. Given a set of knowledge atoms and a question, produce a concise answer.
 
 Each atom has:
+- `src`: a source identifier shown in brackets — use this to cite the atom inline
 - `observed_at`: when this fact was mentioned in the source (always present — use this for temporal reasoning)
 - `valid_from`: when this fact is explicitly time-bounded (rarely set — only trust it when non-null)
 
 Guidelines:
 - Identify which atoms are relevant to the question.
+- Cite every atom you use by including [src:<src_id>] immediately after the statement it supports. \
+Example: "Alice joined in 2021 [src:abc123]." Use the exact src value from the atom header.
 - For temporal questions ("when", "how long ago", "before/after X"):
     Use `observed_at` as the reference date — it records when the fact was stated in the source.
     Resolve relative expressions ("last Saturday", "two months ago") by offsetting from `observed_at`.
@@ -86,6 +91,9 @@ def _make_client() -> OpenAI:
         return OpenAI(base_url="http://localhost:11434/v1", api_key="ollama", timeout=90.0)
     if provider == "openai":
         return OpenAI(api_key=api_key)
+    # Gap: Anthropic's tool-calling API shape differs from the OpenAI compat path
+    # used in ingest/selection. Synthesis needs a separate Anthropic client using
+    # anthropic-sdk directly. Track in S11-followup before enabling Anthropic deployments.
     raise NotImplementedError(
         f"Synthesis agent does not yet support provider '{provider}'. "
         "Set LLM_PROVIDER=ollama or LLM_PROVIDER=openai."
@@ -104,66 +112,150 @@ def _execute_tool(name: str, args: dict) -> str:
     return f"unknown tool: {name}"
 
 
-def synthesize(
-    query: str,
-    atoms: list[dict],
-    query_date: date | None = None,
-) -> SynthesisResult:
-    if not atoms:
-        return SynthesisResult(
-            answer="No relevant information found in the lattice.",
-            raw_response="",
-        )
+_CITATION_RE = re.compile(r"\[src:([^\]]+)\]")
 
+
+def replace_citations(text: str, atoms: list[dict]) -> str:
+    """Replace [src:id] markers in *text* with labelled citation markers.
+
+    Each marker becomes ``[<title_or_subject>][src:<id>]`` so callers can
+    render it as a tooltip or link. Unknown source_ids are left unchanged —
+    never silently drop a citation the model emitted (Rule 6).
+    """
+    index = {
+        str(a.get("source_id") or a.get("source") or ""): a
+        for a in atoms
+        if a.get("source_id") or a.get("source")
+    }
+
+    def _replace(m: re.Match) -> str:
+        src_id = m.group(1)
+        atom = index.get(src_id)
+        if not atom:
+            return m.group(0)  # unknown — leave intact
+        label = atom.get("source_title") or atom.get("subject") or src_id
+        return f"[{label}][src:{src_id}]"
+
+    return _CITATION_RE.sub(_replace, text)
+
+
+def _build_messages(query: str, atoms: list[dict], query_date: date | None) -> list[dict]:
     today = (query_date or datetime.now(tz=timezone.utc).date()).isoformat()
-    tool_calls_log: list[dict] = []
-
     atoms_text = "\n\n".join(
         (
-            f"[{a['subject']} / {a['kind']} / valid_from={a.get('valid_from', 'null')} "
-            f"/ observed_at={a.get('observed_at', 'null')} / source={a.get('source_title') or a.get('source_id') or a.get('source')}]\n"
+            f"[src:{a.get('source_id') or a.get('source') or 'unknown'} "
+            f"/ {a['subject']} / {a['kind']} / valid_from={a.get('valid_from', 'null')} "
+            f"/ observed_at={a.get('observed_at', 'null')} "
+            f"/ title={a.get('source_title') or 'n/a'}]\n"
             f"{a['content']}"
         )
         for a in atoms
     )
-
-    model = os.environ.get("SYNTHESIS_MODEL") or os.environ.get("LLM_MODEL", "qwen3.5:4b")
-    client = _make_client()
-    messages: list[dict] = [
+    return [
         {"role": "system", "content": _SYSTEM},
         {"role": "user", "content": f"Today's date: {today}\n\nQuery: {query}\n\nKnowledge atoms:\n{atoms_text}"},
     ]
 
-    # Agent loop: up to 5 rounds to allow chained tool calls
+
+def _run_tool_loop(
+    client: OpenAI,
+    model: str,
+    messages: list[dict],
+) -> tuple[list[dict], list[dict]]:
+    """Run the tool-calling agent loop until the model stops calling tools or hits 5 rounds.
+
+    Returns (messages_with_tool_results, tool_calls_log).
+    Only appends messages when tools are actually called — the caller is responsible
+    for generating the final text response (streaming or non-streaming).
+    """
+    tool_calls_log: list[dict] = []
     for _ in range(5):
         resp = client.chat.completions.create(
             model=model, messages=messages, tools=_TOOLS, tool_choice="auto",
             extra_body={"num_ctx": 4096},
         )
         msg = resp.choices[0].message
-        messages.append(msg)
-
         if not msg.tool_calls:
-            answer = msg.content or ""
-            if not answer and tool_calls_log:
-                # Model returned empty after tool use — re-prompt for final answer
-                messages.append({"role": "user", "content": "Based on the tool results above, give your final answer now."})
-                resp2 = client.chat.completions.create(model=model, messages=messages, extra_body={"num_ctx": 4096})
-                answer = resp2.choices[0].message.content or ""
-            return SynthesisResult(answer=answer, raw_response=answer, tool_calls=tool_calls_log)
-
+            break
+        messages.append(msg)
         for tc in msg.tool_calls:
             args = json.loads(tc.function.arguments)
             result = _execute_tool(tc.function.name, args)
-            tool_calls_log.append({
-                "tool": tc.function.name,
-                "args": args,
-                "result": result,
-            })
+            tool_calls_log.append({"tool": tc.function.name, "args": args, "result": result})
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
+    return messages, tool_calls_log
 
-    # Fallback: explicitly request a final answer after max tool-call rounds
-    messages.append({"role": "user", "content": "Based on the tool results above, give your final answer now."})
+
+def synthesize(
+    query: str,
+    atoms: list[dict],
+    query_date: date | None = None,
+) -> SynthesisResult:
+    if not atoms:
+        return SynthesisResult(answer="No relevant information found in the lattice.", raw_response="")
+
+    model = os.environ.get("SYNTHESIS_MODEL") or os.environ.get("LLM_MODEL", "qwen3.5:4b")
+    client = _make_client()
+    messages = _build_messages(query, atoms, query_date)
+    messages, tool_calls_log = _run_tool_loop(client, model, messages)
+
     resp = client.chat.completions.create(model=model, messages=messages, extra_body={"num_ctx": 4096})
-    answer = resp.choices[0].message.content or ""
-    return SynthesisResult(answer=answer, raw_response=answer, tool_calls=tool_calls_log)
+    raw = resp.choices[0].message.content or ""
+    answer = replace_citations(raw, atoms)
+    return SynthesisResult(answer=answer, raw_response=raw, tool_calls=tool_calls_log)
+
+
+def stream_synthesis(
+    query: str,
+    atoms: list[dict],
+    query_date: date | None = None,
+) -> "Generator[str, None, None]":
+    """Stream the final synthesis answer as SSE-formatted strings.
+
+    Yields ``data: <json>\\n\\n`` lines. Event shapes:
+    - ``{"type": "token", "text": "..."}`` — one chunk of the answer
+    - ``{"type": "done"}`` — stream complete
+    - ``{"type": "error", "message": "..."}`` — degradation: signals a failure to the caller
+      (Rule 6: never silently swallow errors mid-stream)
+
+    Note: tool-call rounds run synchronously before streaming begins. Only the final
+    answer turn is streamed. This is intentional — tool execution requires a full round-trip.
+    """
+    if not atoms:
+        yield f'data: {json.dumps({"type": "token", "text": "No relevant information found in the lattice."})}\n\n'
+        yield 'data: {"type": "done"}\n\n'
+        return
+
+    model = os.environ.get("SYNTHESIS_MODEL") or os.environ.get("LLM_MODEL", "qwen3.5:4b")
+    try:
+        client = _make_client()
+    except NotImplementedError as exc:
+        # Rule 6: make degradation visible — signal provider gap to the caller
+        yield f'data: {json.dumps({"type": "error", "message": str(exc)})}\n\n'
+        return
+
+    messages = _build_messages(query, atoms, query_date)
+    try:
+        messages, tool_calls_log = _run_tool_loop(client, model, messages)
+    except Exception as exc:
+        yield f'data: {json.dumps({"type": "error", "message": f"Tool loop failed: {exc}"})}\n\n'
+        return
+
+    full_answer: list[str] = []
+    try:
+        stream = client.chat.completions.create(
+            model=model, messages=messages, stream=True, extra_body={"num_ctx": 4096},
+        )
+        for chunk in stream:
+            delta = chunk.choices[0].delta
+            if delta.content:
+                full_answer.append(delta.content)
+                yield f'data: {json.dumps({"type": "token", "text": delta.content})}\n\n'
+    except Exception as exc:
+        yield f'data: {json.dumps({"type": "error", "message": f"Streaming failed: {exc}"})}\n\n'
+        return
+
+    # Citation markers may span chunk boundaries, so replacement runs on full assembled text.
+    processed = replace_citations("".join(full_answer), atoms)
+    yield f'data: {json.dumps({"type": "citations_applied", "answer": processed})}\n\n'
+    yield 'data: {"type": "done"}\n\n'
