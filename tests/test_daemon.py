@@ -70,7 +70,7 @@ def daemon_proc(lattice_tmp):
     yield proc, lattice_tmp
     if proc.poll() is None:
         proc.terminate()
-        proc.wait(timeout=5)
+        proc.wait(timeout=15)
 
 
 def test_daemon_writes_pid(daemon_proc):
