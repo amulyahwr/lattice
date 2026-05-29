@@ -24,7 +24,7 @@ inbox/*.txt|*.md          MCP lattice_ingest (daemon running)
            LatticeDB.write() → atom .md files + graph sidecars
 ```
 
-When the daemon is not running, `lattice_ingest` falls back to direct write (MCP-only path, no inbox watcher).
+When the daemon is not running, `lattice_ingest` falls back to inbox drop (file written to `LATTICE_INBOX`; picked up when daemon restarts).
 
 ---
 
@@ -59,61 +59,47 @@ lattice_ingest(source, metadata)
    LatticeGraph.add()    incremental update → graph/nodes.jsonl + edges.jsonl + manifest.json
 
 
-lattice_select(query, as_of)
-        │
-        ├── retrieval_mode=select (default) ──────────────────────────────────
-        │        │
-        │        ▼
-        │   BM25 search           top-20 non-superseded atoms scored on subject+content
-        │        │
-        │        ▼
-        │   Graph BFS expansion   bounded BFS (depth=4, max=60) through committed
-        │                         graph snapshot — traverses segment, source, subject,
-        │                         supersedes, same_hash edges
-        │        │
-        │        ▼
-        │   Collapse + filter     drop superseded; deduplicate by normalized hash;
-        │                         apply as_of temporal filter;
-        │                         recommendation cap: max 5 kind=recommendation
-        │                         (tunable via LATTICE_RECOMMENDATION_CAP);
-        │                         kind fallback: if primary_kind absent, scan all
-        │
-        └── retrieval_mode=llm_filter ───────────────────────────────────────
-                 │
-                 ▼
-            select()         BM25 + session probe + graph BFS → candidate atoms
-                 │
-                 ▼
-            Coarse LLM filter   subject + kind + observed_at only (~600 tokens);
-                                _AtomSelectionCoarse: n_selected ge=8 le=25,
-                                atom_ids min_length=8 max_length=25 (grammar-enforced);
-                                up to 2 retries; fallback to candidates[:20]
-                 │
-                 ▼
-            Fine LLM filter     full content (~1800 tokens);
-                                _AtomSelectionFine: n_selected ge=5 le=15,
-                                atom_ids min_length=5 max_length=15 (grammar-enforced);
-                                up to 2 retries; fallback to coarse shortlist if <5 valid
-                 │
-                 ▼
-            FilterResult(atoms, debug)   debug: n_candidates, n_coarse, n_fine,
-                                         coarse_fallback, fine_fallback
+select(query, as_of)
         │
         ▼
-   Return atom dicts     with full provenance fields (SelectionResult wrapper for agent mode)
+   BM25 search           top-20 non-superseded atoms scored on subject+content
+        │
+        ▼
+   Source-diversity      probe top-7 seeds; if all from ≤1 source →
+   probe                 pointed path (7 seeds, max_atoms=14);
+                         if multiple sources → expansion path
+                         (all 20 seeds, max_atoms=60)
+        │
+        ▼
+   Graph BFS expansion   bounded BFS (depth=4, max=14 or 60) through committed
+                         graph snapshot — traverses segment, source, subject,
+                         supersedes, same_hash edges;
+                         falls back to evidence_pack() if graph is empty
+        │
+        ▼
+   Collapse + filter     drop superseded; deduplicate by normalized hash;
+                         apply as_of temporal filter;
+                         recommendation cap: max 5 kind=recommendation
+                         (tunable via LATTICE_RECOMMENDATION_CAP);
+                         kind fallback: if primary_kind absent, scan all
+        │
+        ▼
+   Return atom dicts     with full provenance fields
 
 
-lattice_answer(query, atom_ids?, as_of)
+stream_synthesis(query, atoms)
         │
-        ├── atom_ids provided → read atoms directly from LatticeDB
+        ▼
+   Tool loop             blocking rounds (up to 5) for date_diff / sum_numbers;
+                         only runs if model calls a tool — most queries skip this
         │
-        └── no atom_ids → run lattice_select first
-                │
-                ▼
-           Synthesis agent  tool-calling agent loop (raw OpenAI-compat API, up to 5 rounds);
-                            date_diff(date1, date2) tool for exact date arithmetic;
-                            sum_numbers(numbers[]) tool for exact numeric aggregation;
-                            query_date passed as agent's "today" reference
+        ▼
+   Streaming LLM call    OpenAI-compat API, stream=True; yields token chunks
+        │
+        ▼
+   SSE events            {"type":"token","text":"..."} per chunk →
+                         {"type":"citations_applied","answer":"..."} →
+                         {"type":"done"}
 ```
 
 ---
@@ -124,19 +110,19 @@ lattice_answer(query, atom_ids?, as_of)
 |--------|------|
 | `lattice/daemon.py` | Persistent daemon. Sole writer to `LatticeDB`. Watches `LATTICE_INBOX` via `watchdog`; ingests `.txt`/`.md` files on drop, moves to `processed/`. Binds a Unix domain socket (`LATTICE_SOCK`) for IPC. Runs the FastAPI web server inline via `uvicorn` on `LATTICE_WEB_PORT` (default 7337). Manages PID file and graceful shutdown on SIGTERM/SIGINT. CLI: `lattice-daemon` (start), `lattice-daemon status`. |
 | `lattice/client.py` | `DaemonClient` — thin IPC client. Connects to `LATTICE_SOCK`, sends JSON-newline messages (`ping`, `ingest`), returns responses. Used by `server.py` when daemon is running. Falls back gracefully when socket is absent. |
-| `lattice/web/app.py` | FastAPI web UI. Two routes: `GET /` (chat + recent atoms HTML), `POST /api/query` (streaming SSE synthesis with citations), `GET /api/atoms/recent` (last N atoms). Read-only — talks to `LatticeDB` directly from disk. |
+| `lattice/web/app.py` | FastAPI web UI. Routes: `GET /` (chat + recent atoms HTML), `POST /api/query` (streaming SSE synthesis with citations), `GET /api/atoms/recent` (last N atoms). Read-only — reads `LatticeDB` directly from disk. |
 | `lattice/config.py` | `Config` dataclass. Reads all path/network env vars (`LATTICE_DIR`, `LATTICE_INBOX`, `LATTICE_SOCK`, `LATTICE_WEB_HOST`, `LATTICE_WEB_PORT`) in one place. LLM vars remain in `llm.py`. |
-| `server.py` | MCP stdio entrypoint. Routes `lattice_ingest` (drops to inbox or delegates to `DaemonClient`), `lattice_select`, `lattice_answer`. Read-only for select/answer — reads atom files directly. |
+| `server.py` | MCP stdio entrypoint. Routes `lattice_ingest` (inbox drop or `DaemonClient`), `lattice_select`, `lattice_answer`. Read-only for select/answer. |
 | `lattice/models.py` | `Atom` — Pydantic model with all provenance fields. Serialized to/from YAML frontmatter + markdown body via `python-frontmatter`. |
 | `lattice/db.py` | `LatticeDB` — one `.md` file per atom in `LATTICE_DIR`. In-memory `_atom_cache`. `subjects.json` for O(1) subject lookup. Holds a `LatticeGraph` instance; updates it on every `write()` and `supersede()`. |
 | `lattice/graph.py` | `LatticeGraph` — `networkx.MultiDiGraph` backed by committed sidecars. Incrementally updated; full rebuild triggered when manifest atom count diverges from disk. |
-| `lattice/util.py` | Shared low-level helpers: `_normalized_subject()`, `_write_json_atomic()`. |
+| `lattice/util.py` | Shared low-level helpers: `write_file_atomic()` (canonical tempfile+rename utility); `_write_json_atomic()` delegates to it. |
 | `lattice/parsers/` | Source-aware segmentation. `infer_source_type()` detects chat/markdown/code. `parse()` returns `list[Segment]` (frozen dataclass with `text`, `role`, `source_type`, `context`, `start`, `end`). `chat.py` handles windowed turn parsing with role tagging. `markdown.py` splits on headings. |
 | `lattice/ingest.py` | Segments source via `parsers/` → LLM extracts atoms per segment → dedup + supersession check → write to DB. |
-| `lattice/selection.py` | `select()` — BM25 top-k seeds → graph BFS (depth=4, max=60) → collapse superseded/duplicates → recommendation cap → kind fallback. Returns raw candidate atoms. `select_llm_filter()` — calls `select()` then applies two-stage LLM filter: coarse (subject+kind, `_AtomSelectionCoarse` ge=8 le=25) → fine (full content, `_AtomSelectionFine` ge=5 le=15); Pydantic constraints grammar-enforced by ollama; falls back to previous stage on LLM failure; returns `FilterResult(atoms, debug)`. Model from `SELECTION_MODEL`, context window from `SELECTION_NUM_CTX`. Falls back to `evidence_pack()` if graph is empty. |
-| `lattice/query.py` | `parse_query()` — detect query shape (`temporal`/`preference`/`recommendation`/`factual`) and `primary_kind` from question text. Returns `QueryIntent`. Used by both `select()` and `select_agent()`. |
-| `lattice/synthesis.py` | Tool-calling agent using raw OpenAI-compat SDK. Model read from `SYNTHESIS_MODEL` env var (falls back to `LLM_MODEL`, default `qwen3.5:4b`). Exposes `date_diff` (date arithmetic) and `sum_numbers` (numeric aggregation) tools. Returns `SynthesisResult(answer, raw_response, tool_calls)`. Supports `ollama` and `openai` providers. Anthropic works via OpenAI-compat endpoint (`LLM_PROVIDER=openai` + `LLM_BASE_URL=https://api.anthropic.com/v1`). Also exposes `stream_synthesis()` used by the web UI for streaming SSE responses. |
-| `lattice/llm.py` | Thin litellm wrapper. Single `complete(messages) → str` interface. Used by ingest, selection, and supersession — not synthesis. Reads `LLM_PROVIDER` / `LLM_MODEL` / `LLM_API_KEY` from env. Supports `anthropic`, `openai`, `ollama`. `LLM_API_KEY` required for non-ollama providers. |
+| `lattice/selection.py` | `select()` — BM25 top-k → source-diversity probe → graph BFS (depth=4, max=14 or 60) → collapse superseded/duplicates → recommendation cap → kind fallback. Returns atom dicts. Falls back to `evidence_pack()` if graph is empty. |
+| `lattice/query.py` | `parse_query()` — detects query shape (`temporal`/`preference`/`recommendation`/`factual`) and `primary_kind`. Returns `QueryIntent`. Used by `select()`. |
+| `lattice/synthesis.py` | Tool-calling agent via raw OpenAI-compat SDK. Model from `SYNTHESIS_MODEL` env var (falls back to `LLM_MODEL`). Tools: `date_diff`, `sum_numbers`. `synthesize()` → `SynthesisResult`. `stream_synthesis()` → SSE generator used by the web UI. Supports `ollama` and `openai`; Anthropic via `LLM_PROVIDER=openai` + `LLM_BASE_URL=https://api.anthropic.com/v1`. |
+| `lattice/llm.py` | Thin litellm wrapper. `complete(messages) → str`. Used by ingest, selection, supersession — not synthesis. Reads `LLM_PROVIDER` / `LLM_MODEL` / `LLM_API_KEY` / `LLM_BASE_URL`. |
 
 ---
 
@@ -209,21 +195,17 @@ LATTICE_DIR/
 ## Key Design Invariants
 
 - **Local-only.** No hosted service, no external DB. Everything in `LATTICE_DIR`.
-- **Daemon is the sole writer.** Only `lattice-daemon` writes atom files and graph sidecars. MCP server and web UI are read-only clients. Atom writes are atomic (tempfile + rename), making reads always safe without locking.
+- **Daemon is the sole writer.** Only the daemon writes atom files and graph sidecars. MCP server and web UI are read-only clients. Atom writes are atomic (tempfile + rename), making reads always safe without locking.
 - **Human-readable atoms.** `.md` files can be hand-edited, deleted, or committed to git without breaking the server.
 - **Committed snapshots.** Selection reads stable graph/BM25 snapshots; it never waits for active ingest.
 - **Superseded atoms stay on disk** with `is_superseded=true` and bidirectional links. History is preserved, not deleted.
-- **Expensive enrichment is optional.** Embeddings, semantic relation enrichment, and hub labeling are roadmap items that must remain off by default for Ollama users.
-- **LLM calls are mockable at the module level.** Ingest/selection/supersession patch `lattice.ingest.complete` / `lattice.selection.complete`. Synthesis patches `lattice.synthesis.OpenAI` (raw OpenAI client) — not `lattice.llm.complete`.
+- **Expensive enrichment is optional.** Embeddings, semantic relation enrichment, and hub labeling must remain off by default for Ollama users.
+- **LLM calls are mockable at the module level.** Ingest/selection/supersession patch `lattice.ingest.complete` / `lattice.selection.complete`. Synthesis patches `lattice.synthesis._make_client` — not `lattice.llm.complete`.
 
 ---
 
-## Roadmap Direction
+## Roadmap
 
 **Phase 1 complete.** Daemon, inbox watcher, IPC protocol, MCP read-only refactor, web UI (chat + recent atoms), streaming synthesis, source citations, Anthropic via OpenAI-compat.
 
-**Phase 2 next:** multi-device sync (mDNS discovery, Ed25519 device pairing, mTLS delta sync) and Homebrew install + first-run setup wizard. Full product roadmap in `FEATURES.md`.
-
-**Memory quality backlog** (eval-driven, independent of product phase): multi-session aggregation fix (fine filter cuts atoms needed for counting totals), dense seed augmentation (P16, BM25 vocabulary mismatch), semantic relation enrichment (P13), topic hubs (P21). Full eval priorities in `lattice/eval/PRIORITIES.md`.
-
-Current retrieval baseline: **76% / 79.9% task-avg** (p24-llmfilter, LongMemEval, `qwen3-8b-ingest` + `qwen3.5:4b` two-stage LLM filter + synthesis).
+**Phase 2 next:** multi-device sync (mDNS discovery, Ed25519 device pairing, mTLS delta sync) and Homebrew install + first-run setup wizard.
