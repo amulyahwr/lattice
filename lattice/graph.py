@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
-import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -12,7 +10,7 @@ import networkx as nx
 if TYPE_CHECKING:
     from lattice.models import Atom
 
-from lattice.util import _normalized_subject, _write_json_atomic
+from lattice.util import _normalized_subject, _write_json_atomic, write_file_atomic
 
 
 class LatticeGraph:
@@ -276,15 +274,7 @@ class LatticeGraph:
 # ── file helpers ──────────────────────────────────────────────────────────
 
 def _write_lines_atomic(path: Path, lines: list[str]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", text=True)
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write("\n".join(lines))
-            if lines:
-                f.write("\n")
-        Path(tmp_name).replace(path)
-    finally:
-        tmp = Path(tmp_name)
-        if tmp.exists():
-            tmp.unlink()
+    text = "\n".join(lines)
+    if lines:
+        text += "\n"
+    write_file_atomic(path, text)
