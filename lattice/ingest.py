@@ -277,7 +277,7 @@ def _segments_for_source(source: str, metadata: dict) -> list[Segment]:
     return parse(source, source_type)
 
 
-def _extract_atoms(segment: _Segment, metadata: dict, ref: datetime) -> list[dict]:
+def _extract_atoms(segment: Segment, metadata: dict, ref: datetime) -> list[dict]:
     text = segment.text
     if segment.context:
         text = f"Context: {segment.context}\n\n{text}"

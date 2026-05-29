@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import mcp.server.stdio
@@ -9,14 +11,19 @@ from mcp.server import Server
 from mcp.server.models import InitializationOptions
 from mcp.types import TextContent, Tool
 
+from lattice.client import DaemonClient
+from lattice.config import Config
 from lattice.db import AtomNotFound, LatticeDB
-from lattice.ingest import ingest
 from lattice.selection import _atom_to_dict, select
 from lattice.synthesis import synthesize
 
 app = Server("lattice-mcp")
 _db = LatticeDB()
 _db.preload()
+
+
+def _lattice_dir() -> Path:
+    return Config.from_env().lattice_dir
 
 
 @app.list_tools()
@@ -97,12 +104,20 @@ async def list_tools() -> list[Tool]:
 @app.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     if name == "lattice_ingest":
-        result = ingest(
-            source=arguments["source"],
-            metadata=arguments.get("metadata", {}),
-            db=_db,
-        )
-        return [TextContent(type="text", text=str(result))]
+        text = arguments["source"]
+        metadata = arguments.get("metadata", {})
+        source_id = metadata.get("source_id", "mcp")
+
+        client = DaemonClient()
+        if client.ping():
+            atom_ids = client.ingest(text, source_id=source_id)
+            return [TextContent(type="text", text=json.dumps({"atom_ids": atom_ids}))]
+        else:
+            inbox_dir = _lattice_dir() / "inbox"
+            inbox_dir.mkdir(parents=True, exist_ok=True)
+            inbox_file = inbox_dir / f"{uuid.uuid4()}.md"
+            inbox_file.write_text(text, encoding="utf-8")
+            return [TextContent(type="text", text=f"queued to inbox: {inbox_file.name}")]
 
     if name == "lattice_select":
         as_of_str: str | None = arguments.get("as_of")
