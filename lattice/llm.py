@@ -29,11 +29,15 @@ def complete(
     if provider != "ollama" and not api_key:
         raise EnvironmentError(f"LLM_API_KEY is required for provider '{provider}'")
 
+    base_url = os.environ.get("LLM_BASE_URL")
+
     kwargs: dict[str, Any] = {
         "model": _model_string(model),
         "input": messages,
         "api_key": api_key or None,
     }
+    if base_url:
+        kwargs["api_base"] = base_url
     if text_format is not None:
         kwargs["text_format"] = text_format
     if provider == "ollama":

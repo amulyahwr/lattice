@@ -12,10 +12,14 @@ dependencies = [
     "python-frontmatter>=1.1.0",
     "rank-bm25>=0.2.2",
     "rapidfuzz>=3.0",
+    "watchdog>=4.0",
+    "fastapi>=0.111",
+    "uvicorn>=0.30",
 ]
 
 [project.scripts]
 lattice-mcp = "server:main"
+lattice-daemon = "lattice.daemon:main"
 
 [build-system]
 requires = ["hatchling"]
