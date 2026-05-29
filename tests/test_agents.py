@@ -35,17 +35,17 @@ def _supersession_response(atom_id: str | None) -> str:
 class TestIngest:
     def test_creates_atoms_in_db(self, db):
         llm_atoms = [
-            {"subject": "lattice-mcp", "kind": "fact", "source": "user",
-             "content": "lattice-mcp is a local MCP server.", "valid_from": None, "valid_until": None},
+            {"subject": "lattice", "kind": "fact", "source": "user",
+             "content": "lattice is a local MCP server.", "valid_from": None, "valid_until": None},
         ]
         # extract_atoms (no supersession: first atom for this subject)
         with patch("lattice.ingest.complete", side_effect=[_ingest_response(llm_atoms)]):
-            result = ingest("lattice-mcp is a local MCP server.", db=db)
+            result = ingest("lattice is a local MCP server.", db=db)
 
         assert result["atoms_created"] == 1
         assert len(result["atom_ids"]) == 1
         atom = db.read(result["atom_ids"][0])
-        assert atom.subject == "lattice-mcp"
+        assert atom.subject == "lattice"
         assert "local MCP server" in atom.content
 
     def test_metadata_stored_on_atom(self, db):
