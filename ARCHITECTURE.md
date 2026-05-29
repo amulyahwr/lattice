@@ -1,6 +1,30 @@
 # Architecture
 
-lattice-mcp is a local-first MCP server that gives AI coding assistants persistent, structured memory. Raw text is decomposed into typed, timestamped **atoms** and stored as markdown files. A graph index connects atoms through provenance, subject, and supersession edges so retrieval can navigate context instead of scanning a flat folder.
+lattice-mcp is a local-first personal memory OS. Raw text is decomposed into typed, timestamped **atoms** and stored as markdown files. A persistent daemon owns all writes, watches an inbox folder for ambient ingest, and serves a local web UI for recall. A graph index connects atoms through provenance, subject, and supersession edges so retrieval can navigate context instead of scanning a flat folder.
+
+MCP integration exposes the atom store to AI coding assistants as a read-mostly interface; the daemon remains the sole writer.
+
+---
+
+## Write path
+
+All writes go through the daemon. MCP `lattice_ingest` and external callers do not write atoms directly.
+
+```
+inbox/*.txt|*.md          MCP lattice_ingest (daemon running)
+        │                         │
+        └──────────┬──────────────┘
+                   ▼
+           lattice-daemon        ← sole writer; owns LatticeDB instance
+                   │
+                   ▼
+           ingest pipeline (below)
+                   │
+                   ▼
+           LatticeDB.write() → atom .md files + graph sidecars
+```
+
+When the daemon is not running, `lattice_ingest` falls back to direct write (MCP-only path, no inbox watcher).
 
 ---
 
@@ -98,7 +122,11 @@ lattice_answer(query, atom_ids?, as_of)
 
 | Module | Role |
 |--------|------|
-| `server.py` | MCP stdio entrypoint. Owns one shared `LatticeDB` instance per process. Routes `lattice_ingest`, `lattice_select`, `lattice_answer` tool calls. |
+| `lattice/daemon.py` | Persistent daemon. Sole writer to `LatticeDB`. Watches `LATTICE_INBOX` via `watchdog`; ingests `.txt`/`.md` files on drop, moves to `processed/`. Binds a Unix domain socket (`LATTICE_SOCK`) for IPC. Runs the FastAPI web server inline via `uvicorn` on `LATTICE_WEB_PORT` (default 7337). Manages PID file and graceful shutdown on SIGTERM/SIGINT. CLI: `lattice-daemon` (start), `lattice-daemon status`. |
+| `lattice/client.py` | `DaemonClient` — thin IPC client. Connects to `LATTICE_SOCK`, sends JSON-newline messages (`ping`, `ingest`), returns responses. Used by `server.py` when daemon is running. Falls back gracefully when socket is absent. |
+| `lattice/web/app.py` | FastAPI web UI. Two routes: `GET /` (chat + recent atoms HTML), `POST /api/query` (streaming SSE synthesis with citations), `GET /api/atoms/recent` (last N atoms). Read-only — talks to `LatticeDB` directly from disk. |
+| `lattice/config.py` | `Config` dataclass. Reads all path/network env vars (`LATTICE_DIR`, `LATTICE_INBOX`, `LATTICE_SOCK`, `LATTICE_WEB_HOST`, `LATTICE_WEB_PORT`) in one place. LLM vars remain in `llm.py`. |
+| `server.py` | MCP stdio entrypoint. Routes `lattice_ingest` (drops to inbox or delegates to `DaemonClient`), `lattice_select`, `lattice_answer`. Read-only for select/answer — reads atom files directly. |
 | `lattice/models.py` | `Atom` — Pydantic model with all provenance fields. Serialized to/from YAML frontmatter + markdown body via `python-frontmatter`. |
 | `lattice/db.py` | `LatticeDB` — one `.md` file per atom in `LATTICE_DIR`. In-memory `_atom_cache`. `subjects.json` for O(1) subject lookup. Holds a `LatticeGraph` instance; updates it on every `write()` and `supersede()`. |
 | `lattice/graph.py` | `LatticeGraph` — `networkx.MultiDiGraph` backed by committed sidecars. Incrementally updated; full rebuild triggered when manifest atom count diverges from disk. |
@@ -107,7 +135,7 @@ lattice_answer(query, atom_ids?, as_of)
 | `lattice/ingest.py` | Segments source via `parsers/` → LLM extracts atoms per segment → dedup + supersession check → write to DB. |
 | `lattice/selection.py` | `select()` — BM25 top-k seeds → graph BFS (depth=4, max=60) → collapse superseded/duplicates → recommendation cap → kind fallback. Returns raw candidate atoms. `select_llm_filter()` — calls `select()` then applies two-stage LLM filter: coarse (subject+kind, `_AtomSelectionCoarse` ge=8 le=25) → fine (full content, `_AtomSelectionFine` ge=5 le=15); Pydantic constraints grammar-enforced by ollama; falls back to previous stage on LLM failure; returns `FilterResult(atoms, debug)`. Model from `SELECTION_MODEL`, context window from `SELECTION_NUM_CTX`. Falls back to `evidence_pack()` if graph is empty. |
 | `lattice/query.py` | `parse_query()` — detect query shape (`temporal`/`preference`/`recommendation`/`factual`) and `primary_kind` from question text. Returns `QueryIntent`. Used by both `select()` and `select_agent()`. |
-| `lattice/synthesis.py` | Tool-calling agent using raw OpenAI-compat SDK. Model read from `SYNTHESIS_MODEL` env var (falls back to `LLM_MODEL`, default `qwen3.5:4b`). Exposes `date_diff` (date arithmetic) and `sum_numbers` (numeric aggregation) tools. Returns `SynthesisResult(answer, raw_response, tool_calls)`. Supports `ollama` and `openai` providers. **Gap:** `anthropic` provider not yet supported — raises `NotImplementedError`. |
+| `lattice/synthesis.py` | Tool-calling agent using raw OpenAI-compat SDK. Model read from `SYNTHESIS_MODEL` env var (falls back to `LLM_MODEL`, default `qwen3.5:4b`). Exposes `date_diff` (date arithmetic) and `sum_numbers` (numeric aggregation) tools. Returns `SynthesisResult(answer, raw_response, tool_calls)`. Supports `ollama` and `openai` providers. Anthropic works via OpenAI-compat endpoint (`LLM_PROVIDER=openai` + `LLM_BASE_URL=https://api.anthropic.com/v1`). Also exposes `stream_synthesis()` used by the web UI for streaming SSE responses. |
 | `lattice/llm.py` | Thin litellm wrapper. Single `complete(messages) → str` interface. Used by ingest, selection, and supersession — not synthesis. Reads `LLM_PROVIDER` / `LLM_MODEL` / `LLM_API_KEY` from env. Supports `anthropic`, `openai`, `ollama`. `LLM_API_KEY` required for non-ollama providers. |
 
 ---
@@ -180,7 +208,8 @@ LATTICE_DIR/
 
 ## Key Design Invariants
 
-- **Local-only.** No hosted service, no daemon, no external DB. Everything in `LATTICE_DIR`.
+- **Local-only.** No hosted service, no external DB. Everything in `LATTICE_DIR`.
+- **Daemon is the sole writer.** Only `lattice-daemon` writes atom files and graph sidecars. MCP server and web UI are read-only clients. Atom writes are atomic (tempfile + rename), making reads always safe without locking.
 - **Human-readable atoms.** `.md` files can be hand-edited, deleted, or committed to git without breaking the server.
 - **Committed snapshots.** Selection reads stable graph/BM25 snapshots; it never waits for active ingest.
 - **Superseded atoms stay on disk** with `is_superseded=true` and bidirectional links. History is preserved, not deleted.
@@ -191,6 +220,10 @@ LATTICE_DIR/
 
 ## Roadmap Direction
 
-Current state (p24-llmfilter, 76% / 79.9% task-avg LongMemEval): structured `parsers/` layer → LLM extraction with proper-noun assistant-turn rule → fuzzy supersession via rapidfuzz → BM25 seeds → session-diversity probe (pointed/expansion paths) → graph BFS expansion → recommendation cap → collapse superseded/duplicates → two-stage LLM filter (`select_llm_filter()`, `SELECTION_MODEL`, `SELECTION_NUM_CTX`) → synthesis agent (`SYNTHESIS_MODEL`) with date_diff + sum_numbers tools.
+**Phase 1 complete.** Daemon, inbox watcher, IPC protocol, MCP read-only refactor, web UI (chat + recent atoms), streaming synthesis, source citations, Anthropic via OpenAI-compat.
 
-Next: multi-session aggregation — fine filter cuts atoms needed for counting totals; fix candidate is skipping fine stage for detected "how many / total" queries. Dense seed augmentation (P16) to address BM25 vocabulary mismatch. Full roadmap in `lattice/eval/PRIORITIES.md`.
+**Phase 2 next:** multi-device sync (mDNS discovery, Ed25519 device pairing, mTLS delta sync) and Homebrew install + first-run setup wizard. Full product roadmap in `FEATURES.md`.
+
+**Memory quality backlog** (eval-driven, independent of product phase): multi-session aggregation fix (fine filter cuts atoms needed for counting totals), dense seed augmentation (P16, BM25 vocabulary mismatch), semantic relation enrichment (P13), topic hubs (P21). Full eval priorities in `lattice/eval/PRIORITIES.md`.
+
+Current retrieval baseline: **76% / 79.9% task-avg** (p24-llmfilter, LongMemEval, `qwen3-8b-ingest` + `qwen3.5:4b` two-stage LLM filter + synthesis).
