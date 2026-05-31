@@ -20,6 +20,7 @@ dependencies = [
 [project.scripts]
 lattice = "server:main"
 lattice-daemon = "lattice.daemon:main"
+lattice-mock = "lattice.web.mock:main"
 
 [build-system]
 requires = ["hatchling"]

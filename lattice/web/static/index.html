@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Lattice</title>
+<link rel="stylesheet" href="/static/style.css">
+<script src="/static/vendor/marked.min.js"></script>
+<!-- apply saved theme before paint to prevent flash -->
+<script>
+  (function() {
+    var t = localStorage.getItem('lattice-theme');
+    if (t) document.documentElement.dataset.theme = t;
+  })();
+</script>
+</head>
+<body>
+
+<header>
+  <div class="header-left">
+    <!-- 3D rotating cube logo -->
+    <div class="logo-scene">
+      <div class="logo-entry">
+        <div class="logo-cube">
+          <div class="lc-face lc-front"><span></span><span></span><span></span><span></span></div>
+          <div class="lc-face lc-right"><span></span><span></span><span></span><span></span></div>
+          <div class="lc-face lc-left"><span></span><span></span><span></span><span></span></div>
+          <div class="lc-face lc-top"><span></span><span></span><span></span><span></span></div>
+          <div class="lc-face lc-back"></div>
+          <div class="lc-face lc-bottom"></div>
+        </div>
+      </div>
+    </div>
+    <h1>Lattice</h1>
+  </div>
+
+  <div class="header-right">
+    <div class="daemon-status">
+      <div class="status-dot" id="status-dot"></div>
+      <span id="status-label">Connecting…</span>
+    </div>
+    <button class="theme-toggle" id="theme-toggle" title="Toggle theme" aria-label="Toggle theme"></button>
+  </div>
+</header>
+
+<div class="layout">
+
+  <div class="chat-panel">
+    <div class="chat-history" id="chat-history">
+      <div class="empty-state">
+        <div class="empty-icon">
+          <div class="ei-cube">
+            <div class="lc-face ei-front"><span></span><span></span><span></span><span></span></div>
+            <div class="lc-face ei-right"><span></span><span></span><span></span><span></span></div>
+            <div class="lc-face ei-top"><span></span><span></span><span></span><span></span></div>
+            <div class="lc-face ei-left"><span></span><span></span><span></span><span></span></div>
+            <div class="lc-face ei-back"></div>
+            <div class="lc-face ei-bottom"></div>
+          </div>
+        </div>
+        <p class="greeting" id="greeting"></p>
+        <h2>Your memory, on your machine.</h2>
+        <p>Ask anything you've told Lattice. Answers are synthesised from your atoms with source citations.</p>
+        <ul class="empty-steps">
+          <li>
+            <span class="step-num">1</span>
+            Drop a file into <code>~/.lattice/inbox/</code> — Lattice ingests it automatically.
+          </li>
+          <li>
+            <span class="step-num">2</span>
+            Ask a question here. Lattice finds the relevant memories and synthesises an answer.
+          </li>
+          <li>
+            <span class="step-num">3</span>
+            Rate the answer. Your feedback improves future recalls.
+          </li>
+        </ul>
+      </div>
+    </div>
+
+    <button class="scroll-btn" id="scroll-btn">↓ Latest</button>
+    <div class="input-bar">
+      <form id="query-form" style="display:contents">
+        <input id="question" type="text" placeholder="Ask anything…" autocomplete="off" />
+        <button id="submit" type="submit">Ask</button>
+      </form>
+    </div>
+    <div class="input-hint">↵ Enter &nbsp;·&nbsp; Esc to clear</div>
+  </div>
+
+  <div class="atoms-panel">
+    <div class="atoms-panel-header">Recent memories <span id="memory-count"></span></div>
+    <div class="atoms-list" id="atoms-list">
+      <div class="atoms-empty">Loading…</div>
+    </div>
+  </div>
+
+</div>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
