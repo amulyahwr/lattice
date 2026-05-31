@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+import uuid
 from datetime import date
+from pathlib import Path
 from typing import Any
 
 import mcp.server.stdio
@@ -8,14 +11,19 @@ from mcp.server import Server
 from mcp.server.models import InitializationOptions
 from mcp.types import TextContent, Tool
 
-from lattice.db import LatticeDB
-from lattice.ingest import ingest
-from lattice.selection import select
+from lattice.client import DaemonClient
+from lattice.config import Config
+from lattice.db import AtomNotFound, LatticeDB
+from lattice.selection import _atom_to_dict, select
 from lattice.synthesis import synthesize
 
-app = Server("lattice-mcp")
+app = Server("lattice")
 _db = LatticeDB()
 _db.preload()
+
+
+def _lattice_dir() -> Path:
+    return Config.from_env().lattice_dir
 
 
 @app.list_tools()
@@ -96,22 +104,28 @@ async def list_tools() -> list[Tool]:
 @app.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     if name == "lattice_ingest":
-        result = ingest(
-            source=arguments["source"],
-            metadata=arguments.get("metadata", {}),
-            db=_db,
-        )
-        return [TextContent(type="text", text=str(result))]
+        text = arguments["source"]
+        metadata = arguments.get("metadata", {})
+        source_id = metadata.get("source_id", "mcp")
+
+        client = DaemonClient()
+        if client.ping():
+            atom_ids = client.ingest(text, source_id=source_id)
+            return [TextContent(type="text", text=json.dumps({"atom_ids": atom_ids}))]
+        else:
+            inbox_dir = _lattice_dir() / "inbox"
+            inbox_dir.mkdir(parents=True, exist_ok=True)
+            inbox_file = inbox_dir / f"{uuid.uuid4()}.md"
+            inbox_file.write_text(text, encoding="utf-8")
+            return [TextContent(type="text", text=f"queued to inbox: {inbox_file.name}")]
 
     if name == "lattice_select":
         as_of_str: str | None = arguments.get("as_of")
         as_of = date.fromisoformat(as_of_str) if as_of_str else None
         atoms = select(query=arguments["query"], as_of=as_of, db=_db)
-        import json
         return [TextContent(type="text", text=json.dumps(atoms, indent=2))]
 
     if name == "lattice_answer":
-        import json
         as_of_str = arguments.get("as_of")
         as_of = date.fromisoformat(as_of_str) if as_of_str else None
         atom_ids: list[str] = arguments.get("atom_ids", [])
@@ -120,17 +134,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             atoms = []
             for aid in atom_ids:
                 try:
-                    a = _db.read(aid)
-                    atoms.append({
-                        "atom_id": a.atom_id,
-                        "subject": a.subject,
-                        "content": a.content,
-                        "kind": a.kind,
-                        "source": a.source,
-                        "valid_from": a.valid_from.isoformat() if a.valid_from else None,
-                        "valid_until": a.valid_until.isoformat() if a.valid_until else None,
-                    })
-                except Exception:
+                    atoms.append(_atom_to_dict(_db.read(aid)))
+                except AtomNotFound:
                     pass
         else:
             atoms = select(query=arguments["query"], as_of=as_of, db=_db)
@@ -150,7 +155,7 @@ def main() -> None:
                 read_stream,
                 write_stream,
                 InitializationOptions(
-                    server_name="lattice-mcp",
+                    server_name="lattice",
                     server_version="0.1.0",
                     capabilities=app.get_capabilities(
                         notification_options=None,

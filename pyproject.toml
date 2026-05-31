@@ -1,18 +1,26 @@
 [project]
-name = "lattice-mcp"
+name = "lattice"
 version = "0.1.0"
-description = "General-purpose lattice MCP server for persistent knowledge in AI coding assistants"
+description = "Local-first personal memory OS — daemon, web UI, and MCP server for ambient knowledge capture and recall"
 requires-python = ">=3.11"
 dependencies = [
+    "backoff>=2.2.1",
     "litellm>=1.83.14",
     "mcp>=1.27.1",
-    "pydantic>=2.12.5",
+    "networkx>=3.6.1",
+"pydantic>=2.12.5",
     "python-frontmatter>=1.1.0",
     "rank-bm25>=0.2.2",
+    "rapidfuzz>=3.0",
+    "watchdog>=4.0",
+    "fastapi>=0.111",
+    "uvicorn>=0.30",
 ]
 
 [project.scripts]
-lattice-mcp = "server:main"
+lattice = "server:main"
+lattice-daemon = "lattice.daemon:main"
+lattice-mock = "lattice.web.mock:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -23,3 +31,12 @@ packages = ["lattice", "server.py"]
 
 [dependency-groups]
 dev = ["pytest>=8"]
+semantic = ["fastembed>=0.4"]
+eval = [
+    "python-dotenv>=1.0",
+    "tqdm>=4.0",
+    "requests>=2.0",
+    "streamlit>=1.35",
+    "pandas>=2.0",
+    "pyvis>=0.3.2",
+]

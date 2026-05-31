@@ -1,5 +1,6 @@
-from datetime import date
+from datetime import date, datetime, timezone
 
+import frontmatter
 import pytest
 
 from lattice.models import Atom
@@ -98,6 +99,47 @@ class TestAtomRoundTrip:
         a = make_atom(metadata={"url": "https://example.com", "author": "Alice"})
         restored = Atom.from_markdown(a.to_markdown())
         assert restored.metadata == {"url": "https://example.com", "author": "Alice"}
+
+    def test_roundtrip_with_provenance(self):
+        observed = datetime(2024, 6, 1, tzinfo=timezone.utc)
+        a = make_atom(
+            ingested_at=observed,
+            observed_at=observed,
+            source_id="src-1",
+            source_title="README",
+            session_id="sess-1",
+            segment_id="seg-1",
+            source_type="markdown",
+            source_span={"start": 0, "end": 12},
+            content_hash="abc",
+            normalized_content_hash="def",
+        )
+        restored = Atom.from_markdown(a.to_markdown())
+        assert restored.ingested_at == observed
+        assert restored.observed_at == observed
+        assert restored.source_id == "src-1"
+        assert restored.source_title == "README"
+        assert restored.session_id == "sess-1"
+        assert restored.segment_id == "seg-1"
+        assert restored.source_type == "markdown"
+        assert restored.source_span == {"start": 0, "end": 12}
+        assert restored.content_hash == "abc"
+        assert restored.normalized_content_hash == "def"
+
+    def test_markdown_nests_provenance_and_dedup(self):
+        a = make_atom(
+            source_id="src-1",
+            segment_id="seg-1",
+            content_hash="abc",
+            normalized_content_hash="def",
+        )
+        metadata = frontmatter.loads(a.to_markdown()).metadata
+        assert "source_id" not in metadata
+        assert "content_hash" not in metadata
+        assert metadata["provenance"]["source_id"] == "src-1"
+        assert metadata["provenance"]["segment_id"] == "seg-1"
+        assert metadata["dedup"]["content_hash"] == "abc"
+        assert metadata["dedup"]["normalized_content_hash"] == "def"
 
     def test_roundtrip_multiline_content(self):
         content = "First line.\nSecond line.\nThird line."
