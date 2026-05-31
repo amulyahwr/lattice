@@ -110,7 +110,8 @@ stream_synthesis(query, atoms)
 |--------|------|
 | `lattice/daemon.py` | Persistent daemon. Sole writer to `LatticeDB`. Watches `LATTICE_INBOX` via `watchdog`; ingests `.txt`/`.md` files on drop, moves to `processed/`. Binds a Unix domain socket (`LATTICE_SOCK`) for IPC. Runs the FastAPI web server inline via `uvicorn` on `LATTICE_WEB_PORT` (default 7337). Manages PID file and graceful shutdown on SIGTERM/SIGINT. CLI: `lattice-daemon` (start), `lattice-daemon status`. |
 | `lattice/client.py` | `DaemonClient` — thin IPC client. Connects to `LATTICE_SOCK`, sends JSON-newline messages (`ping`, `ingest`), returns responses. Used by `server.py` when daemon is running. Falls back gracefully when socket is absent. |
-| `lattice/web/app.py` | FastAPI web UI. Routes: `GET /` (chat + recent atoms HTML), `POST /api/query` (streaming SSE synthesis with citations), `GET /api/atoms/recent` (last N atoms). Read-only — reads `LatticeDB` directly from disk. |
+| `lattice/web/app.py` | FastAPI web UI. Serves static files from `lattice/web/static/` via `StaticFiles`. Routes: `GET /` → `index.html`, `POST /api/query` (streaming SSE synthesis with numbered citations + markdown), `GET /api/atoms/recent`, `POST /api/feedback` (appends `{ts, question, answer, rating, reason}` to `LATTICE_DIR/feedback.jsonl`). Holds a module-level `LatticeDB` singleton — not re-created per request. |
+| `lattice/web/mock.py` | GPU-free dev server (`uv run lattice-mock`). Serves the same static files as `app.py` but stubs `/api/query` with canned SSE token stream and `/api/atoms/recent` with hardcoded atoms. Hot-reloads on file save. Use this to iterate on HTML/CSS/JS without a running daemon or LLM. |
 | `lattice/config.py` | `Config` dataclass. Reads all path/network env vars (`LATTICE_DIR`, `LATTICE_INBOX`, `LATTICE_SOCK`, `LATTICE_WEB_HOST`, `LATTICE_WEB_PORT`) in one place. LLM vars remain in `llm.py`. |
 | `server.py` | MCP stdio entrypoint. Routes `lattice_ingest` (inbox drop or `DaemonClient`), `lattice_select`, `lattice_answer`. Read-only for select/answer. |
 | `lattice/models.py` | `Atom` — Pydantic model with all provenance fields. Serialized to/from YAML frontmatter + markdown body via `python-frontmatter`. |
@@ -206,6 +207,6 @@ LATTICE_DIR/
 
 ## Roadmap
 
-**Phase 1 complete.** Daemon, inbox watcher, IPC protocol, MCP read-only refactor, web UI (chat + recent atoms), streaming synthesis, source citations, Anthropic via OpenAI-compat.
+**Phase 1 complete.** Daemon, inbox watcher, IPC protocol, MCP read-only refactor, web UI (chat + recent atoms + feedback), streaming synthesis, numbered source citations, markdown rendering, circular ETA ring with localStorage history, dark mode toggle, Anthropic via OpenAI-compat. Feedback collected to `feedback.jsonl`; mock server (`lattice-mock`) ships for GPU-free UI development.
 
-**Phase 2 next:** multi-device sync (mDNS discovery, Ed25519 device pairing, mTLS delta sync) and Homebrew install + first-run setup wizard.
+**Phase 2 next:** answer feedback analysis tooling, Homebrew install + first-run setup wizard, multi-device sync (mDNS discovery, Ed25519 device pairing, mTLS delta sync).
