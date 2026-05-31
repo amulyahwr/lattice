@@ -64,8 +64,10 @@ The daemon:
 
 Open `http://localhost:7337` in any browser.
 
-- **Chat** — ask a natural language question, get a synthesized answer with source citations
-- **Recent atoms** — see what was ingested recently; delete unwanted atoms
+- **Chat** — ask a natural language question; answer streams with numbered source citations and markdown rendering
+- **Recent atoms** — see what was ingested recently; memory count and kind icons at a glance
+- **Feedback** — rate each answer (👍 / 👎 + reason); written to `~/.lattice/feedback.jsonl`
+- **Dark mode** — manual toggle (☾/☀); persists across sessions
 
 ---
 
@@ -207,6 +209,9 @@ uv run pytest
 
 # Run daemon in dev (uses LATTICE_DIR env var)
 LATTICE_DIR=/tmp/lattice-dev uv run lattice-daemon
+
+# Iterate on the web UI without GPU — canned SSE responses, no LLM
+uv run lattice-mock   # http://localhost:7337
 ```
 
 Evaluation harness and priorities live under `lattice/eval/`. LongMemEval is used as a retrieval yardstick, not a product target.
