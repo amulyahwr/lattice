@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-from dataclasses import dataclass, field
 from datetime import date
 
 from pydantic import BaseModel, Field
@@ -12,9 +11,9 @@ from lattice.llm import complete
 from lattice.models import Atom
 from lattice.query import parse_query
 
-_PROBE_K = 7        # seeds used to measure source diversity
-_POINTED_MAX = 14   # max atoms when query is concentrated in one source
-_BFS_MAX_ATOMS = 60 # max atoms for multi-source expansion path
+_PROBE_K = 7
+_POINTED_MAX = 14
+_BFS_MAX_ATOMS = 60
 
 
 class _AtomSelectionCoarse(BaseModel):
@@ -25,11 +24,6 @@ class _AtomSelectionFine(BaseModel):
     n_selected: int = Field(ge=5, le=15)
     atom_ids: list[str] = Field(min_length=5, max_length=15)
 
-
-@dataclass
-class FilterResult:
-    atoms: list[dict]
-    debug: dict = field(default_factory=dict)
 
 _RECOMMENDATION_CAP = int(os.environ.get("LATTICE_RECOMMENDATION_CAP", "5"))
 
@@ -91,7 +85,7 @@ def _source_diversity(seeds: list[Atom]) -> int:
     return len({a.source_id for a in seeds if a.source_id})
 
 
-def select(
+def _retrieve(
     query: str,
     as_of: date | None = None,
     db: LatticeDB | None = None,
@@ -212,25 +206,24 @@ When in doubt, keep the atom. Aim for 8–15 atoms.
 """
 
 
-def select_llm_filter(
+def select(
     query: str,
     as_of: date | None = None,
     db: LatticeDB | None = None,
     top_k: int = 20,
-) -> FilterResult:
+) -> list[dict]:
     """BM25 + graph BFS retrieval followed by a two-stage LLM filter.
 
     Stage 1 (coarse): all candidates, subject + kind only → pick top 20 by topic relevance.
     Stage 2 (fine):   shortlist, full content → pick final 10-15 by content relevance.
     Falls back to the previous stage's output on any parse/LLM error.
     """
-    candidates = select(query, as_of=as_of, db=db, top_k=top_k)
+    candidates = _retrieve(query, as_of=as_of, db=db, top_k=top_k)
     if not candidates:
-        return FilterResult(atoms=[], debug={"n_candidates": 0})
+        return []
 
     model = os.environ.get("SELECTION_MODEL") or None
     num_ctx = int(os.environ.get("SELECTION_NUM_CTX", "8192"))
-    dbg: dict = {"n_candidates": len(candidates), "coarse_fallback": False, "fine_fallback": False}
 
     # Stage 1: coarse — subject + kind only, fits 40+ atoms in ~600 tokens
     def _coarse_entry(a: dict) -> dict:
@@ -254,9 +247,6 @@ def select_llm_filter(
         except Exception:
             pass
     shortlist = [a for a in candidates if a["atom_id"] in coarse_ids] or candidates[:20]
-    if not coarse_ids:
-        dbg["coarse_fallback"] = True
-    dbg["n_coarse"] = len(shortlist)
 
     # Stage 2: fine — full content, fits 20 atoms in ~1,800 tokens
     fine_msgs = [
@@ -273,11 +263,4 @@ def select_llm_filter(
         except Exception:
             pass
     filtered = [a for a in shortlist if a["atom_id"] in fine_ids]
-    dbg["n_fine_raw"] = len(fine_ids)
-    dbg["n_fine_valid"] = len(filtered)
-    if len(filtered) < 5:
-        filtered = shortlist
-        dbg["fine_fallback"] = True
-    dbg["n_fine"] = len(filtered)
-
-    return FilterResult(atoms=filtered, debug=dbg)
+    return filtered if len(filtered) >= 5 else shortlist

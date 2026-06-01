@@ -49,7 +49,7 @@ from lattice.db import LatticeDB
 from lattice.embed import rerank_atom_dicts
 from lattice.eval.session_formatter import format_session
 from lattice.ingest import _parse_datetime, ingest
-from lattice.selection import select, select_llm_filter
+from lattice.selection import _retrieve, select
 from lattice.synthesis import synthesize
 
 # ── config ────────────────────────────────────────────────────────────────────
@@ -119,8 +119,8 @@ def _load_config(args: argparse.Namespace) -> dict:
     phase = args.phase
     priority = args.priority or os.environ.get("PRIORITY", "")
     retrieval_mode = args.retrieval_mode or os.environ.get("RETRIEVAL_MODE", "select")
-    if retrieval_mode not in {"select", "bm25", "all", "llm_filter"}:
-        raise ValueError("RETRIEVAL_MODE must be one of: select, bm25, all, agent")
+    if retrieval_mode not in {"select", "bm25", "bm25_bfs", "all"}:
+        raise ValueError("RETRIEVAL_MODE must be one of: select, bm25, bm25_bfs, all")
     return {
         "dataset": dataset,
         "out": args.out or os.environ.get("OUT", _default_out(model, dataset, priority, retrieval_mode)),
@@ -511,10 +511,8 @@ def _run_inference(cfg: dict) -> None:
                 selection_debug: dict = {}
                 if cfg["retrieval_mode"] == "select":
                     selected = select(item["question"], as_of=as_of, db=db, top_k=cfg["top_k"])
-                elif cfg["retrieval_mode"] == "llm_filter":
-                    filter_result = select_llm_filter(item["question"], as_of=as_of, db=db, top_k=cfg["top_k"])
-                    selected = filter_result.atoms
-                    selection_debug = filter_result.debug
+                elif cfg["retrieval_mode"] == "bm25_bfs":
+                    selected = _retrieve(item["question"], as_of=as_of, db=db, top_k=cfg["top_k"])
                 elif cfg["retrieval_mode"] == "bm25":
                     selected = [_atom_debug_dict(atom) for atom in bm25_atoms]
                 else:
@@ -780,8 +778,8 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--log", default="", help="Override log file path")
     p.add_argument("--stratify", type=int, default=0)
     p.add_argument("--seed", type=int, default=0)
-    p.add_argument("--retrieval-mode", choices=["select", "bm25", "all", "llm_filter"], default="",
-                   help="select=BM25+graph+LLM (default), bm25=BM25 only, all=no retrieval")
+    p.add_argument("--retrieval-mode", choices=["select", "bm25", "bm25_bfs", "all"], default="",
+                   help="select=BM25+graph+LLM filter (default), bm25_bfs=BM25+graph only, bm25=BM25 only, all=no retrieval")
     p.add_argument("--top-k", type=int, default=0, help="BM25 candidate count (default 20)")
     p.add_argument("--evaluate-script", default="")
     p.add_argument("--print-qa-script", default="")
