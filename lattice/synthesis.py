@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Generator
 
-from lattice.llm import make_llm_client
+from lattice.llm import make_llm_client, resolve_model
 
 
 @dataclass
@@ -185,7 +185,7 @@ def synthesize(
     if not atoms:
         return SynthesisResult(answer="No relevant information found in the lattice.", raw_response="")
 
-    model = os.environ.get("SYNTHESIS_MODEL") or os.environ.get("LLM_MODEL", "qwen3:4b")
+    model = resolve_model(os.environ.get("SYNTHESIS_MODEL") or None)
     client = make_llm_client()
     messages = _build_messages(query, atoms, query_date)
     messages, tool_calls_log = _run_tool_loop(client, model, messages)
@@ -220,8 +220,8 @@ def stream_synthesis(
         yield 'data: {"type": "done"}\n\n'
         return
 
-    model = os.environ.get("SYNTHESIS_MODEL") or os.environ.get("LLM_MODEL", "qwen3:4b")
     try:
+        model = resolve_model(os.environ.get("SYNTHESIS_MODEL") or None)
         client = make_llm_client()
     except EnvironmentError as exc:
         # Rule 6: make degradation visible — signal provider gap to the caller

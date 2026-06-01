@@ -23,6 +23,21 @@ def make_llm_client(base_url: str | None = None, api_key: str | None = None) -> 
     return OpenAI(**kwargs)
 
 
+def resolve_model(override: str | None = None) -> str:
+    """Return the model name to use, preferring *override* then LLM_MODEL env var.
+
+    Raises EnvironmentError with a clear message if neither is set.
+    """
+    m = override or os.environ.get("LLM_MODEL")
+    if not m:
+        raise EnvironmentError(
+            "LLM_MODEL is required but not set. "
+            "Set it to a model name supported by your provider, e.g. "
+            "LLM_MODEL=gpt-4o (openai) or LLM_MODEL=qwen3:4b (ollama)."
+        )
+    return m
+
+
 def complete(
     messages: list[dict],
     text_format: type | None = None,
@@ -35,7 +50,7 @@ def complete(
         raise EnvironmentError(f"LLM_API_KEY is required for provider '{provider}'")
 
     client = make_llm_client()
-    m = model or os.environ.get("LLM_MODEL", "qwen3:4b")
+    m = resolve_model(model)
 
     kwargs: dict = {"model": m, "messages": messages}
     if text_format is not None:

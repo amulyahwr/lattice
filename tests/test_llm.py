@@ -19,6 +19,7 @@ def _make_completion(text: str):
 def clear_env(monkeypatch):
     for var in ("LLM_PROVIDER", "LLM_MODEL", "LLM_API_KEY", "LLM_BASE_URL", "LLM_NUM_CTX"):
         monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("LLM_MODEL", "test-model")
 
 
 class TestMakeLlmClient:
@@ -84,6 +85,12 @@ class TestComplete:
             llm_module.complete([{"role": "user", "content": "hi"}])
         call_kwargs = mock_cls.return_value.chat.completions.create.call_args.kwargs
         assert "extra_body" not in call_kwargs
+
+    def test_missing_llm_model_raises(self, monkeypatch):
+        monkeypatch.setenv("LLM_PROVIDER", "ollama")
+        monkeypatch.delenv("LLM_MODEL", raising=False)
+        with pytest.raises(EnvironmentError, match="LLM_MODEL"):
+            llm_module.complete([{"role": "user", "content": "hi"}])
 
     def test_missing_api_key_raises_for_openai(self, monkeypatch):
         monkeypatch.setenv("LLM_PROVIDER", "openai")
