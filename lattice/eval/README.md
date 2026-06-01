@@ -66,10 +66,13 @@ Writes `results/run1.jsonl` (hypotheses) and `results/run1.debug.jsonl` (per-que
 Use same ingest, swap retrieval mode, then compare judged accuracy and debug files:
 
 ```bash
-# Product path: BM25 candidates -> selection payload -> synthesis
+# Product path: BM25+BFS + two-stage LLM filter → synthesis
 uv run python -m lattice.eval.run_eval --phase inference --retrieval-mode select --priority p3-select
 
-# BM25 ablation: BM25 candidates go straight to synthesis through the eval debug payload
+# BM25+BFS only (no LLM filter): measures LLM filter contribution
+uv run python -m lattice.eval.run_eval --phase inference --retrieval-mode bm25_bfs --priority p3-bm25bfs
+
+# BM25 only: no graph, no LLM filter
 uv run python -m lattice.eval.run_eval --phase inference --retrieval-mode bm25 --priority p3-bm25
 
 # Ceiling check: all valid atoms go to synthesis
@@ -88,7 +91,7 @@ Read result:
 
 Set `--top-k 50` to test if selection improves with wider candidate pool. Debug rows include `retrieval_mode`, `top_k`, `bm25_candidates`, `selected_atoms`, `retrieval_oracle`, and `answer_oracle`.
 
-Current `select` uses BM25 directly. Its selected atom payload is normalized to include the same provenance, dedup, and supersession fields as BM25 debug atoms, while keeping flat provenance fields for product callers. After payload normalization, `select` and `bm25` should be close; if they diverge, inspect atom IDs, ordering, and output reuse before attributing the gap to retrieval quality.
+`select` mode runs BM25+BFS (`_retrieve`) then a two-stage LLM coarse+fine filter. `bm25_bfs` skips the LLM filter. If `select` and `bm25_bfs` diverge significantly, inspect which atoms the LLM filter is dropping. If `bm25_bfs` and `bm25` diverge, the graph BFS expansion is contributing.
 
 To keep ingest identical across variants, use the variant runner with `--reuse-ingest`:
 
@@ -123,7 +126,7 @@ uv run python lattice/eval/print_retrieval_metrics.py results/run1.debug.jsonl
 uv run python -m lattice.eval.run_eval --phase judge
 ```
 
-Starts a LiteLLM proxy pointing to `qwen2.5:14b`, runs `evaluate_qa.py` against the existing results file, then stops the proxy.
+Runs `evaluate_qa.py` against the existing results file using the configured judge model.
 
 ### Override config inline
 
