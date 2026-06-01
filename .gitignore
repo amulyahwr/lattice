@@ -8,7 +8,7 @@ lattice_store/
 uv.lock
 .env.eval
 results/
-lattice/eval/data/*
+lattice/eval/
 *.log
 mlruns/*
 *.db
