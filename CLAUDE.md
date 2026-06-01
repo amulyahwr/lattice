@@ -16,7 +16,7 @@ uv run lattice-daemon status   # check daemon health (JSON)
 
 Web UI auto-starts with the daemon at http://localhost:7337 (port tunable via `LATTICE_WEB_PORT`).
 
-Required env vars: `LLM_PROVIDER`, `LLM_MODEL`, `LATTICE_DIR`. `LLM_API_KEY` required for all providers except `ollama`. Per-stage model overrides: `INGEST_MODEL`, `SYNTHESIS_MODEL`. For Anthropic-compat endpoints set `LLM_BASE_URL` (e.g. `https://api.anthropic.com/v1`) with `LLM_PROVIDER=openai`.
+Required env vars: `LLM_PROVIDER`, `LLM_MODEL`, `LATTICE_DIR`. `LLM_API_KEY` required for all providers except `ollama`. Per-stage model overrides: `INGEST_MODEL`, `SYNTHESIS_MODEL`. `LLM_BASE_URL` overrides the API endpoint — use for OpenRouter (`https://openrouter.ai/api/v1`), Anthropic-compat (`https://api.anthropic.com/v1`), or any OpenAI-compat endpoint; set `LLM_PROVIDER=openai` in all cases.
 
 ## Architecture
 
@@ -27,7 +27,8 @@ server.py          MCP stdio entrypoint. Owns one shared LatticeDB instance.
 lattice/
   config.py        Centralised env-var parsing → Config dataclass. All path/port vars here;
                    LLM vars stay in llm.py pending refactor.
-  llm.py           openai.OpenAI wrapper. make_llm_client() builds client from env; complete() calls
+  llm.py           openai.OpenAI wrapper. make_llm_client() builds client from env; resolve_model()
+                   returns model name or raises EnvironmentError if LLM_MODEL unset; complete() calls
                    chat.completions.create. Ollama gets extra_body={num_ctx, think:false}; others don't.
   models.py        Atom pydantic model + markdown serialization (python-frontmatter).
   db.py            File-based store: one .md file per atom in LATTICE_DIR. BM25 search.
@@ -60,8 +61,8 @@ lattice/
   embed.py         Optional semantic embedding via fastembed (install semantic extra). Guards
                    import; no-ops cleanly if fastembed absent. Not on hot query path.
   util.py          Shared helpers: write_file_atomic, _normalized_subject.
-  web/app.py       FastAPI app: GET / (chat UI), POST /query (streaming SSE synthesis),
-                   GET /atoms (recent atoms JSON). Started by daemon.
+  web/app.py       FastAPI app: GET / (chat UI), POST /api/query (streaming SSE synthesis),
+                   GET /api/atoms/recent (recent atoms JSON), POST /api/feedback. Started by daemon.
 ```
 
 ### Ingest drop mechanism
@@ -89,7 +90,7 @@ Drop any `.md` (or text) file into `LATTICE_INBOX` (default `LATTICE_DIR/inbox/`
 
 **Graph sidecars**: `LatticeGraph` writes `LATTICE_DIR/graph/` on every atom write. `db.preload()` loads from sidecars if manifest atom_count matches; otherwise rebuilds. Access via `db.graph`. Selection uses BFS over graph edges to expand evidence packs from BM25 seeds.
 
-This is current MVP behavior, not the target product shape. Roadmap priorities in `lattice/eval/PRIORITIES.md` track next steps.
+This is current MVP behavior, not the target product shape.
 
 ### Test conventions
 

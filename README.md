@@ -103,10 +103,10 @@ All configuration is via environment variables.
 
 | Variable | Default | Description |
 |---|---|---|
-| `LLM_PROVIDER` | `anthropic` | `anthropic` \| `openai` \| `ollama` |
-| `LLM_MODEL` | `claude-sonnet-4-6` | Base model (ingest + selection fallback) |
+| `LLM_PROVIDER` | `ollama` | `ollama` \| `openai` \| `anthropic` |
+| `LLM_MODEL` | _(required)_ | Model name — raises error if unset |
 | `LLM_API_KEY` | — | API key (not required for Ollama) |
-| `LLM_BASE_URL` | — | Override API base URL (e.g. Anthropic via OpenAI-compat) |
+| `LLM_BASE_URL` | — | Override API base URL (e.g. OpenRouter, Anthropic compat) |
 | `INGEST_MODEL` | _(LLM_MODEL)_ | Override model for ingest only |
 | `SYNTHESIS_MODEL` | _(LLM_MODEL)_ | Override model for synthesis only |
 | `SELECTION_MODEL` | _(LLM_MODEL)_ | Override model for LLM selection filter |
@@ -116,10 +116,10 @@ All configuration is via environment variables.
 
 | Use case | Config |
 |---|---|
-| Local, private (recommended) | `LLM_PROVIDER=ollama`, `LLM_MODEL=qwen3:7b` |
-| Anthropic subscription | `LLM_PROVIDER=anthropic`, `LLM_API_KEY=sk-ant-...` |
-| OpenAI subscription | `LLM_PROVIDER=openai`, `LLM_API_KEY=sk-...` |
-| Anthropic via OpenAI-compat | `LLM_PROVIDER=openai`, `LLM_BASE_URL=https://api.anthropic.com/v1`, `LLM_MODEL=claude-sonnet-4-6`, `LLM_API_KEY=sk-ant-...` |
+| Local, private — sufficient RAM (recommended) | `LLM_PROVIDER=ollama`, `LLM_MODEL=qwen3:4b` |
+| Cloud API — low RAM or fastest results | `LLM_PROVIDER=openai`, `LLM_BASE_URL=https://openrouter.ai/api/v1`, `LLM_MODEL=openai/gpt-4o-mini`, `LLM_API_KEY=sk-or-...` |
+| Anthropic subscription | `LLM_PROVIDER=openai`, `LLM_BASE_URL=https://api.anthropic.com/v1`, `LLM_MODEL=claude-sonnet-4-6`, `LLM_API_KEY=sk-ant-...` |
+| OpenAI subscription | `LLM_PROVIDER=openai`, `LLM_MODEL=gpt-4o-mini`, `LLM_API_KEY=sk-...` |
 
 ### Paths
 
@@ -214,4 +214,4 @@ LATTICE_DIR=/tmp/lattice-dev uv run lattice-daemon
 uv run lattice-mock   # http://localhost:7337
 ```
 
-Evaluation harness and priorities live under `lattice/eval/`. LongMemEval is used as a retrieval yardstick, not a product target.
+Run `scripts/e2e.py` for a full pipeline smoke test (ingest → select → synthesize) against a fixed personal memory corpus — requires `LLM_MODEL` and provider env vars set.
