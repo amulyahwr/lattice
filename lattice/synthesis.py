@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import Generator
 
-from openai import OpenAI
+from lattice.llm import make_llm_client, resolve_model
 
 
 @dataclass
@@ -84,20 +84,10 @@ _TOOLS = [
 ]
 
 
-def _make_client() -> OpenAI:
-    provider = os.environ.get("LLM_PROVIDER", "anthropic")
-    api_key = os.environ.get("LLM_API_KEY")
-    if provider == "ollama":
-        return OpenAI(base_url="http://localhost:11434/v1", api_key="ollama", timeout=90.0)
-    if provider == "openai":
-        return OpenAI(api_key=api_key)
-    # Gap: Anthropic's tool-calling API shape differs from the OpenAI compat path
-    # used in ingest/selection. Synthesis needs a separate Anthropic client using
-    # anthropic-sdk directly. Track in S11-followup before enabling Anthropic deployments.
-    raise NotImplementedError(
-        f"Synthesis agent does not yet support provider '{provider}'. "
-        "Set LLM_PROVIDER=ollama or LLM_PROVIDER=openai."
-    )
+def _ollama_extra() -> dict:
+    if os.environ.get("LLM_PROVIDER", "ollama") == "ollama":
+        return {"num_ctx": 4096, "think": False}
+    return {}
 
 
 def _execute_tool(name: str, args: dict) -> str:
@@ -115,6 +105,11 @@ def _execute_tool(name: str, args: dict) -> str:
 _CITATION_RE = re.compile(r"\[src:([^\]]+)\]")
 
 
+def _atom_src_key(a: dict) -> str:
+    """Unique citation key for an atom — atom_id preferred, source_id as fallback."""
+    return str(a.get("atom_id") or a.get("source_id") or a.get("source") or "unknown")
+
+
 def replace_citations(text: str, atoms: list[dict]) -> str:
     """Replace [src:id] markers in *text* with labelled citation markers.
 
@@ -122,11 +117,7 @@ def replace_citations(text: str, atoms: list[dict]) -> str:
     render it as a tooltip or link. Unknown source_ids are left unchanged —
     never silently drop a citation the model emitted (Rule 6).
     """
-    index = {
-        str(a.get("source_id") or a.get("source") or ""): a
-        for a in atoms
-        if a.get("source_id") or a.get("source")
-    }
+    index = {_atom_src_key(a): a for a in atoms}
 
     def _replace(m: re.Match) -> str:
         src_id = m.group(1)
@@ -143,7 +134,7 @@ def _build_messages(query: str, atoms: list[dict], query_date: date | None) -> l
     today = (query_date or datetime.now(tz=timezone.utc).date()).isoformat()
     atoms_text = "\n\n".join(
         (
-            f"[src:{a.get('source_id') or a.get('source') or 'unknown'} "
+            f"[src:{_atom_src_key(a)} "
             f"/ {a['subject']} / {a['kind']} / valid_from={a.get('valid_from', 'null')} "
             f"/ observed_at={a.get('observed_at', 'null')} "
             f"/ title={a.get('source_title') or 'n/a'}]\n"
@@ -169,10 +160,11 @@ def _run_tool_loop(
     for generating the final text response (streaming or non-streaming).
     """
     tool_calls_log: list[dict] = []
+    extra = _ollama_extra()
     for _ in range(5):
         resp = client.chat.completions.create(
             model=model, messages=messages, tools=_TOOLS, tool_choice="auto",
-            extra_body={"num_ctx": 4096},
+            **( {"extra_body": extra} if extra else {}),
         )
         msg = resp.choices[0].message
         if not msg.tool_calls:
@@ -194,12 +186,15 @@ def synthesize(
     if not atoms:
         return SynthesisResult(answer="No relevant information found in the lattice.", raw_response="")
 
-    model = os.environ.get("SYNTHESIS_MODEL") or os.environ.get("LLM_MODEL", "qwen3.5:4b")
-    client = _make_client()
+    model = resolve_model(os.environ.get("SYNTHESIS_MODEL") or None)
+    client = make_llm_client()
     messages = _build_messages(query, atoms, query_date)
     messages, tool_calls_log = _run_tool_loop(client, model, messages)
 
-    resp = client.chat.completions.create(model=model, messages=messages, extra_body={"num_ctx": 4096})
+    extra = _ollama_extra()
+    resp = client.chat.completions.create(
+        model=model, messages=messages, **( {"extra_body": extra} if extra else {}),
+    )
     raw = resp.choices[0].message.content or ""
     answer = replace_citations(raw, atoms)
     return SynthesisResult(answer=answer, raw_response=raw, tool_calls=tool_calls_log)
@@ -226,10 +221,10 @@ def stream_synthesis(
         yield 'data: {"type": "done"}\n\n'
         return
 
-    model = os.environ.get("SYNTHESIS_MODEL") or os.environ.get("LLM_MODEL", "qwen3.5:4b")
     try:
-        client = _make_client()
-    except NotImplementedError as exc:
+        model = resolve_model(os.environ.get("SYNTHESIS_MODEL") or None)
+        client = make_llm_client()
+    except EnvironmentError as exc:
         # Rule 6: make degradation visible — signal provider gap to the caller
         yield f'data: {json.dumps({"type": "error", "message": str(exc)})}\n\n'
         return
@@ -242,9 +237,10 @@ def stream_synthesis(
         return
 
     full_answer: list[str] = []
+    extra = _ollama_extra()
     try:
         stream = client.chat.completions.create(
-            model=model, messages=messages, stream=True, extra_body={"num_ctx": 4096},
+            model=model, messages=messages, stream=True, **( {"extra_body": extra} if extra else {}),
         )
         for chunk in stream:
             delta = chunk.choices[0].delta

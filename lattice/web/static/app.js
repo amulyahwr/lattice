@@ -172,8 +172,9 @@ function buildCitationIndex(atoms) {
   const byId = {}, ordered = [];
   let n = 1;
   atoms.forEach(a => {
-    if (a.source_id && !(a.source_id in byId)) {
-      byId[a.source_id] = n++;
+    const key = a.atom_id || a.source_id;
+    if (key && !(key in byId)) {
+      byId[key] = n++;
       ordered.push(a);
     }
   });
@@ -234,9 +235,9 @@ function renderReferences(orderedAtoms) {
   if (!orderedAtoms.length) return '';
   const collapsed = orderedAtoms.length > 3;
   const items = orderedAtoms.map((a, i) => `
-    <li class="ref-item" id="ref-${escHtml(a.source_id || String(i+1))}">
+    <li class="ref-item" id="ref-${escHtml(a.atom_id || a.source_id || String(i+1))}">
       <span class="ref-num">[${i + 1}]</span>
-      <span class="ref-source">${escHtml(a.source_title || a.source_id || '—')}</span>
+      <span class="ref-source">${escHtml(a.source_title ? `${a.source_title} · ${a.subject || ''}` : (a.subject || a.source_id || '—'))}</span>
     </li>`).join('');
 
   const label = `${orderedAtoms.length} source${orderedAtoms.length > 1 ? 's' : ''}`;
@@ -474,7 +475,7 @@ async function ask(question) {
           citIndex  = buildCitationIndex(evt.atoms || []);
           atomsById  = {};
           atomNumMap = citIndex.byId;
-          citIndex.ordered.forEach(a => { if (a.source_id) atomsById[a.source_id] = a; });
+          citIndex.ordered.forEach(a => { const k = a.atom_id || a.source_id; if (k) atomsById[k] = a; });
 
         } else if (evt.type === 'token') {
           if (loading.style.display !== 'none') {
@@ -502,7 +503,10 @@ async function ask(question) {
           const md = renderMarkdown(evt.answer);
           answerEl.innerHTML = renderCitations(md, citIndex.byId);
           answerEl.classList.remove('streaming');
-          refsEl.innerHTML = renderReferences(citIndex.ordered);
+          // only show sources actually cited in the answer
+          const citedIds = new Set([...evt.answer.matchAll(/\[src:([^\]]+)\]/g)].map(m => m[1]));
+          const citedAtoms = citIndex.ordered.filter(a => citedIds.has(a.atom_id || a.source_id));
+          refsEl.innerHTML = renderReferences(citedAtoms);
           feedbackEl.style.display = 'flex';
           bindFeedback(turn, question, evt.answer);
           bindCitationLinks(turn);

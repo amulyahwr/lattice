@@ -27,7 +27,8 @@ server.py          MCP stdio entrypoint. Owns one shared LatticeDB instance.
 lattice/
   config.py        Centralised env-var parsing → Config dataclass. All path/port vars here;
                    LLM vars stay in llm.py pending refactor.
-  llm.py           Thin litellm wrapper. Reads LLM_PROVIDER/LLM_MODEL/LLM_API_KEY/LLM_BASE_URL.
+  llm.py           openai.OpenAI wrapper. make_llm_client() builds client from env; complete() calls
+                   chat.completions.create. Ollama gets extra_body={num_ctx, think:false}; others don't.
   models.py        Atom pydantic model + markdown serialization (python-frontmatter).
   db.py            File-based store: one .md file per atom in LATTICE_DIR. BM25 search.
                    subjects.json is a subject→atom_id index for O(1) supersession lookups.
@@ -50,8 +51,9 @@ lattice/
                    then checks supersession per atom.
   query.py         Query intent classifier: detects temporal/recommendation/preference signals
                    to tune selection scoring. Stateless; used by selection.py.
-  selection.py     BM25 pre-filter (top_k=20) → LLM re-ranks → recommendation cap (max 5
-                   kind=recommendation slots, tunable via LATTICE_RECOMMENDATION_CAP) → atom dicts.
+  selection.py     _retrieve(): BM25 top-20 → source-diversity probe → graph BFS → atom dicts (no LLM).
+                   select(): calls _retrieve() then two-stage LLM coarse+fine filter → final atom dicts.
+                   select() is the production path; _retrieve() is the eval ablation (bm25_bfs mode).
   synthesis.py     LLM generates prose answer from atom dicts. Uses SYNTHESIS_MODEL env var
                    (falls back to LLM_MODEL). Ollama path uses OpenAI-compat client with
                    num_ctx=4096 and tool calls for date_diff + sum_numbers.
@@ -79,11 +81,11 @@ Drop any `.md` (or text) file into `LATTICE_INBOX` (default `LATTICE_DIR/inbox/`
 
 **Supersession** (in `ingest.py`): when a new atom has the same subject as an existing one, an LLM call decides if it supersedes. Fast path uses `subjects.json`; slow path scans files (handles hand-edited atoms). Superseded atoms stay on disk with `is_superseded=true` and bidirectional links (`superseded_by` / `supersedes`).
 
-**LLM calls**: all go through `lattice.llm.complete(messages)`. Tests mock this at `lattice.ingest.complete`, `lattice.selection.complete`, `lattice.synthesis.complete` — patch the module-level name, not `lattice.llm.complete`.
+**LLM calls**: all go through `lattice.llm.complete(messages)`. Tests mock at `lattice.ingest.complete`, `lattice.selection.complete` — patch the module-level name, not `lattice.llm.complete`. Synthesis is different: patch `lattice.synthesis.make_llm_client` (returns a mock OpenAI client).
 
 **Atom storage**: every atom is a `.md` file with YAML frontmatter. `LatticeDB` has an in-memory cache (`_atom_cache`). Cache is per-instance; `server.py` reuses one instance per process.
 
-**BM25**: built fresh on each `db.search()` call from all non-superseded atoms. No persistent BM25 index.
+**BM25**: cached on `LatticeDB` as `_bm25_cache` keyed by frozenset of atom IDs. Invalidated on every `write()` or `supersede()`. Rebuilt lazily on next `search()` call.
 
 **Graph sidecars**: `LatticeGraph` writes `LATTICE_DIR/graph/` on every atom write. `db.preload()` loads from sidecars if manifest atom_count matches; otherwise rebuilds. Access via `db.graph`. Selection uses BFS over graph edges to expand evidence packs from BM25 seeds.
 

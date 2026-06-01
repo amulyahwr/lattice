@@ -7,8 +7,9 @@ lattice_store/
 .python-version
 uv.lock
 .env.eval
+Modelfile.*
 results/
-lattice/eval/
+lattice/eval/data/*
 *.log
 mlruns/*
 *.db

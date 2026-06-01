@@ -55,7 +55,7 @@ def test_tokens_streamed_in_order():
     atoms = [{"subject": "s", "kind": "fact", "content": "c", "source": "doc"}]
     client = _mock_client(["Hello", " world"])
 
-    with patch("lattice.synthesis._make_client", return_value=client):
+    with patch("lattice.synthesis.make_llm_client", return_value=client):
         events = _parse_events(stream_synthesis("q", atoms))
 
     tokens = [e for e in events if e["type"] == "token"]
@@ -66,17 +66,17 @@ def test_done_event_always_last():
     atoms = [{"subject": "s", "kind": "fact", "content": "c", "source": "doc"}]
     client = _mock_client(["ok"])
 
-    with patch("lattice.synthesis._make_client", return_value=client):
+    with patch("lattice.synthesis.make_llm_client", return_value=client):
         events = _parse_events(stream_synthesis("q", atoms))
 
     assert events[-1]["type"] == "done"
 
 
 def test_provider_error_yields_error_event():
-    """Rule 6: NotImplementedError from _make_client must surface as error event."""
+    """Rule 6: EnvironmentError from make_llm_client must surface as error event."""
     atoms = [{"subject": "s", "kind": "fact", "content": "c", "source": "doc"}]
 
-    with patch("lattice.synthesis._make_client", side_effect=NotImplementedError("unsupported provider")):
+    with patch("lattice.synthesis.make_llm_client", side_effect=EnvironmentError("unsupported provider")):
         events = _parse_events(stream_synthesis("q", atoms))
 
     assert events[0]["type"] == "error"
@@ -94,7 +94,7 @@ def test_streaming_exception_yields_error_event():
     tool_resp.choices = [SimpleNamespace(message=msg)]
     client.chat.completions.create.side_effect = [tool_resp, RuntimeError("network timeout")]
 
-    with patch("lattice.synthesis._make_client", return_value=client):
+    with patch("lattice.synthesis.make_llm_client", return_value=client):
         events = _parse_events(stream_synthesis("q", atoms))
 
     error_events = [e for e in events if e["type"] == "error"]
@@ -115,7 +115,7 @@ def test_no_token_events_for_empty_delta():
     real_chunk = _make_stream_chunk("answer")
     client.chat.completions.create.side_effect = [tool_resp, iter([empty_chunk, real_chunk])]
 
-    with patch("lattice.synthesis._make_client", return_value=client):
+    with patch("lattice.synthesis.make_llm_client", return_value=client):
         events = _parse_events(stream_synthesis("q", atoms))
 
     tokens = [e for e in events if e["type"] == "token"]

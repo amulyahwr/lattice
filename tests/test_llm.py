@@ -5,92 +5,109 @@ import pytest
 import lattice.llm as llm_module
 
 
-def _make_response(text: str):
+def _make_completion(text: str):
+    msg = MagicMock()
+    msg.content = text
+    choice = MagicMock()
+    choice.message = msg
     resp = MagicMock()
-    resp.output_text = text
+    resp.choices = [choice]
     return resp
 
 
 @pytest.fixture(autouse=True)
 def clear_env(monkeypatch):
-    for var in ("LLM_PROVIDER", "LLM_MODEL", "LLM_API_KEY"):
+    for var in ("LLM_PROVIDER", "LLM_MODEL", "LLM_API_KEY", "LLM_BASE_URL", "LLM_NUM_CTX"):
         monkeypatch.delenv(var, raising=False)
+    monkeypatch.setenv("LLM_MODEL", "test-model")
 
 
-class TestModelString:
-    def test_default_anthropic(self, monkeypatch):
-        monkeypatch.setenv("LLM_PROVIDER", "anthropic")
-        monkeypatch.setenv("LLM_MODEL", "claude-sonnet-4-6")
-        assert llm_module._model_string() == "anthropic/claude-sonnet-4-6"
-
-    def test_openai_prefix(self, monkeypatch):
-        monkeypatch.setenv("LLM_PROVIDER", "openai")
-        monkeypatch.setenv("LLM_MODEL", "gpt-4o")
-        assert llm_module._model_string() == "openai/gpt-4o"
-
-    def test_ollama_prefix(self, monkeypatch):
+class TestMakeLlmClient:
+    def test_ollama_uses_localhost(self, monkeypatch):
         monkeypatch.setenv("LLM_PROVIDER", "ollama")
-        monkeypatch.setenv("LLM_MODEL", "llama3")
-        assert llm_module._model_string() == "ollama/llama3"
+        with patch("lattice.llm.OpenAI") as mock_cls:
+            llm_module.make_llm_client()
+        kwargs = mock_cls.call_args.kwargs
+        assert "localhost:11434" in kwargs.get("base_url", "")
 
-    def test_unknown_provider_passthrough(self, monkeypatch):
-        monkeypatch.setenv("LLM_PROVIDER", "custom")
-        monkeypatch.setenv("LLM_MODEL", "my-model")
-        assert llm_module._model_string() == "my-model"
+    def test_ollama_api_key_is_ollama(self, monkeypatch):
+        monkeypatch.setenv("LLM_PROVIDER", "ollama")
+        with patch("lattice.llm.OpenAI") as mock_cls:
+            llm_module.make_llm_client()
+        assert mock_cls.call_args.kwargs.get("api_key") == "ollama"
+
+    def test_openai_uses_provided_api_key(self, monkeypatch):
+        monkeypatch.setenv("LLM_PROVIDER", "openai")
+        monkeypatch.setenv("LLM_API_KEY", "sk-mykey")
+        with patch("lattice.llm.OpenAI") as mock_cls:
+            llm_module.make_llm_client()
+        assert mock_cls.call_args.kwargs.get("api_key") == "sk-mykey"
+
+    def test_explicit_base_url_forwarded(self, monkeypatch):
+        monkeypatch.setenv("LLM_PROVIDER", "openai")
+        monkeypatch.setenv("LLM_API_KEY", "sk-test")
+        with patch("lattice.llm.OpenAI") as mock_cls:
+            llm_module.make_llm_client(base_url="https://api.example.com/v1")
+        assert mock_cls.call_args.kwargs.get("base_url") == "https://api.example.com/v1"
 
 
 class TestComplete:
     def test_returns_content_string(self, monkeypatch):
-        monkeypatch.setenv("LLM_PROVIDER", "anthropic")
-        monkeypatch.setenv("LLM_MODEL", "claude-sonnet-4-6")
-        monkeypatch.setenv("LLM_API_KEY", "sk-test")
-        with patch("lattice.llm.litellm.responses", return_value=_make_response("hello")) as mock:
+        monkeypatch.setenv("LLM_PROVIDER", "ollama")
+        with patch("lattice.llm.OpenAI") as mock_cls:
+            mock_cls.return_value.chat.completions.create.return_value = _make_completion("hello")
             result = llm_module.complete([{"role": "user", "content": "hi"}])
         assert result == "hello"
-        mock.assert_called_once()
-
-    def test_passes_api_key(self, monkeypatch):
-        monkeypatch.setenv("LLM_PROVIDER", "anthropic")
-        monkeypatch.setenv("LLM_MODEL", "claude-sonnet-4-6")
-        monkeypatch.setenv("LLM_API_KEY", "sk-mykey")
-        with patch("lattice.llm.litellm.responses", return_value=_make_response("ok")) as mock:
-            llm_module.complete([{"role": "user", "content": "test"}])
-        _, kwargs = mock.call_args
-        assert kwargs.get("api_key") == "sk-mykey"
-
-    def test_no_api_key_passes_none(self, monkeypatch):
-        monkeypatch.setenv("LLM_PROVIDER", "ollama")
-        monkeypatch.setenv("LLM_MODEL", "llama3")
-        with patch("lattice.llm.litellm.responses", return_value=_make_response("ok")) as mock:
-            llm_module.complete([{"role": "user", "content": "test"}])
-        _, kwargs = mock.call_args
-        assert kwargs.get("api_key") is None
 
     def test_messages_forwarded(self, monkeypatch):
-        monkeypatch.setenv("LLM_PROVIDER", "anthropic")
-        monkeypatch.setenv("LLM_MODEL", "claude-sonnet-4-6")
-        monkeypatch.setenv("LLM_API_KEY", "sk-test")
+        monkeypatch.setenv("LLM_PROVIDER", "ollama")
         messages = [{"role": "user", "content": "what is 2+2?"}]
-        with patch("lattice.llm.litellm.responses", return_value=_make_response("4")) as mock:
+        with patch("lattice.llm.OpenAI") as mock_cls:
+            mock_cls.return_value.chat.completions.create.return_value = _make_completion("4")
             llm_module.complete(messages)
-        _, kwargs = mock.call_args
-        assert kwargs.get("input") == messages
+        call_kwargs = mock_cls.return_value.chat.completions.create.call_args.kwargs
+        assert call_kwargs.get("messages") == messages
 
-    def test_missing_api_key_raises_for_anthropic(self, monkeypatch):
-        monkeypatch.setenv("LLM_PROVIDER", "anthropic")
-        monkeypatch.setenv("LLM_MODEL", "claude-sonnet-4-6")
-        with pytest.raises(EnvironmentError, match="LLM_API_KEY"):
+    def test_ollama_gets_extra_body(self, monkeypatch):
+        monkeypatch.setenv("LLM_PROVIDER", "ollama")
+        with patch("lattice.llm.OpenAI") as mock_cls:
+            mock_cls.return_value.chat.completions.create.return_value = _make_completion("ok")
+            llm_module.complete([{"role": "user", "content": "hi"}])
+        call_kwargs = mock_cls.return_value.chat.completions.create.call_args.kwargs
+        assert "extra_body" in call_kwargs
+        assert call_kwargs["extra_body"].get("think") is False
+
+    def test_openai_no_extra_body(self, monkeypatch):
+        monkeypatch.setenv("LLM_PROVIDER", "openai")
+        monkeypatch.setenv("LLM_API_KEY", "sk-test")
+        with patch("lattice.llm.OpenAI") as mock_cls:
+            mock_cls.return_value.chat.completions.create.return_value = _make_completion("ok")
+            llm_module.complete([{"role": "user", "content": "hi"}])
+        call_kwargs = mock_cls.return_value.chat.completions.create.call_args.kwargs
+        assert "extra_body" not in call_kwargs
+
+    def test_missing_llm_model_raises(self, monkeypatch):
+        monkeypatch.setenv("LLM_PROVIDER", "ollama")
+        monkeypatch.delenv("LLM_MODEL", raising=False)
+        with pytest.raises(EnvironmentError, match="LLM_MODEL"):
             llm_module.complete([{"role": "user", "content": "hi"}])
 
     def test_missing_api_key_raises_for_openai(self, monkeypatch):
         monkeypatch.setenv("LLM_PROVIDER", "openai")
-        monkeypatch.setenv("LLM_MODEL", "gpt-4o")
         with pytest.raises(EnvironmentError, match="LLM_API_KEY"):
             llm_module.complete([{"role": "user", "content": "hi"}])
 
     def test_missing_api_key_ok_for_ollama(self, monkeypatch):
         monkeypatch.setenv("LLM_PROVIDER", "ollama")
-        monkeypatch.setenv("LLM_MODEL", "llama3")
-        with patch("lattice.llm.litellm.responses", return_value=_make_response("ok")):
+        with patch("lattice.llm.OpenAI") as mock_cls:
+            mock_cls.return_value.chat.completions.create.return_value = _make_completion("ok")
             result = llm_module.complete([{"role": "user", "content": "hi"}])
         assert result == "ok"
+
+    def test_text_format_sets_json_response_format(self, monkeypatch):
+        monkeypatch.setenv("LLM_PROVIDER", "ollama")
+        with patch("lattice.llm.OpenAI") as mock_cls:
+            mock_cls.return_value.chat.completions.create.return_value = _make_completion("{}")
+            llm_module.complete([{"role": "user", "content": "hi"}], text_format=dict)
+        call_kwargs = mock_cls.return_value.chat.completions.create.call_args.kwargs
+        assert call_kwargs.get("response_format") == {"type": "json_object"}

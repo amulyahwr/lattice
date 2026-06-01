@@ -316,11 +316,14 @@ def _mock_completion(answer: str):
 
 
 class TestSynthesize:
+    def _mock_client(self, answer: str):
+        mock_client = MagicMock()
+        mock_client.chat.completions.create.return_value = _mock_completion(answer)
+        return mock_client
+
     def test_returns_string(self):
         atoms = [{"subject": "Python", "kind": "fact", "content": "Python is dynamically typed."}]
-        with patch.dict("os.environ", {"LLM_PROVIDER": "openai", "LLM_API_KEY": "test"}), \
-             patch("lattice.synthesis.OpenAI") as mock_cls:
-            mock_cls.return_value.chat.completions.create.return_value = _mock_completion("Python is dynamically typed.")
+        with patch("lattice.synthesis.make_llm_client", return_value=self._mock_client("Python is dynamically typed.")):
             result = synthesize("What is Python?", atoms)
         assert isinstance(result.answer, str)
         assert len(result.answer) > 0
@@ -335,19 +338,16 @@ class TestSynthesize:
 
     def test_raw_response_captured(self):
         atoms = [{"subject": "Python", "kind": "fact", "content": "Python is dynamically typed."}]
-        with patch.dict("os.environ", {"LLM_PROVIDER": "openai", "LLM_API_KEY": "test"}), \
-             patch("lattice.synthesis.OpenAI") as mock_cls:
-            mock_cls.return_value.chat.completions.create.return_value = _mock_completion("Python is dynamically typed.")
+        with patch("lattice.synthesis.make_llm_client", return_value=self._mock_client("Python is dynamically typed.")):
             result = synthesize("What is Python?", atoms)
         assert result.raw_response == result.answer
 
     def test_passes_query_and_atoms_to_llm(self):
         atoms = [{"subject": "X", "kind": "fact", "content": "X is true."}]
-        with patch.dict("os.environ", {"LLM_PROVIDER": "openai", "LLM_API_KEY": "test"}), \
-             patch("lattice.synthesis.OpenAI") as mock_cls:
-            mock_cls.return_value.chat.completions.create.return_value = _mock_completion("X is true.")
+        mock_client = self._mock_client("X is true.")
+        with patch("lattice.synthesis.make_llm_client", return_value=mock_client):
             synthesize("Tell me about X.", atoms)
-        create_call = mock_cls.return_value.chat.completions.create.call_args
+        create_call = mock_client.chat.completions.create.call_args
         messages = create_call.kwargs.get("messages") or create_call.args[0]
         combined = " ".join(m["content"] for m in messages if isinstance(m.get("content"), str))
         assert "Tell me about X." in combined
