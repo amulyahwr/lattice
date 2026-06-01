@@ -196,6 +196,7 @@ You are a memory filter. Given a query and a list of memory atoms (subject and k
 select atoms most likely to contain information useful for answering the query.
 Be generous — include any atom that could plausibly be relevant. \
 Only exclude atoms that are clearly off-topic. Aim for 15–25 atoms.
+Respond with a JSON object.
 """
 
 _FILTER_FINE_PROMPT = """\
@@ -203,6 +204,7 @@ You are a memory filter. Given a query and a shortlist of memory atoms with full
 select atoms most useful for answering the query.
 Keep at least half the atoms you receive. Only drop atoms that are clearly unrelated. \
 When in doubt, keep the atom. Aim for 8–15 atoms.
+Respond with a JSON object.
 """
 
 

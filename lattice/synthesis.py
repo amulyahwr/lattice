@@ -105,6 +105,11 @@ def _execute_tool(name: str, args: dict) -> str:
 _CITATION_RE = re.compile(r"\[src:([^\]]+)\]")
 
 
+def _atom_src_key(a: dict) -> str:
+    """Unique citation key for an atom — atom_id preferred, source_id as fallback."""
+    return str(a.get("atom_id") or a.get("source_id") or a.get("source") or "unknown")
+
+
 def replace_citations(text: str, atoms: list[dict]) -> str:
     """Replace [src:id] markers in *text* with labelled citation markers.
 
@@ -112,11 +117,7 @@ def replace_citations(text: str, atoms: list[dict]) -> str:
     render it as a tooltip or link. Unknown source_ids are left unchanged —
     never silently drop a citation the model emitted (Rule 6).
     """
-    index = {
-        str(a.get("source_id") or a.get("source") or ""): a
-        for a in atoms
-        if a.get("source_id") or a.get("source")
-    }
+    index = {_atom_src_key(a): a for a in atoms}
 
     def _replace(m: re.Match) -> str:
         src_id = m.group(1)
@@ -133,7 +134,7 @@ def _build_messages(query: str, atoms: list[dict], query_date: date | None) -> l
     today = (query_date or datetime.now(tz=timezone.utc).date()).isoformat()
     atoms_text = "\n\n".join(
         (
-            f"[src:{a.get('source_id') or a.get('source') or 'unknown'} "
+            f"[src:{_atom_src_key(a)} "
             f"/ {a['subject']} / {a['kind']} / valid_from={a.get('valid_from', 'null')} "
             f"/ observed_at={a.get('observed_at', 'null')} "
             f"/ title={a.get('source_title') or 'n/a'}]\n"
