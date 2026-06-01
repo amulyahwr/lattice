@@ -39,6 +39,7 @@ class LatticeDB:
         self._atom_cache: dict[str, Atom] = {}
         self._subjects_cache: dict[str, str] | None = None
         self._graph: LatticeGraph = LatticeGraph()
+        self._bm25_cache: tuple[frozenset, object, list] | None = None
 
     @property
     def _subjects_file(self) -> Path:
@@ -96,9 +97,26 @@ class LatticeDB:
             if tmp.exists():
                 tmp.unlink()
         self._atom_cache[atom.atom_id] = atom
+        self._bm25_cache = None
         if self._graph is not None:
             self._graph.add_atom(atom)
             self._graph.save(self.dir)
+
+    def _write_no_graph_save(self, atom: Atom) -> None:
+        text = atom.to_markdown()
+        path = self._path(atom.atom_id)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", text=True)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(text)
+            Path(tmp_name).replace(path)
+        finally:
+            tmp = Path(tmp_name)
+            if tmp.exists():
+                tmp.unlink()
+        self._atom_cache[atom.atom_id] = atom
+        self._bm25_cache = None
 
     # ── read ──────────────────────────────────────────────────────────────
 
@@ -177,9 +195,11 @@ class LatticeDB:
         old = self.read(old_id)
         old.is_superseded = True
         old.superseded_by = new_atom.atom_id
-        self.write(old)
+        self._write_no_graph_save(old)
         new_atom.supersedes = old_id
-        self.write(new_atom)
+        self._write_no_graph_save(new_atom)
+        self._graph.add_atom(old)
+        self._graph.add_atom(new_atom)
         self._graph.mark_superseded(old_id, new_atom.atom_id)
         self._graph.save(self.dir)
 
@@ -324,6 +344,15 @@ class LatticeDB:
 
         return pack
 
+    def _get_bm25(self, atoms: list[Atom]) -> tuple[object, list[Atom]]:
+        key = frozenset(a.atom_id for a in atoms)
+        if self._bm25_cache is not None and self._bm25_cache[0] == key:
+            return self._bm25_cache[1], self._bm25_cache[2]
+        corpus = [_query_words(f"{a.subject} {a.content}") for a in atoms]
+        bm25 = BM25Okapi(corpus)
+        self._bm25_cache = (key, bm25, atoms)
+        return bm25, atoms
+
     # ── search ────────────────────────────────────────────────────────────
 
     def search(
@@ -341,8 +370,7 @@ class LatticeDB:
         if not words:
             return atoms[:top_k]
 
-        corpus = [_query_words(f"{a.subject} {a.content}") for a in atoms]
-        bm25 = BM25Okapi(corpus)
+        bm25, atoms = self._get_bm25(atoms)
         scores = bm25.get_scores(words)
 
         ranked = sorted(zip(scores, atoms), key=lambda x: x[0], reverse=True)
