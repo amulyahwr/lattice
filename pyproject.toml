@@ -5,7 +5,7 @@ description = "Local-first personal memory OS — daemon, web UI, and MCP server
 requires-python = ">=3.11"
 dependencies = [
     "backoff>=2.2.1",
-    "litellm>=1.83.14",
+    "openai>=1.0",
     "mcp>=1.27.1",
     "networkx>=3.6.1",
 "pydantic>=2.12.5",
