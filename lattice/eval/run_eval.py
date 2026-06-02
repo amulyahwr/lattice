@@ -38,8 +38,10 @@ import subprocess
 import sys
 import time
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from pathlib import Path
+from threading import Lock
 
 import requests
 from dotenv import load_dotenv
@@ -130,6 +132,7 @@ def _load_config(args: argparse.Namespace) -> dict:
         "seed": args.seed or int(os.environ.get("SEED", "42")),
         "retrieval_mode": retrieval_mode,
         "top_k": args.top_k or int(os.environ.get("TOP_K", "20")),
+        "q_workers": args.q_workers or int(os.environ.get("Q_WORKERS", "1")),
         "llm_provider": os.environ.get("LLM_PROVIDER", "ollama"),
         "llm_model": model,
         "ingest_model": ingest_model,
@@ -392,30 +395,28 @@ def _run_ingest(cfg: dict) -> None:
     print(f"Lattice root: {lattice_root}")
     print()
 
-    n_done = n_skip = 0
+    n_done = n_skip = n_err = 0
     atoms_total = 0
+    q_workers = cfg.get("q_workers", 1)
+    _counter_lock = Lock()
 
-    with tqdm(total=len(sample), unit="q") as pbar:
-        for item in sample:
-            qid = item["question_id"]
-            qtype = item["question_type"]
-            pbar.set_description(qtype[:24])
+    def _ingest_one(item: dict) -> tuple[str, int | None, str | None]:
+        """Ingest one question. Returns (qid, atoms_created_or_None, error_or_None)."""
+        qid = item["question_id"]
+        tmpdir = str(lattice_root / qid)
+        db_check = LatticeDB(lattice_dir=tmpdir)
+        if Path(tmpdir).exists() and db_check.all():
+            return qid, -1, None  # -1 signals skip
 
-            tmpdir = str(lattice_root / qid)
-            db_check = LatticeDB(lattice_dir=tmpdir)
-            if Path(tmpdir).exists() and db_check.all():
-                n_skip += 1
-                pbar.update(1)
-                continue
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        Path(tmpdir).mkdir(parents=True, exist_ok=True)
+        db = LatticeDB(lattice_dir=tmpdir)
 
-            shutil.rmtree(tmpdir, ignore_errors=True)
-            Path(tmpdir).mkdir(parents=True, exist_ok=True)
-            db = LatticeDB(lattice_dir=tmpdir)
+        sessions = item.get("haystack_sessions", [])
+        session_ids = item.get("haystack_session_ids", [f"s{i}" for i in range(len(sessions))])
+        dates = item.get("haystack_dates", ["" for _ in sessions])
 
-            sessions = item.get("haystack_sessions", [])
-            session_ids = item.get("haystack_session_ids", [f"s{i}" for i in range(len(sessions))])
-            dates = item.get("haystack_dates", ["" for _ in sessions])
-
+        try:
             atoms_created = 0
             for session, sid, ts in zip(sessions, session_ids, dates):
                 text = format_session(session, sid, ts)
@@ -425,12 +426,29 @@ def _run_ingest(cfg: dict) -> None:
                     db=db,
                 )
                 atoms_created += result["atoms_created"]
+            return qid, atoms_created, None
+        except Exception as exc:
+            return qid, None, str(exc)
 
-            atoms_total += atoms_created
-            n_done += 1
-            pbar.update(1)
+    with tqdm(total=len(sample), unit="q") as pbar:
+        with ThreadPoolExecutor(max_workers=q_workers) as pool:
+            futures = {pool.submit(_ingest_one, item): item for item in sample}
+            for fut in as_completed(futures):
+                item = futures[fut]
+                qid, atoms, err = fut.result()
+                with _counter_lock:
+                    if atoms == -1:
+                        n_skip += 1
+                    elif err:
+                        print(f"\nERROR on {qid}: {err} — skipping")
+                        n_err += 1
+                    else:
+                        atoms_total += atoms
+                        n_done += 1
+                pbar.set_description(item["question_type"][:24])
+                pbar.update(1)
 
-    print(f"\nIngest complete: {n_done} ingested, {n_skip} skipped (resumable)")
+    print(f"\nIngest complete: {n_done} ingested, {n_skip} skipped, {n_err} errors")
     print(f"Total atoms: {atoms_total}  |  Avg per question: {atoms_total / max(n_done, 1):.1f}")
     print(f"\nNext — run inference:")
     print(f"  python -m lattice.eval.run_eval --phase inference --priority {cfg['priority'] or '<priority>'} \\")
@@ -467,118 +485,149 @@ def _run_inference(cfg: dict) -> None:
     for qtype, count in sorted(type_counts.items()):
         print(f"  {qtype}: {count}")
     print(f"Already done: {len(done_ids)} — will skip")
+    q_workers = cfg.get("q_workers", 1)
+    print(f"Workers: {q_workers}")
 
     n_done = n_err = 0
     atoms_selected_total = bm25_candidates_total = 0
     bm25_retrieval_totals = _new_retrieval_totals()
     selected_retrieval_totals = _new_retrieval_totals()
+    _write_lock = Lock()
+
+    def _inference_one(item: dict) -> tuple[str, dict | None, dict | None, str | None]:
+        """Run select+synthesize for one question.
+
+        Returns (qid, out_record, debug_record, error_msg).
+        """
+        qid = item["question_id"]
+        qtype = item["question_type"]
+        lattice_dir = str(reuse_lattice_root / qid)
+
+        if not Path(lattice_dir).exists():
+            return qid, {"question_id": qid, "hypothesis": "ERROR: missing lattice dir"}, None, "missing lattice dir"
+
+        try:
+            db = LatticeDB(lattice_dir=lattice_dir)
+            db.preload()
+
+            question_date_str: str | None = item.get("question_date")
+            as_of: date | None = None
+            if question_date_str:
+                dt = _parse_datetime(question_date_str)
+                if dt:
+                    as_of = dt.date()
+
+            bm25_atoms = db.search(item["question"], as_of=as_of, top_k=cfg["top_k"])
+            bm25_candidates = [_atom_debug_dict(atom, preview_chars=400) for atom in bm25_atoms]
+
+            if cfg["retrieval_mode"] == "select":
+                selected = select(item["question"], as_of=as_of, db=db, top_k=cfg["top_k"])
+            elif cfg["retrieval_mode"] == "bm25_bfs":
+                selected = _retrieve(item["question"], as_of=as_of, db=db, top_k=cfg["top_k"])
+            elif cfg["retrieval_mode"] == "bm25":
+                selected = [_atom_debug_dict(atom) for atom in bm25_atoms]
+            else:
+                selected = [_atom_debug_dict(atom) for atom in db.all() if _valid_as_of(atom, as_of)]
+
+            retrieval_oracle = {
+                "bm25": _session_retrieval_metrics(item, bm25_candidates),
+                "selected": _session_retrieval_metrics(item, selected),
+            }
+            answer_token_recall = _answer_token_recall(item.get("answer", ""), selected)
+            synthesis = synthesize(item["question"], selected, query_date=as_of)
+
+            all_atoms = [_atom_debug_dict(a) for a in db.all()]  # full content for debug
+            ingest_summary = _ingest_summary(db)
+            session_hit = retrieval_oracle["selected"].get("session_hit", False)
+            atom_count_total = len(all_atoms)
+            atom_count_active = atom_count_total - ingest_summary["superseded_count"]
+
+            out_record = {"question_id": qid, "hypothesis": synthesis.answer}
+            debug_record = {
+                # ── identity ──────────────────────────────────────────────────
+                "question_id": qid,
+                "question": item["question"],
+                "gold_answer": item.get("answer", ""),
+                "question_type": qtype,
+                "question_date": item.get("question_date"),
+                # ── retrieval outcome ──────────────────────────────────────────
+                "session_hit": session_hit,
+                "answer_token_recall": answer_token_recall,
+                "retrieval_oracle": retrieval_oracle,
+                "answer_oracle": _answer_turn_summary(item),
+                # ── synthesis ─────────────────────────────────────────────────
+                "hypothesis": synthesis.answer,
+                "synthesis_raw": synthesis.raw_response,
+                "synthesis_tool_calls": synthesis.tool_calls,
+                # ── retrieval details ──────────────────────────────────────────
+                "retrieval_mode": cfg["retrieval_mode"],
+                "top_k": cfg["top_k"],
+                "bm25_candidates": bm25_candidates,
+                "selected_atoms": selected,
+                # ── corpus stats ───────────────────────────────────────────────
+                "atom_count_total": atom_count_total,
+                "atom_count_active": atom_count_active,
+                "atoms_by_kind": ingest_summary["atoms_by_kind"],
+                "superseded_count": ingest_summary["superseded_count"],
+                "graph_stats": _graph_stats(db),
+                # ── full atom dump (for offline retrieval debugging) ───────────
+                "atoms": all_atoms,
+                # ── provenance ────────────────────────────────────────────────
+                "lattice_dir": lattice_dir,
+                "reuse_lattice_root": str(reuse_lattice_root),
+                "sessions_ingested": len(item.get("haystack_sessions", [])),
+            }
+            return qid, out_record, debug_record, None
+
+        except Exception as exc:
+            import traceback
+            tb = traceback.format_exc()
+            return qid, {"question_id": qid, "hypothesis": f"ERROR: {exc}"}, {
+                "question_id": qid,
+                "question": item.get("question", ""),
+                "question_type": qtype,
+                "error": str(exc),
+                "traceback": tb,
+            }, str(exc)
+
+    pending = [item for item in sample if item["question_id"] not in done_ids]
 
     with (
         out_path.open("a") as out_f,
         debug_path.open("a") as dbg_f,
-        tqdm(total=len(sample) - len(done_ids), unit="q") as pbar,
+        tqdm(total=len(pending), unit="q") as pbar,
     ):
-        for item in sample:
-            qid = item["question_id"]
-            if qid in done_ids:
-                continue
+        with ThreadPoolExecutor(max_workers=q_workers) as pool:
+            futures = {pool.submit(_inference_one, item): item for item in pending}
+            for fut in as_completed(futures):
+                item = futures[fut]
+                qid, out_record, debug_record, err = fut.result()
 
-            qtype = item["question_type"]
-            pbar.set_description(qtype[:24])
+                with _write_lock:
+                    out_f.write(json.dumps(out_record) + "\n")
+                    out_f.flush()
+                    if debug_record is not None:
+                        dbg_f.write(json.dumps(debug_record) + "\n")
+                        dbg_f.flush()
 
-            lattice_dir = str(reuse_lattice_root / qid)
-            if not Path(lattice_dir).exists():
-                out_f.write(json.dumps({"question_id": qid, "hypothesis": f"ERROR: missing lattice dir"}) + "\n")
-                out_f.flush()
-                n_err += 1
+                    if err:
+                        if "missing lattice dir" not in err:
+                            print(f"\nERROR {qid}: {err}")
+                        n_err += 1
+                    else:
+                        atoms_selected_total += len(debug_record.get("selected_atoms", []))
+                        bm25_candidates_total += len(debug_record.get("bm25_candidates", []))
+                        _add_retrieval_totals(bm25_retrieval_totals, debug_record["retrieval_oracle"]["bm25"])
+                        _add_retrieval_totals(selected_retrieval_totals, debug_record["retrieval_oracle"]["selected"])
+                        n_done += 1
+
+                pbar.set_description(item["question_type"][:24])
                 pbar.update(1)
-                continue
-
-            try:
-                db = LatticeDB(lattice_dir=lattice_dir)
-                db.preload()
-
-                question_date_str: str | None = item.get("question_date")
-                as_of: date | None = None
-                if question_date_str:
-                    dt = _parse_datetime(question_date_str)
-                    if dt:
-                        as_of = dt.date()
-
-                bm25_atoms = db.search(item["question"], as_of=as_of, top_k=cfg["top_k"])
-                bm25_candidates = [_atom_debug_dict(atom, preview_chars=240) for atom in bm25_atoms]
-
-                selection_debug: dict = {}
-                if cfg["retrieval_mode"] == "select":
-                    selected = select(item["question"], as_of=as_of, db=db, top_k=cfg["top_k"])
-                elif cfg["retrieval_mode"] == "bm25_bfs":
-                    selected = _retrieve(item["question"], as_of=as_of, db=db, top_k=cfg["top_k"])
-                elif cfg["retrieval_mode"] == "bm25":
-                    selected = [_atom_debug_dict(atom) for atom in bm25_atoms]
-                else:
-                    selected = [_atom_debug_dict(atom) for atom in db.all() if _valid_as_of(atom, as_of)]
-
-                retrieval_oracle = {
-                    "bm25": _session_retrieval_metrics(item, bm25_candidates),
-                    "selected": _session_retrieval_metrics(item, selected),
-                }
-                answer_token_recall = _answer_token_recall(item.get("answer", ""), selected)
-                synthesis = synthesize(item["question"], selected, query_date=as_of)
-
-                all_atoms = [_atom_debug_dict(a, preview_chars=240) for a in db.all()]
-                ingest_summary = _ingest_summary(db)
-                session_hit = retrieval_oracle["selected"].get("session_hit", False)
-                atom_count_total = len(db.all())
-                atom_count_active = atom_count_total - ingest_summary["superseded_count"]
-
-                out_f.write(json.dumps({"question_id": qid, "hypothesis": synthesis.answer}) + "\n")
-                out_f.flush()
-
-                dbg_f.write(json.dumps({
-                    "question_id": qid,
-                    "question": item["question"],
-                    "gold_answer": item.get("answer", ""),
-                    "question_type": qtype,
-                    "session_hit": session_hit,
-                    "lattice_dir": lattice_dir,
-                    "reuse_lattice_root": str(reuse_lattice_root),
-                    "sessions_ingested": len(item.get("haystack_sessions", [])),
-                    "retrieval_mode": cfg["retrieval_mode"],
-                    "top_k": cfg["top_k"],
-                    "atom_count_total": atom_count_total,
-                    "atom_count_active": atom_count_active,
-                    "atoms_by_kind": ingest_summary["atoms_by_kind"],
-                    "superseded_count": ingest_summary["superseded_count"],
-                    "atoms": all_atoms,
-                    "answer_oracle": _answer_turn_summary(item),
-                    "retrieval_oracle": retrieval_oracle,
-                    "answer_token_recall": answer_token_recall,
-                    "bm25_candidates": bm25_candidates,
-                    "selected_atoms": selected,
-                    "selection_debug": selection_debug,
-                    "synthesis_raw": synthesis.raw_response,
-                    "synthesis_tool_calls": synthesis.tool_calls,
-                    "hypothesis": synthesis.answer,
-                    "graph_stats": _graph_stats(db),
-                }) + "\n")
-                dbg_f.flush()
-
-                atoms_selected_total += len(selected)
-                bm25_candidates_total += len(bm25_candidates)
-                _add_retrieval_totals(bm25_retrieval_totals, retrieval_oracle["bm25"])
-                _add_retrieval_totals(selected_retrieval_totals, retrieval_oracle["selected"])
-                n_done += 1
-
-            except Exception as exc:
-                out_f.write(json.dumps({"question_id": qid, "hypothesis": f"ERROR: {exc}"}) + "\n")
-                out_f.flush()
-                n_err += 1
-
-            pbar.update(1)
 
     print("\n── Inference summary ──────────────────────────────────────────")
     print(f"  Processed : {n_done}")
     print(f"  Errors    : {n_err}")
+    print(f"  Workers   : {q_workers}")
     print(f"  Retrieval : {cfg['retrieval_mode']} (top_k={cfg['top_k']})")
     print(f"  Reuse DBs : {reuse_lattice_root}")
     if n_done:
@@ -781,6 +830,8 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--retrieval-mode", choices=["select", "bm25", "bm25_bfs", "all"], default="",
                    help="select=BM25+graph+LLM filter (default), bm25_bfs=BM25+graph only, bm25=BM25 only, all=no retrieval")
     p.add_argument("--top-k", type=int, default=0, help="BM25 candidate count (default 20)")
+    p.add_argument("--workers", dest="q_workers", type=int, default=0,
+                   help="Parallel questions during ingest/inference (default 1). Set 8-16 for API providers.")
     p.add_argument("--evaluate-script", default="")
     p.add_argument("--print-qa-script", default="")
     p.add_argument("--reuse-lattice-root", default="",

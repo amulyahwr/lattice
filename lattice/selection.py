@@ -1,13 +1,9 @@
 from __future__ import annotations
 
-import json
 import os
 from datetime import date
 
-from pydantic import BaseModel, Field
-
 from lattice.db import LatticeDB
-from lattice.llm import complete
 from lattice.models import Atom
 from lattice.query import parse_query
 
@@ -16,16 +12,12 @@ _POINTED_MAX = 14
 _BFS_MAX_ATOMS = 60
 
 
-class _AtomSelectionCoarse(BaseModel):
-    n_selected: int = Field(ge=8, le=25)
-    atom_ids: list[str] = Field(min_length=8, max_length=25)
-
-class _AtomSelectionFine(BaseModel):
-    n_selected: int = Field(ge=5, le=15)
-    atom_ids: list[str] = Field(min_length=5, max_length=15)
-
-
 _RECOMMENDATION_CAP = int(os.environ.get("LATTICE_RECOMMENDATION_CAP", "5"))
+# Drop BM25 seeds scoring exactly 0 (matched no query tokens) before BFS.
+# Zero-score seeds expand the graph from unrelated atoms, injecting noise.
+_SEED_MIN_SCORE = float(os.environ.get("LATTICE_SEED_MIN_SCORE", "0.0"))
+# After BFS expansion, re-sort result by BM25 score so highest-signal atoms surface first.
+_BFS_RESCORE = os.environ.get("LATTICE_BFS_RESCORE", "").lower() in ("1", "true")
 
 
 def _apply_recommendation_cap(atoms: list[dict]) -> list[dict]:
@@ -95,7 +87,10 @@ def _retrieve(
         db = LatticeDB()
 
     intent = parse_query(query)
-    seeds = db.search(query, as_of=as_of, top_k=top_k)
+    scored_seeds = db.search_scored(query, as_of=as_of, top_k=top_k)
+    if _SEED_MIN_SCORE > 0.0:
+        scored_seeds = [(s, a) for s, a in scored_seeds if s > _SEED_MIN_SCORE]
+    seeds = [a for _, a in scored_seeds]
     if not seeds:
         return []
 
@@ -113,6 +108,11 @@ def _retrieve(
         result = _graph_select(active_seeds, graph, db, as_of, max_atoms)
     else:
         result = _fallback_select(active_seeds, db, as_of, max_atoms)
+
+    if _BFS_RESCORE and result:
+        scored = db.search_scored(query, as_of=as_of, top_k=len(result) + top_k)
+        score_map = {a.atom_id: s for s, a in scored}
+        result.sort(key=lambda d: score_map.get(d["atom_id"], 0.0), reverse=True)
 
     # Kind fallback: if query has a primary kind and BFS found none, scan all.
     if intent.primary_kind is not None:
@@ -189,80 +189,10 @@ def _fallback_select(
     return [_atom_to_dict(a) for a in selected]
 
 
-# ── LLM semantic filter (two-stage) ──────────────────────────────────────────
-
-_FILTER_COARSE_PROMPT = """\
-You are a memory filter. Given a query and a list of memory atoms (subject and kind only), \
-select atoms most likely to contain information useful for answering the query.
-Be generous — include any atom that could plausibly be relevant. \
-Only exclude atoms that are clearly off-topic. Aim for 15–25 atoms.
-Respond with a JSON object.
-"""
-
-_FILTER_FINE_PROMPT = """\
-You are a memory filter. Given a query and a shortlist of memory atoms with full content, \
-select atoms most useful for answering the query.
-Keep at least half the atoms you receive. Only drop atoms that are clearly unrelated. \
-When in doubt, keep the atom. Aim for 8–15 atoms.
-Respond with a JSON object.
-"""
-
-
 def select(
     query: str,
     as_of: date | None = None,
     db: LatticeDB | None = None,
     top_k: int = 20,
 ) -> list[dict]:
-    """BM25 + graph BFS retrieval followed by a two-stage LLM filter.
-
-    Stage 1 (coarse): all candidates, subject + kind only → pick top 20 by topic relevance.
-    Stage 2 (fine):   shortlist, full content → pick final 10-15 by content relevance.
-    Falls back to the previous stage's output on any parse/LLM error.
-    """
-    candidates = _retrieve(query, as_of=as_of, db=db, top_k=top_k)
-    if not candidates:
-        return []
-
-    model = os.environ.get("SELECTION_MODEL") or None
-    num_ctx = int(os.environ.get("SELECTION_NUM_CTX", "8192"))
-
-    # Stage 1: coarse — subject + kind only, fits 40+ atoms in ~600 tokens
-    def _coarse_entry(a: dict) -> dict:
-        e: dict = {"atom_id": a["atom_id"], "subject": a["subject"],
-                   "kind": a["kind"], "observed_at": a["observed_at"]}
-        if a.get("source_title"):
-            e["source_title"] = a["source_title"]
-        return e
-
-    coarse_msgs = [
-        {"role": "system", "content": _FILTER_COARSE_PROMPT},
-        {"role": "user", "content": f"Query: {query}\n\nCandidates:\n{json.dumps([_coarse_entry(a) for a in candidates])}"},
-    ]
-    coarse_ids: set[str] = set()
-    for _attempt in range(2):
-        try:
-            r1 = complete(coarse_msgs, text_format=_AtomSelectionCoarse, model=model, num_ctx=num_ctx)
-            coarse_ids = set(json.loads(r1).get("atom_ids", []))
-            if coarse_ids:
-                break
-        except Exception:
-            pass
-    shortlist = [a for a in candidates if a["atom_id"] in coarse_ids] or candidates[:20]
-
-    # Stage 2: fine — full content, fits 20 atoms in ~1,800 tokens
-    fine_msgs = [
-        {"role": "system", "content": _FILTER_FINE_PROMPT},
-        {"role": "user", "content": f"Query: {query}\n\nCandidates:\n{json.dumps([{'atom_id': a['atom_id'], 'subject': a['subject'], 'kind': a['kind'], 'content': a['content'], 'observed_at': a['observed_at']} for a in shortlist])}"},
-    ]
-    fine_ids: set[str] = set()
-    for _attempt in range(2):
-        try:
-            r2 = complete(fine_msgs, text_format=_AtomSelectionFine, model=model, num_ctx=num_ctx)
-            fine_ids = set(json.loads(r2).get("atom_ids", []))
-            if fine_ids:
-                break
-        except Exception:
-            pass
-    filtered = [a for a in shortlist if a["atom_id"] in fine_ids]
-    return filtered if len(filtered) >= 5 else shortlist
+    return _retrieve(query, as_of=as_of, db=db, top_k=top_k)

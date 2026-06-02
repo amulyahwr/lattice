@@ -133,5 +133,6 @@ def test_index_contains_citation_css():
 
 
 def test_index_contains_render_citations_js():
-    resp = client.get("/")
+    resp = client.get("/static/app.js")
+    assert resp.status_code == 200
     assert "renderCitations" in resp.text

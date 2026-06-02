@@ -10,144 +10,146 @@ Product constraints:
 - Ingest can handle many local sources, but useful partial memory should commit quickly.
 - Selection should be fast, graph-aware, and should not wait for active ingest or background enrichment.
 
-## Completed (P1–P9, P10.5)
-
-| Priority | Change | Outcome |
-| --- | --- | --- |
-| P1 ✅ | Product documentation cleanup | Docs reflect local-first architecture, not benchmark-preservation. |
-| P2 ⏭️ | Selection tool calling | Skipped — useful before graph-seeded selection but deprioritized. |
-| P3 ✅ | Source-aware ingest + provenance + exact dedup | Atoms carry full provenance; duplicates skipped at ingest. |
-| P3.5 ✅ | Retrieval oracle diagnostics + payload normalization | select/BM25 payload-shape confound cleared; session-level retrieval metrics added. |
-| P4 ✅ | Pack retrieval over BM25 seeds | 13%→18% overall. Avg selected atoms 17→31. |
-| P5 ✅ | Incremental heterogeneous graph index | NetworkX MultiDiGraph with portable sidecars; deterministic nodes/edges. |
-| P6 ✅ | Graph-seeded BFS selection | 18%→19%. BFS expands evidence packs through graph edges. |
-| P7 ✅ | Role-aware ingest + synthesis agent + date_diff tool | 19%→49% (phi4 judge). Temporal 0%→38.5%. Avg atoms/session 4→14. |
-| P8 ✅ | Ingest date resolution fixes | 49%→62%. Temporal 38.5%→65.4% (+27pp). observed_at as date ref. |
-| P9 ✅ | Fuzzy supersession via rapidfuzz token_sort_ratio | 62%→69%. knowledge-update +37pp. Fuzzy subject matching catches phrasing drift. |
-| P10.5 ✅ | Synthesis model upgrade: qwen3.5:4b replaces gemma4:e4b for synthesis | 69%→76% (+7pp). Stable across 3 runs (variance ≤1pp). knowledge-update 100%, single-session-user 85.7%, temporal 73.1%. `SYNTHESIS_MODEL=qwen3.5:4b` env var; gemma4:e4b retained for ingest/select. |
-
 ## Active Roadmap
 
-Reordered after p19/p19-replay experiments. **Ingest model switched to `qwen3-8b-ingest`** (INGEST_MODEL env var): extracts ~33 atoms/session vs gemma's ~18, better coverage for multi-session/assistant categories. Tradeoff: more atoms → selection must filter harder or synthesis gets noisy context. P14 (query-shape-aware selection) is now the top priority — it was low-impact with 18 atoms/session but becomes critical at 33. Remaining gaps: multi-session 59.3%, single-session-assistant 63.6%, temporal 73.1%.
+Current atom set: **p25** (`gpt-4o-mini` ingest via OpenRouter, 3129 atoms, ~31.3/session, 100 sessions). **Baseline: p26c — 72%** (LLM filter removed + score>0 seed filter + BFS rescore, 0 LLM calls/query). Canonical lattice dirs: `results/p25/openaigpt4omini_longmemeval_oracle_inference.lattices`. Current code: `sandbox` branch.
+
+p26c failure analysis (28 failures): 15/28 = synthesis miscounts (atoms retrieved, synthesis enumerates wrong); 5/28 = temporal duration calc (synthesis returns date not duration); 3/28 = no atoms (score>0 filter too aggressive in POINTED mode); 5/28 = other synthesis. **Selection is no longer the bottleneck — synthesis counting is.**
+
+Next: p26d (mode-conditional filter, replay) → temporal synthesis fix (replay) → M9 (fresh ingest, biggest lever).
 
 | Priority | File(s) | Product Change | Why It Matters |
 | --- | --- | --- | --- |
-| P10 ✅ | `ingest.py`, `selection.py` | **Assistant-turn extraction + recommendation cap**: (1) Extract user-specific assistant outputs (named products, places, techniques recommended to this user) as `kind=recommendation` atoms — distinct from generic advice that applies to anyone. (2) Unconditional post-BFS cap: max 5 `kind=recommendation` slots (tunable via `LATTICE_RECOMMENDATION_CAP`). | single-session-assistant is 63.6% — weakest non-abstention category. Two prior attempts reverted: atom explosion (p10), then correct extractions but no cap crowded selection (p10b). Both sub-tasks land together. Eval inconclusive via replay (p9-base has no recommendation atoms to cap); real effect visible on fresh ingest. |
-| P12.5 ✅ | `lattice/parsers/`, `ingest.py` | **Source-aware parsing layer**: structured pre-ingest stage — chat parser (role+turn), markdown parser (section boundaries), code parser (symbol boundaries). Normalized segment interface: `{text, role, source_type, metadata}`. New source types added as parsers, not prompt changes. | Makes P10 user-vs-assistant distinction structural, not heuristic. Prerequisite for reliable multi-source ingest and multi-session coverage. |
-| P14 | `selection.py`, `lattice/query.py` | **Query-shape-aware retrieval**: detect query shape (temporal / preference / recommendation / factual). Post-BFS: (1) recommendation cap (5 slots) for non-recommendation queries; (2) kind-fallback graph scan via `db.list_by_kind()` when primary-kind count == 0. Pre-BFS seed reordering confirmed harmful — post-BFS contract only. | With qwen ingest at 33 atoms/session (vs 18 with gemma), selection passes ~29 atoms to synthesis — too noisy. Query-shape cap filters this down to relevant atoms per query type. Was low-impact at 18 atoms; now critical. |
-| P16 ⏭️ | `llm.py`, `db.py`, `selection.py` | **Hybrid BM25+dense seed retrieval** (seed stage only): augment BM25 seeds with dense nearest-neighbour hits before BFS. Portable embedding sidecars via `embed.py`. | qwen ingest recall is 0.976 (misses 2-3 answer atoms per 100q) vs gemma's 1.000. BM25 vocabulary mismatch still root cause. Output reranking and pre-BFS seed reordering both confirmed harmful; only seed *augmentation* is safe. `embed.py` kept. |
-| P11 ⏭️ | `selection.py`, `lattice/query.py` | **Retrieval topic drift fix**: subject-match filter or query-subject overlap scoring after BFS, informed by embeddings from P16. | Token-intersection filter reverted (67% fallback rate, BFS reorder broke multi-session -22pp). Embeddings make subject matching robust. `query.py` scaffolded with `QueryIntent`/`parse_query`. |
-| P13 | `graph.py`, `db.py`, `ingest.py`, `selection.py` | **Optional semantic relation enrichment**: high-confidence edges after graph indexing: `updates`, `contradicts`, `supports`, `elaborates`, `temporally_before`. Off by default for Ollama. | Deeper graph paths for multi-session aggregation without blocking local ingest/query. |
-| P12 | `ingest.py`, `server.py`, `db.py` | **Local ingest jobs + status UX**: persistent status: `job_id`, indexed/active/failed source counts, `graph_version`, `last_commit_at`. | Product UX — local users need visibility into what is indexed without waiting for large ingest runs. |
-| P17 ✅ | `synthesis.py` | **sum_numbers tool + counting/rounding guidance**: `sum_numbers(numbers[])` tool for exact numeric aggregation; enumerate-then-count prompt for counting questions; round week/month durations to nearest integer. | single-session-assistant +18pp (54.5%→72.7%). Full product answer contract (citations, uncertainty) deferred. |
-| P21 | `graph.py`, `selection.py` | **Topic hubs / community index**: hub nodes from connected components; store aliases, member atoms, latest `observed_at`, centroid text. Depends on P13. | Broad queries land on coarse concepts before drilling into atoms. |
-| P18 | `selection.py`, `server.py` | **Selection debug/status mode**: graph version, BM25 ranks/scores, BFS expansion paths, fallback trigger, include reasons. | Makes memory behavior explainable during debugging. |
-| P19 | `selection.py`, `synthesis.py`, `server.py` | **Source-grounded answer mode**: citations/snippets via `source_title`, `source_id`, `source_span`. | Builds user trust. |
-| P20 | `db.py`, `server.py` | **Memory namespaces**: project/workspace isolation via `LATTICE_NAMESPACE`. | Prevents cross-project contamination. |
-| P15 ⏭️ | `ingest.py` | **Ingest tool calling**: `record_atom(...)` tool calls per atom; JSON fallback for local models. | Confirmed working but reverted: 3x latency (~60s/q vs ~19s/q). Worth revisiting for API providers (Anthropic/OpenAI) only. |
+| ~~P25~~ ✅ | `selection.py` | **Remove 2-stage LLM filter**: `select()` = `_retrieve()`. Ablation winner: **(C) score>0 seeds + BFS rescore → 72%**. A=71%, B=70%, C=72%. C: multi-session 67% (+11pp vs A), 0 LLM calls/query. `LATTICE_SEED_MIN_SCORE=0.001` + `LATTICE_BFS_RESCORE=1` in prod. | Net +1pp vs baseline, 0 LLM overhead. Multi-session recovered. Preference 50% is the remaining gap. |
+| ~~P26d~~ ✅ | `selection.py` | **Mode-conditional seed filter**: score>0 filter only in EXPANSION mode; POINTED keeps all probe seeds. **Result: 71% (-1pp vs p26c)**. preference +17pp (67%), temporal +8pp (73%). multi-session -15pp (52%) — pointed mode passing noisy seeds into single-session synthesis floods multi-session BFS. **Reverted — p26c remains prod config.** | Net regression. Multi-session loss outweighs single-session gain. p26c score>0 filter applied globally is the right tradeoff. |
+| P26e | `synthesis.py` | **Temporal duration trigger fix**: date_diff tool not firing for "how long had I been X when Y" and "how many days before Z" phrasing. Add explicit duration pattern detection to synthesis prompt. Piggyback on p26d replay. | 5/28 failures = synthesis returns start date instead of computing duration. "2 months" answered as "since February 2023". Zero ingest cost — replay only. |
+| M9 | `ingest.py` | **Numeric extraction precision**: extract aggregate numeric facts explicitly — "owns 3 bikes", "attended 5 sessions", "attends 4 classes/week" as `kind=fact` atoms. Requires fresh ingest. | 15/28 failures = synthesis miscounts individual-instance atoms. 46 atoms retrieved for "how many kitchen items?" yet synthesis says 2. Answer atom (the count) simply doesn't exist. Biggest remaining lever. |
+| M11 | `db.py`, `selection.py` | **Time decay per kind**: pre-BFS seed weight multiplier per kind (fast decay: reminders; slow decay: facts). Recency signal without output reranking (reranking confirmed harmful p16b-replay). | Stale atoms rank identically to recent ones. Preference from 3 years ago vs last week indistinguishable in BM25 seeding. Zero new dep. |
+| M12 | `db.py`, `ingest.py` | **Reinforcement counting**: bump `recurrence_count` field instead of supersede/dedup when same fact re-ingested. Frequently-confirmed atoms score higher in seed weighting. | Same fact recurring across ingests currently lost to dedup. Recurrence = confidence signal at zero LLM cost. |
+| M13 | `ingest.py`, `models.py`, `selection.py` | **Confidence scoring at extraction**: LLM assigns `confidence ∈ [0,1]` per atom at ingest. Stored as atom field. Selection: threshold-based filter at query time. | Moves relevance judgment from query time to ingest time. Zero LLM at query. |
+| M5 / P16 | `embed.py`, `db.py`, `selection.py` | **Dense seed augmentation** (seed stage only): augment BM25 seeds with dense NN hits before BFS. Portable embedding sidecars via `embed.py`. Optional dep, gated like `embed.py`. | Vocab mismatch ("gym" ≠ "workout", "own" ≠ "bikes"). Only seed augmentation is safe — output reranking confirmed harmful (p16b-replay -23pp temporal). |
+| M6 / P13 | `graph.py`, `db.py`, `ingest.py` | **Semantic relation enrichment** (optional): `updates`, `contradicts`, `supports`, `elaborates`, `temporally_before` edges after graph indexing. Off by default for Ollama. | Deeper BFS paths for multi-session aggregation without blocking local ingest/query. Prerequisite for M7 topic hubs. |
+| M7 / P21 | `graph.py`, `selection.py` | **Topic hubs**: hub nodes from connected components; store aliases, member atoms, latest `observed_at`, centroid text. Broad queries → concept cluster → member atoms. Depends on M6. | Multi-session queries land on topic hub before drilling atoms. P21-broad-subjects attempt (-6pp) used wrong edge type (same_subject_as across sessions). Hub nodes are the product-native fix. |
+| M4 / P18 | `selection.py`, `server.py` | **Selection debug mode**: BM25 ranks/scores, BFS expansion paths, fallback trigger, include reasons. Surface in web UI alongside answer feedback. | Makes memory behavior explainable. Feeds feedback loop for tuning M11/M12/M13 weights. |
+| P20 | `db.py`, `server.py` | **Memory namespaces**: project/workspace isolation via `LATTICE_NAMESPACE`. | Prevents cross-project contamination. Multiple `LATTICE_DIR` dirs is the current workaround. |
+| P12 | `ingest.py`, `server.py`, `db.py` | **Ingest job status**: `job_id`, indexed/active/failed source counts, `graph_version`, `last_commit_at`. | Product UX — local users need visibility into what is indexed without waiting for large ingest runs. |
+
+## Memory Quality Backlog (M-series)
+
+Cross-reference with active roadmap above. Pull into active roadmap as core loop is validated.
+
+| # | Feature | P-ref | Current Gap |
+| --- | --- | --- | --- |
+| M1 | Query-shape-aware selection | P14 (all forms reverted) | Counting queries cut atoms needed for aggregation. AGGREGATION bypass already in `select()`. Extend per-shape rules post-P25 removal. |
+| M2 | Multi-session aggregation fix | — | "How many times?" misses cross-session atoms; fine filter cuts needed atoms for counting. Partially addressed by AGGREGATION bypass + M9 numeric extraction. |
+| M3 | Source citations | — | ✅ shipped — numbered superscript citations, pulsing highlight linkage, collapsible sources section. |
+| M4 | Memory debug mode | P18 | BM25 scores, BFS paths, fallback triggers visible in web UI. See active roadmap. |
+| M5 | Dense seed augmentation | P16 | BM25 vocabulary mismatch. See active roadmap. |
+| M6 | Semantic relation enrichment | P13 | `updates`, `contradicts`, `supports` edges for richer multi-hop. See active roadmap. |
+| M7 | Topic hubs | P21 | Broad queries land on concept clusters before atoms. See active roadmap. |
+| M8 | Ingest job status | P12 | Visibility into what's indexed, pending, failed. See active roadmap. |
+| M9 | Extraction precision: numeric values + proper nouns | — | Numeric attributes (TV size, bike count) not extracted; BM25 recall 0.976 vs 1.000. See active roadmap. |
+| M10 | Contradiction vs supersession | — | Conflicting same-date atoms incorrectly superseded; explicit contradiction path keeps both with `contradicts` edge. Depends on M6. |
+| M11 | Time decay per kind | — | Stale atoms rank identically to recent ones. See active roadmap. |
+| M12 | Reinforcement counting | — | Same fact recurring across ingests lost to dedup. See active roadmap. |
+| M13 | Confidence scoring at extraction | — | LLM assigns `confidence ∈ [0,1]` per atom at ingest; replaces fine filter at query time. See active roadmap. |
+| M14 | Agent re-query problem | — | MCP clients re-call `lattice_select` to "verify" injected context — burns tokens, produces memory-zero behavior. Fix: explicit system prompt instruction to treat injected atoms as authoritative. Verify empirically first. |
+| M15 | Session-level passive ingest | — | Inbox drop requires active habit. No ambient session extraction. Phase 2+ solution: browser extension or `lattice_capture` MCP tool at session end. |
 
 ## Removed From Active Roadmap
 
+- **P14 query-shape selection** (all forms tried and reverted): seed reordering (p14, p16b-replay-reranked) confirmed harmful (-15pp multi-session, -23pp temporal). Token-intersection filter (p11) reverted — 67% fallback rate. Kind-proportional BFS budget (p10c) reverted. Two-stage LLM filter (p24-llmfilter) is current impl; being replaced by P25.
 - Date injection into atom content: polluted content, hurt temporal/multi-session reasoning.
 - Question-type prompt patches: benchmark-shaped and brittle.
 - HyDE over BM25: hallucinated vocabulary hurt sparse retrieval.
 - Generated questions per atom: polluted BM25 with false positives.
 - Session summary atoms: LongMemEval-shaped; topic hubs are the product-native version.
 - Multi-pass retrieval and uncertainty-triggered re-retrieval: brittle; pack retrieval and graph selection solve the product problem first.
+- **P15 ingest tool calling** (reverted): 3x latency (~60s/q vs ~19s/q). Worth revisiting for API-only providers.
+- **P2 selection tool calling**: skipped — superseded by graph-seeded selection.
 
 ## LongMemEval Yardstick
 
 LongMemEval is used to measure whether product changes improve retrieval and answer quality under long-memory pressure. It should not dictate architecture.
 
-Current baseline:
+**Current baseline: p26c — 72%**
+- ingest: `gpt-4o-mini` via OpenRouter, 3129 atoms (~31.3/session), 100 sessions
+- selection: `_retrieve()` + score>0 seed filter + BFS rescore — 0 LLM calls/query (P25 ablation C winner)
+- synthesis: `gpt-4o-mini` via OpenRouter
+- judge: `phi4-mini-judge`
+- lattice dirs: `results/p25/openaigpt4omini_longmemeval_oracle_inference.lattices`
+- code: `sandbox` branch (`LATTICE_SEED_MIN_SCORE=0.001`, `LATTICE_BFS_RESCORE=1`)
 
-- **76% accuracy / 79.9% task-avg** (p24-llmfilter, reused p21 lattice dirs, qwen3.5:4b two-stage LLM filter + synthesis), 100 questions
-- inference: `qwen3-8b-ingest` (ingest) + `qwen3.5:4b` (selection filter + synthesis)
-- judge: `phi4-mini-judge` (phi4-mini with num_ctx=4096 Modelfile)
-- harness: `longmemeval_oracle`
-- lattice dirs: `results/p21-broad-subjects/` (reused — qwen-ingested, 33 atoms/session)
-- previous baseline: p22-agent, 73% overall / 75.1% task-avg
+**Previous baseline: 76% / 79.9% task-avg** (p24-llmfilter)
+- ingest: `qwen3-8b-ingest` (qwen atoms, ~33/session)
+- selection: `qwen3.5:4b` two-stage LLM filter
+- synthesis: `qwen3.5:4b`
+- judge: `phi4-mini-judge`
+- lattice dirs: `results/p21-broad-subjects/` (reused)
 
-Note: switched ingest model to `qwen3-8b-ingest` after p19/p19-replay experiments. qwen extracts ~33 atoms/session vs gemma's ~18, improving coverage but requiring stronger selection filtering. p19-replay (same atoms, fresh synthesis) scored 72% — confirms atom set is stable, category swings in p19 vs p18 were synthesis variance. Selection is the next bottleneck.
-
-Note: p24-llmfilter 100% single-session-assistant matches p22-agent. Two-stage LLM filter with Pydantic grammar constraints achieves 0/100 fallbacks and avg 8.6 fine atoms. Multi-session aggregation is the remaining ceiling: 13/27 failures are counting/total questions where fine filter cuts atoms needed for full enumeration (e.g. 92 total_selected → fine=7). Fix candidate: skip fine filter for detected aggregation queries, or raise fine min to all coarse atoms for "how many / total" query shapes.
-
-Note: the original P9 run scored 69% — a lucky ingest run. A fresh ingest with identical code gives 62%. Ingest non-determinism produces ~7pp overall variance and up to 19pp on individual categories.
-
-Note: earlier runs used `qwen3.5:4b` as judge, which severely underscored correct answers (especially temporal and abstention). phi4-mini-judge is the canonical judge going forward. P7 and P8 have been re-judged with phi4-mini.
-
-Observed failure modes:
-
-- **Synthesis variance resolved (P10.5)**: qwen3.5:4b stable at 76% ±1pp across 3 runs. gemma4:e4b variance (7pp overall, 19pp per category) is no longer the bottleneck.
-- **Selection now the bottleneck**: qwen ingest produces ~33 atoms/session; selection passes avg 29 to synthesis. Too many atoms → noisy synthesis context. P14 filtering now critical.
-- **qwen ingest recall 0.976**: misses 2-3 answer atoms per 100q (vs gemma 1.000). BM25 vocabulary mismatch still present; P16 dense seed augmentation addresses this.
-- 20% of questions: selection returns 0 atoms despite 26+ atoms created.
-- 24% of questions: atoms selected but synthesis still wrong (down from 56% at gemma baseline).
-- Multi-session and single-session-assistant remain the weakest categories — aggregation and assistant-turn extraction are the remaining bottlenecks.
-- `answer_session_ids` are available across local oracle/S/M datasets and now provide session-level retrieval diagnostics; `has_answer` is available on gold sessions and is exposed for debugging, but exact turn-level metrics still require turn-span provenance.
+Observed failure modes (current, p26c baseline):
+- **Single-session-preference (50%)**: biggest gap. Zero-score seed filter drops low-frequency preference atoms (e.g. "I prefer X") that BM25 scores weakly. Fix: M11 time decay or M13 confidence scoring to surface preference atoms without LLM overhead.
+- **Temporal reasoning (65%)**: BFS rescore deprioritises temporally-relevant atoms that score lower on BM25. M11 time decay per kind would help without reranking.
+- **Multi-session recovered to 67%** with BFS rescore — cross-session atoms now surface via higher BM25 score post-expansion.
+- **Ingest recall**: gpt-4o-mini extracts ~31.3 atoms/session vs qwen 33/session. Numeric facts still missed (M9).
 
 Evaluation method:
-
 - Implement one product priority at a time.
 - Run full 100-question LongMemEval.
 - Compare overall score and category movement.
-- Keep product-fit changes even if benchmark movement is mixed, but do not optimize architecture solely for LongMemEval.
+- Keep product-fit changes even if benchmark movement is mixed; do not optimize architecture solely for LongMemEval.
 
-## Experiment History
+## Experiment History (last 10 runs)
 
 | Run | Change | Accuracy | Notes |
 | --- | --- | --- | --- |
-| baseline | none | 15.0% | `gemma4:e4b` inference, `qwen3.5:4b` judge, 100q oracle |
-| p1 | Synthesis CoT | 23.8% | Best measured gain so far; task-avg 25.2%, multi-session 22.2%, temporal 7.4%. |
-| p2 | Date injection into atom content | 19.0% | Helped some direct categories but regressed overall; content pollution. Reverted. |
-| p3 | Question-type-aware selection prompt | 18.0% | Prompt-only benchmark patch regressed overall. Reverted. |
-| p4 | HyDE expansion | skipped | BM25 + hallucinated vocabulary produced wrong retrieval; better suited for dense retrieval. |
-| p5 | Generated questions per atom | 16.0% | Generated questions polluted BM25 with false-positive matches. Reverted. |
-| p6 | Adaptive paragraph chunking | 22.0% | Helped some user-fact extraction but hurt cross-paragraph/coreference cases. Keep only as motivation for source-aware segmentation. |
-| p3.5-select | Retrieval oracle + selected payload normalization | 13.0% | Verified select/BM25 payload-shape confound cleared on reused P3 lattices. Retrieval metrics matched BM25 exactly: selected hit 100%, recall 1.000, precision 1.000, MRR 1.000. Task-avg 15.03%. |
-| p3.5-bm25 | BM25 ablation on normalized payload | 15.0% | Same reused P3 lattices and current diagnostics. BM25 hit 100%, recall 1.000, precision 1.000, MRR 1.000. Task-avg 17.51%. |
-| p4-pack | Pack retrieval over BM25 seeds | 18.0% | Product-fit keeper. Avg selected atoms rose from 17.1 to 31.1. Selected hit 100%, recall 0.986, precision 1.000, MRR 1.000. Task-avg 20.19%. |
-| p6-graph | Graph BFS selection (P5+P6) | 19.0% | Overall +1pp, task-avg 21.81%. knowledge-update 43.75% (↑↑ from 25%). multi-session dropped to 11.1%. temporal-reasoning still 0% — null valid_from is root cause. |
-| p7 | Role-aware ingest + synthesis agent + query_date fix | 30.0% (qwen) / **49.0% (phi4)** | qwen judge: overall +11pp, task-avg 30.4%. phi4 judge: 49.0%, task-avg 49.8%. temporal 38.5%, knowledge-update 68.75%, multi-session 48.1%. Avg atoms/session 4→14. |
-| p8 | Ingest date resolution fixes (observed_at as ref, today pattern, preserve explicit dates) | **62.0% (phi4)** | Overall +13pp over p7 (phi4 judge). task-avg 60.1%. temporal 38.5%→65.4% (+27pp). knowledge-update 68.75%→56.25% (-12pp, supersession chain disruption). multi-session 62.9%. abstention 100%. |
-| p9 | Fuzzy supersession via rapidfuzz token_sort_ratio (threshold=80, env-tunable) | **69.0% (phi4)** | Overall +7pp. task-avg 66.75%. knowledge-update 56.25%→93.75% (+37pp — fuzzy matching correctly catches subject-phrasing drift). multi-session 74.1% (+11pp). 4 true regressions vs P8, none caused by fuzzy matching: 2 assistant-turn extraction failures (P10 fix) and 2 fragile synthesis cases. |
-| p10 | Assistant-turn extraction (reverted) + synthesis preference/recommendation guidance | **62.0% (phi4)** | Reverted to P9 baseline. Ingest loosening caused recommendation atom explosion (up to 59/109 atoms from assistant turns); LLM couldn't distinguish generic advice from user-specific output. single-session-assistant +54pp but multi-session -19pp, knowledge-update -25pp, single-session-user -21pp. Synthesis kind=preference/recommendation guidance kept — low-risk, no measurable harm. |
-| p11 | Token-intersection seed filter via `lattice/query.py` (reverted) | **61.0% (phi4)** | -8pp overall. 21 regressions, 13 recoveries. Two failure modes: (1) filter dropped valid on-topic seeds due to subject vocab mismatch → lost BFS context (7 cases); (2) changed BFS entry points reshuffle multi-session evidence packs (11 cases). Token intersection fires reliably only for named-entity queries; too blunt for general subjects. `query.py` module kept for P14/P18. |
-| p16b | Post-BFS embedding rerank via fastembed BAAI/bge-small-en-v1.5 (reverted) | **67.0% (phi4)** | -2pp vs P9 baseline but 98% of atom sets differed due to ingest non-determinism — result within noise. |
-| p16b-replay (control) | Replay synthesis over identical p9 atoms, original BFS order | **68.0% (phi4)** | Isolated synthesis variance from ingest noise. task-avg 68.49%. single-session-preference +17pp, temporal +8pp vs P9. multi-session -15pp (synthesis variance). |
-| p16b-replay-reranked | Replay synthesis over identical p9 atoms, embedding-reranked order | **62.0% (phi4)** | -6pp vs control. temporal-reasoning 73%→50% (-23pp). Confirms output reranking breaks date-chain atoms that need graph/chronological order. knowledge-update 87.5%→93.75% (+6pp — most-recent atom first helps). Embedding rerank definitively harmful for synthesis order. |
-| p10b | Few-shot examples + named-item rule for assistant extraction (reverted) | **62.0% (phi4)** | single-session-assistant +45pp (36%→82%) but multi-session -22pp, knowledge-update -18pp, single-session-user -14pp. Recommendation atoms flood selection budget → crowd out event/fact atoms. Fix requires query-intent-aware selection (P14). |
-| p10c | Kind-proportional BFS budget (reverted) | **65.0% (phi4)** | Tried to fix P10b crowding via seed kind distribution → budget. Preference -17pp, knowledge-update -6pp. BM25 seeds are noisy intent signal — preference queries surface fact/event seeds. Reverted both P10b ingest and P10c selection. |
-| p14 | Query-shape seed reordering + recommendation cap (both reverted) | **62.0% (phi4)** | Seed reordering: put primary-kind seeds first in BFS → multi-session -15pp. Same fragility as P16b reranking. Recommendation cap also reverted — zero-cost with P9 atoms but will be re-implemented with P10 ingest. |
-| p9-base | Clean P9 re-run with --keep-lattice-dirs (canonical baseline) | **62.0% (phi4)** | Fresh ingest, same P9 code. Atom distributions nearly identical to original p9 (69%) run — avg 14.8 atoms/q, same kind ratios. 7pp gap vs original p9 is pure synthesis variance. Lattice dirs kept at results/p9-base/...lattices/ for controlled selection/synthesis experiments. |
-| p9-base-t0 | Replay over p9-base atoms, synthesis temperature=0 | **63.0% (phi4)** | Ollama ignores temperature=0 — gemma4:e4b still produces different outputs. Multi-session +7pp, knowledge-update +6pp vs p9-base but single-session-user -7pp. Category swings up to 7pp from synthesis variance alone. |
-| p9-base-mv | Replay over p9-base atoms, 3-vote majority vote (fuzzy via rapidfuzz) | **63.0% (phi4)** | Majority vote picks most "central" answer across 3 parallel synthesis calls. Multi-session +15pp vs p9-base run1 but knowledge-update -6pp. Overall still 63% — synthesis variance irreducible at this model scale. gemma4:e4b produces genuinely different interpretations, not just rephrasing. |
-| p10-5 | Synthesis model upgrade: qwen3.5:4b via `SYNTHESIS_MODEL` env var, p9-base atoms | **76.0% (phi4)** | +7pp vs p9-base gemma. knowledge-update 100%, single-session-user 85.7%, temporal 73.1%, multi-session 66.7%. 100/100 completed, no hangs. |
-| p10-5b | Replication: same config, fresh run | **76.0% (phi4)** | Confirms p10-5 not a lucky run. Variance ≤1pp. |
-| p10-5c | Replication: replay over p9-base atoms | **76.0% (phi4)** | Confirms stability independent of ingest path. 3 consecutive runs at 76% — synthesis variance resolved. |
-| p10 | Named-item recommendation extraction rule + unconditional cap (max 5 recommendation atoms) | **74.0% (phi4)** | -2pp vs p10-5c baseline, within synthesis variance (6 regressions, 4 recoveries, none caused by cap). p9-base has 1 question with recommendation atoms; cap was a no-op. Ingest rule untestable via replay — effect will show on fresh ingest. Changes kept as product improvements. |
-| p12-5b | Source-aware parsing layer (parsers/) + P10 proper-noun recommendation rule + qwen3.5:4b synthesis, fresh ingest | **78.0% (phi4)** | +2pp vs 76% replay baseline, +9pp vs P9 (69%). temporal-reasoning +11.5pp (73.1%→84.6%), single-session-user +7pp (85.7%→92.9%), multi-session +3.7pp. knowledge-update -12.5pp (100%→87.5%) and single-session-assistant -9pp (63.6%→54.5%) — both from fresh ingest noise + supersession fragility, not from the new parsers. |
-| p17 | sum_numbers tool + counting/rounding guidance in synthesis (replay over p12-5b atoms) | **79.0% (phi4)** | +1pp overall vs p12-5b. single-session-assistant +18pp (54.5%→72.7%), knowledge-update +6pp (87.5%→93.75%). temporal-reasoning -7.7pp (84.6%→76.9%) — caused by synthesis using observed_at instead of event dates in date_diff calls (pre-existing fragility, not regression from this change). sum_numbers tool firing correctly on numeric aggregation questions. |
-| p18 | Written-number date resolution ("a week ago", "two months ago") + synthesis empty-response fix (re-prompt after tool calls return empty), fresh ingest | **73.0% (phi4)** | -6pp vs p17b. Temporal unchanged at 76.9% — target category. 4 temporal recoveries from _resolve_dates fix (incl. "two weeks ago" pattern). Regressions are ingest variance: multi-session -14.8pp, single-session-user -14.3pp. synthesis empty-response fix recovered `a08a253f` (fitness classes). Code changes correct; -6pp is non-deterministic gemma4:e4b ingest, not regression from the fix. |
-| p19 | Switch ingest model to `qwen3-8b-ingest` (INGEST_MODEL=qwen3-8b-ingest), fresh ingest | **73.0% (phi4)** | Same overall as p18. qwen extracts 3329 atoms (33.3/session) vs gemma's 1837 (18.4/session) — 1.8x more. BM25 recall drops 1.000→0.976 (2-3 missed answer atoms). multi-session +7pp (55.6→63%), single-session-user +14pp (78.6→92.9%). single-session-preference -33pp (83.3→50%), temporal -12pp (76.9→65.4%) — both synthesis variance on fresh ingest, not structural. |
-| p19-replay | Replay synthesis over fixed p19 qwen atoms (reuse-lattice-root) | **72.0% (phi4)** | Isolates synthesis variance from ingest. single-session-assistant +27pp (63.6→90.9%), temporal same (76.9%). multi-session -11pp (63→51.9%), knowledge-update -19pp (100→81.25%). Category swings across p19 fresh vs p19-replay as large as p18 vs p19 — confirms p19 category shifts were synthesis variance. qwen atom set stable; selection is the bottleneck at 29 avg atoms passed to synthesis. Lattice dirs kept at results/p19/...lattices/ as new canonical baseline for selection/synthesis experiments. |
-| p21-broad-subjects | Broad topic hubs: inject general subject labels ("hiking", "cooking") alongside specific subjects to create `same_subject_as` edges across sessions | **67.0% (phi4)** | -6pp regression. task-avg 69.4%. multi-session -15pp (63→48.2%) — broad subjects over-connect atoms from unrelated queries, flooding synthesis with cross-session noise. single-session-assistant +18pp (63.6→81.8%) — accidentally helps by adding subject edges within a session. Confirmed: broad same_subject_as edges hurt precision more than they help recall. |
-| p22-agent | LLM-driven selection agent: search/expand/finish tools with query-type hints; safety net fallback when agent under-retrieves | **73.0% (phi4)** | task-avg **75.1% (best)**. single-session-assistant 100% (+36pp vs p19), temporal 84.6% (+20pp). multi-session 51.9% (-11pp vs p19) — agent under-uses expand (74% of queries: search→finish without expand). knowledge-update 68.75% (-31pp vs p19) — same cause. `SELECTION_MODEL=qwen3.5:4b`. Retrieval mode `--retrieval-mode agent` in run_eval. |
-| p23-autoexpand | Intent-gated auto-expand in `select_agent()`: force `expand` call in code for knowledge-update and preference queries | **69.0% (phi4)** | -4pp regression. Keyword triggers in `_needs_expand` fired for ALL preference queries including single-session → flooded synthesis with cross-session atoms. session_id diversity gate considered but rejected (LongMemEval-specific). Agent formulation abandoned. |
-| p24-llmfilter | Replace `select_agent()` with two-stage LLM filter: BM25+BFS retrieval → coarse LLM filter (subject+kind, picks 8–25) → fine LLM filter (full content, picks 5–15). Pydantic structured output with Field range constraints enforced at grammar level. `SELECTION_NUM_CTX=8192`. | **76.0% (phi4)** | task-avg **79.9% (new best)**. +3pp vs p22-agent overall, +4.9pp task-avg. knowledge-update +12.5pp (68.75%→81.25%), preference +16.7pp, temporal +7.7pp. multi-session flat (51.9%). 0/100 fallbacks; fine filter avg 8.6 atoms. Remaining failures: multi-session aggregation (13 fails — fine filter cuts atoms needed for counting totals), 2–3 ingest misses (TV size/bike count not extracted), 3 knowledge-update (conflicting same-date atoms), 4 temporal (date arithmetic). |
+| p12-5b | Source-aware parsing layer (parsers/) + P10 proper-noun recommendation rule + qwen3.5:4b synthesis, fresh ingest | **78.0%** | +2pp vs 76% replay baseline. temporal +11.5pp (73.1%→84.6%), single-session-user +7pp. knowledge-update -12.5pp and single-session-assistant -9pp — ingest noise + supersession fragility, not parsers. |
+| p17 | sum_numbers tool + counting/rounding guidance in synthesis (replay p12-5b atoms) | **79.0%** | +1pp. single-session-assistant +18pp (54.5%→72.7%), knowledge-update +6pp. temporal -7.7pp — synthesis using observed_at instead of event dates in date_diff (pre-existing fragility). |
+| p18 | Written-number date resolution + synthesis empty-response fix, fresh ingest | **73.0%** | -6pp vs p17. 4 temporal recoveries from _resolve_dates fix. Regressions are ingest variance (multi-session -14.8pp, single-session-user -14.3pp), not from the fix. |
+| p19 | Switch ingest to `qwen3-8b-ingest`, fresh ingest | **73.0%** | 3329 atoms (33.3/session) vs 1837 (18.4/session). BM25 recall 1.000→0.976. multi-session +7pp, single-session-user +14pp. single-session-preference -33pp, temporal -12pp — synthesis variance on fresh ingest. |
+| p19-replay | Replay synthesis over fixed p19 qwen atoms | **72.0%** | Isolates synthesis variance. single-session-assistant +27pp (63.6→90.9%). multi-session -11pp, knowledge-update -19pp. qwen atom set stable; selection bottleneck at 29 avg atoms to synthesis. |
+| p21-broad-subjects | Broad topic hubs: general subject labels → `same_subject_as` edges across sessions | **67.0%** | -6pp. multi-session -15pp — broad edges over-connect unrelated sessions, flooding synthesis. Confirmed: broad `same_subject_as` hurts precision more than recall. |
+| p22-agent | LLM selection agent: search/expand/finish tools with query-type hints | **73.0%** | task-avg 75.1% (best then). single-session-assistant 100%, temporal 84.6%. multi-session 51.9% — agent skips expand (74% queries: search→finish). `SELECTION_MODEL=qwen3.5:4b`. |
+| p23-autoexpand | Intent-gated auto-expand in agent: force `expand` for knowledge-update + preference queries | **69.0%** | -4pp. Keyword triggers fired for ALL preference queries including single-session → flooded synthesis. Agent formulation abandoned. |
+| p24-llmfilter | Two-stage LLM filter: BM25+BFS → coarse (subject+kind, 8–25) → fine (full content, 5–15). Pydantic grammar constraints. `SELECTION_NUM_CTX=8192`. | **76.0%** | task-avg **79.9% (best)**. knowledge-update +12.5pp, preference +16.7pp, temporal +7.7pp. multi-session flat (51.9%). 0/100 fallbacks; fine avg 8.6 atoms. |
+| sandbox-replay | Verify sandbox refactors: JSON mode prompt fix, `atom_id` citation key. Replay p21 atoms. `gpt-4o-mini` selection + synthesis via OpenRouter. | **70.0%** | task-avg 72.2%. Lower than p24 — gpt-4o-mini synthesis vs qwen3.5:4b; p21 atom set. JSON mode fix + citation key confirmed working. |
+| p25 | Fresh ingest with `gpt-4o-mini` via OpenRouter. p25 atoms (~31.3/session). AGGREGATION query-shape bypass (skip fine filter for counting queries). | **71%** | task-avg TBD. **New baseline** — gpt-4o-mini ingest + inference via OpenRouter. single-session-user 100%, single-session-assistant 100%, single-session-preference 83%. multi-session 59%, temporal 58%, knowledge-update 63%. -5pp vs p24 on different atom set. |
+| p26a | P25 ablation A: LLM filter removed, `select()` = `_retrieve()`. 0 LLM calls/query. Reused p25 lattice dirs. | **71%** | Flat overall vs p25. temporal +11pp (69%), knowledge-update +6pp (69%), single-session-assistant 100%. single-session-user -14pp (86%), single-session-preference -16pp (67%), multi-session -3pp (56%). |
+| p26b | P25 ablation B: score>0 seed filter (`LATTICE_SEED_MIN_SCORE=0.001`). Reused p25 lattice dirs. | **70%** | -1pp vs A. temporal +4pp (73%), multi-session +3pp (59%). knowledge-update -13pp (56%), single-session-preference -17pp (50%). Zero-score seed filtering hurts sparse/preference queries. |
+| p26c | P25 ablation C: score>0 seeds + BFS rescore (`LATTICE_BFS_RESCORE=1`). Reused p25 lattice dirs. **Winner.** | **72%** | +1pp vs A. multi-session +11pp (67%), knowledge-update 69%. temporal -4pp (65%) vs B. single-session-preference still 50%. Production defaults: `LATTICE_SEED_MIN_SCORE=0.001` + `LATTICE_BFS_RESCORE=1`. |
+| p26d | P26d: mode-conditional filter — score>0 only in EXPANSION, POINTED keeps all seeds. Reused p25 lattice dirs. **Reverted.** | **71%** | -1pp vs p26c. preference +17pp (67%), temporal +8pp (73%). multi-session -15pp (52%) — pointed mode passing noisy seeds floods BFS. p26c config restored. |
 
-## Category Tracker
+## Category Tracker (last 10 runs)
 
-Note: p1–p6-graph used `qwen3.5:4b` judge. p7+ use `phi4-mini-judge`. p9-base onward use fixed atoms (reused lattice dirs) — category variance reflects synthesis noise only. p10-5+ use qwen3.5:4b synthesis. p19+ use qwen3-8b-ingest.
+Note: phi4-mini-judge throughout. p19+ use qwen3-8b-ingest. p25 uses gpt-4o-mini ingest.
 
-| Category | p9-base | p10-5c (qwen synth) | p12-5b | p17 | p18 | p19 (qwen ingest) | p19-replay | p21-broad | p22-agent | p23-autoexpand | p24-llmfilter |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| overall | 62.0% | **76.0%** | 78.0% | **79.0%** | 73.0% | 73.0% | 72.0% | 67.0% | 73.0% | 69.0% | **76.0%** |
-| task-avg | 60.7% | **76.0%** | 76.1% | **78.9%** | 75.3% | 72.5% | 72.8% | 69.4% | **75.1%** | — | **79.9%** |
-| single-session-user | 64.3% | **85.7%** | 92.9% | 92.9% | 78.6% | **92.9%** | 85.7% | 71.4% | 78.6% | — | 78.6% |
-| single-session-preference | 50.0% | **66.7%** | 66.7% | 66.7% | **83.3%** | 50.0% | 50.0% | **66.7%** | **66.7%** | — | **83.3%** |
-| single-session-assistant | 45.5% | 63.6% | 54.5% | **72.7%** | 63.6% | 63.6% | **90.9%** | 81.8% | **100%** | — | **100%** |
-| multi-session | 55.6% | 66.7% | 70.4% | 70.4% | 59.3% | **63.0%** | 51.9% | 48.2% | 51.9% | — | 51.9% |
-| temporal-reasoning | 61.5% | 73.1% | **84.6%** | 76.9% | 73.1% | 65.4% | **76.9%** | 73.1% | **84.6%** | — | **84.6%** |
-| knowledge-update | 87.5% | **100%** | 87.5% | 93.75% | 93.75% | **100%** | 81.25% | 75.0% | 68.75% | — | 81.25% |
-| abstention | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** | **100%** | — | **100%** |
+| Category | p22-agent | p23-autoexpand | p24-llmfilter | sandbox-replay | p25 | p26a | p26b | p26c | **p26d** |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| overall | 73.0% | 69.0% | **76.0%** | 70.0% | 71.0% | 71.0% | 70.0% | **72.0%** | 71.0% |
+| single-session-user | 78.6% | — | 78.6% | 78.6% | **100%** | 85.7% | 85.7% | 85.7% | 85.7% |
+| single-session-preference | **66.7%** | — | **83.3%** | 66.7% | **83.3%** | 66.7% | 50.0% | 50.0% | **66.7%** |
+| single-session-assistant | **100%** | — | **100%** | **90.9%** | **100%** | **100%** | **100%** | **100%** | **100%** |
+| multi-session | 51.9% | — | 51.9% | 63.0% | 59.3% | 55.6% | 59.3% | **66.7%** | 51.9% |
+| temporal-reasoning | **84.6%** | — | **84.6%** | 65.4% | 57.7% | 69.2% | **73.1%** | 65.4% | **73.1%** |
+| knowledge-update | 68.75% | — | 81.25% | 68.8% | 62.5% | 68.75% | 56.25% | 68.75% | 68.75% |
+| abstention | **100%** | — | **100%** | **100%** | — | — | — | — | — |
+
+## Archived: Completed P1–P17
+
+| Priority | Change | Outcome |
+| --- | --- | --- |
+| P1 ✅ | Product documentation cleanup | Docs reflect local-first architecture. |
+| P2 ⏭️ | Selection tool calling | Skipped — superseded by graph-seeded selection. |
+| P3 ✅ | Source-aware ingest + provenance + exact dedup | Atoms carry full provenance; duplicates skipped at ingest. |
+| P3.5 ✅ | Retrieval oracle diagnostics + payload normalization | select/BM25 payload-shape confound cleared; session-level retrieval metrics added. |
+| P4 ✅ | Pack retrieval over BM25 seeds | 13%→18%. Avg selected atoms 17→31. |
+| P5 ✅ | Incremental heterogeneous graph index | NetworkX MultiDiGraph with portable sidecars; deterministic nodes/edges. |
+| P6 ✅ | Graph-seeded BFS selection | 18%→19%. BFS expands evidence packs through graph edges. |
+| P7 ✅ | Role-aware ingest + synthesis agent + date_diff tool | 19%→49% (phi4). Temporal 0%→38.5%. Avg atoms/session 4→14. |
+| P8 ✅ | Ingest date resolution fixes | 49%→62%. Temporal 38.5%→65.4% (+27pp). |
+| P9 ✅ | Fuzzy supersession via rapidfuzz token_sort_ratio | 62%→69%. knowledge-update +37pp. |
+| P10.5 ✅ | Synthesis model: qwen3.5:4b via SYNTHESIS_MODEL | 69%→76% (+7pp). Stable ≤1pp variance across 3 runs. |
+| P10 ✅ | Named-item recommendation extraction + unconditional cap (max 5) | Kept as product improvement; eval inconclusive (p9-base has 1 recommendation atom). |
+| P12.5 ✅ | Source-aware parsing layer (parsers/) | chat/markdown/code parsers. Role+turn preserved. Normalized segment interface. |
+| P15 ⏭️ | Ingest tool calling | Reverted: 3x latency. Worth revisiting for API-only providers. |
+| P17 ✅ | sum_numbers tool + counting/rounding guidance | single-session-assistant +18pp. Numeric aggregation questions answered correctly. |

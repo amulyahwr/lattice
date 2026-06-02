@@ -83,9 +83,9 @@ class TestRetrieve:
         assert any("coffee" in s.lower() for s in subjects)
 
     def test_retrieve_no_llm_call(self, seeded_db):
-        with patch("lattice.selection.complete") as mock_llm:
-            _retrieve("coffee", db=seeded_db)
-        mock_llm.assert_not_called()
+        # _retrieve() is LLM-free — verify it returns results without any LLM patch
+        results = _retrieve("coffee", db=seeded_db)
+        assert results, "expected results without LLM"
 
     def test_retrieve_result_has_required_keys(self, seeded_db):
         results = _retrieve("editor", db=seeded_db)
@@ -98,25 +98,19 @@ class TestRetrieve:
 
 
 class TestSelect:
-    def _mock_llm_filter(self, atom_ids: list[str]) -> str:
-        return json.dumps({"n_selected": len(atom_ids), "atom_ids": atom_ids})
-
-    def test_select_calls_llm_filter(self, seeded_db):
-        candidates = _retrieve("editor", db=seeded_db)
-        all_ids = [c["atom_id"] for c in candidates]
-        # LLM filter returns all candidates (trivial filter)
-        with patch("lattice.selection.complete", return_value=self._mock_llm_filter(all_ids)):
-            results = select("editor", db=seeded_db)
+    def test_select_returns_results(self, seeded_db):
+        # select() = _retrieve() — no LLM calls
+        results = select("editor", db=seeded_db)
         assert results
 
     def test_select_empty_db(self, db):
         assert select("anything", db=db) == []
 
-    def test_select_falls_back_on_llm_error(self, seeded_db):
-        # LLM filter raises → falls back to BFS candidates
-        with patch("lattice.selection.complete", side_effect=Exception("LLM down")):
-            results = select("coffee", db=seeded_db)
-        assert results
+    def test_select_result_shape_matches_retrieve(self, seeded_db):
+        # select and _retrieve should return same shape
+        r1 = select("coffee", db=seeded_db)
+        r2 = _retrieve("coffee", db=seeded_db)
+        assert {a["atom_id"] for a in r1} == {a["atom_id"] for a in r2}
 
 
 class TestStreamSynthesis:

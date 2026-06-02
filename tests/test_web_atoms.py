@@ -35,6 +35,8 @@ def _make_atom(
 
 def _patch_db(atoms: list[Atom]):
     """Context manager: patches LatticeDB in app.py so db.all() returns atoms."""
+    import lattice.web.app as _app
+    _app._db = None  # clear cached instance so the patched class is called
     mock_db = MagicMock()
     mock_db.all.return_value = atoms
     return patch("lattice.web.app.LatticeDB", return_value=mock_db)

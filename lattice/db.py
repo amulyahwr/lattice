@@ -361,6 +361,14 @@ class LatticeDB:
         as_of: date | None = None,
         top_k: int = 20,
     ) -> list[Atom]:
+        return [a for _, a in self.search_scored(query, as_of=as_of, top_k=top_k)]
+
+    def search_scored(
+        self,
+        query: str,
+        as_of: date | None = None,
+        top_k: int = 20,
+    ) -> list[tuple[float, Atom]]:
         atoms = self._valid_atoms(as_of=as_of)
 
         if not atoms:
@@ -368,10 +376,10 @@ class LatticeDB:
 
         words = _query_words(query)
         if not words:
-            return atoms[:top_k]
+            return [(0.0, a) for a in atoms[:top_k]]
 
         bm25, atoms = self._get_bm25(atoms)
         scores = bm25.get_scores(words)
 
         ranked = sorted(zip(scores, atoms), key=lambda x: x[0], reverse=True)
-        return [a for _, a in ranked[:top_k]]
+        return [(float(score), a) for score, a in ranked[:top_k]]
