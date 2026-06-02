@@ -109,8 +109,6 @@ All configuration is via environment variables.
 | `LLM_BASE_URL` | — | Override API base URL (e.g. OpenRouter, Anthropic compat) |
 | `INGEST_MODEL` | _(LLM_MODEL)_ | Override model for ingest only |
 | `SYNTHESIS_MODEL` | _(LLM_MODEL)_ | Override model for synthesis only |
-| `SELECTION_MODEL` | _(LLM_MODEL)_ | Override model for LLM selection filter |
-| `SELECTION_NUM_CTX` | `8192` | Context window for selection filter (Ollama only) |
 
 **Provider quick reference:**
 
@@ -158,7 +156,7 @@ as_of   — optional ISO date (YYYY-MM-DD)
 → [ { atom_id, subject, content, kind, source, valid_from, valid_until }, ... ]
 ```
 
-BM25 seeds candidate atoms; bounded BFS through the graph index expands context via segment, source, subject, supersession, and duplicate edges. An optional two-stage LLM filter (`select_llm_filter`) narrows the result set before synthesis.
+BM25 seeds candidate atoms; bounded BFS through the graph index expands context via segment, source, subject, supersession, and duplicate edges. 0 LLM calls — results are BFS-expanded and BM25-rescored.
 
 ### `lattice_answer(query, atom_ids?, as_of?)`
 

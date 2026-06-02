@@ -20,7 +20,7 @@ Required env vars: `LLM_PROVIDER`, `LLM_MODEL`, `LATTICE_DIR`. `LLM_API_KEY` req
 
 ## Architecture
 
-The current pipeline is: **ingest → select → synthesize**, each backed by an LLM call via `lattice/llm.py`. The product direction is local-first lattice: source-aware ingest, provenance, deterministic graph sidecars, graph-seeded selection, and optional enrichment that never blocks local querying.
+The current pipeline is: **ingest → select → synthesize**. Ingest and synthesis use LLM via `lattice/llm.py`; selection is LLM-free (BM25 + graph BFS). The product direction is local-first lattice: source-aware ingest, provenance, deterministic graph sidecars, graph-seeded selection, and optional enrichment that never blocks local querying.
 
 ```
 server.py          MCP stdio entrypoint. Owns one shared LatticeDB instance.
@@ -50,11 +50,11 @@ lattice/
                    chat.py preserves turn windowing + role field. markdown.py splits on headings.
   ingest.py        Segments source via parsers/, then LLM extracts atoms per segment,
                    then checks supersession per atom.
-  query.py         Query intent classifier: detects temporal/recommendation/preference signals
-                   to tune selection scoring. Stateless; used by selection.py.
-  selection.py     _retrieve(): BM25 top-20 → source-diversity probe → graph BFS → atom dicts (no LLM).
-                   select(): calls _retrieve() then two-stage LLM coarse+fine filter → final atom dicts.
-                   select() is the production path; _retrieve() is the eval ablation (bm25_bfs mode).
+  query.py         Query intent classifier: detects aggregation/temporal/recommendation/preference
+                   signals. Returns QueryIntent with shape + primary_kind. Stateless; used by selection.py.
+  selection.py     select() = _retrieve(): BM25 scored seeds → zero-score seed filter
+                   (LATTICE_SEED_MIN_SCORE) → source-diversity probe → graph BFS → optional BFS
+                   rescore (LATTICE_BFS_RESCORE) → atom dicts. 0 LLM calls.
   synthesis.py     LLM generates prose answer from atom dicts. Uses SYNTHESIS_MODEL env var
                    (falls back to LLM_MODEL). Ollama path uses OpenAI-compat client with
                    num_ctx=4096 and tool calls for date_diff + sum_numbers.
@@ -82,7 +82,7 @@ Drop any `.md` (or text) file into `LATTICE_INBOX` (default `LATTICE_DIR/inbox/`
 
 **Supersession** (in `ingest.py`): when a new atom has the same subject as an existing one, an LLM call decides if it supersedes. Fast path uses `subjects.json`; slow path scans files (handles hand-edited atoms). Superseded atoms stay on disk with `is_superseded=true` and bidirectional links (`superseded_by` / `supersedes`).
 
-**LLM calls**: all go through `lattice.llm.complete(messages)`. Tests mock at `lattice.ingest.complete`, `lattice.selection.complete` — patch the module-level name, not `lattice.llm.complete`. Synthesis is different: patch `lattice.synthesis.make_llm_client` (returns a mock OpenAI client).
+**LLM calls**: ingest/supersession go through `lattice.llm.complete(messages)`. Tests mock at `lattice.ingest.complete` — patch the module-level name, not `lattice.llm.complete`. Synthesis is different: patch `lattice.synthesis.make_llm_client` (returns a mock OpenAI client). Selection has no LLM calls.
 
 **Atom storage**: every atom is a `.md` file with YAML frontmatter. `LatticeDB` has an in-memory cache (`_atom_cache`). Cache is per-instance; `server.py` reuses one instance per process.
 
