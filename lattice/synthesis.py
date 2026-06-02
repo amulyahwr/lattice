@@ -117,7 +117,10 @@ def replace_citations(text: str, atoms: list[dict]) -> str:
     render it as a tooltip or link. Unknown source_ids are left unchanged —
     never silently drop a citation the model emitted (Rule 6).
     """
-    index = {_atom_src_key(a): a for a in atoms}
+    index: dict[str, dict] = {}
+    for a in atoms:
+        for key in filter(None, (_atom_src_key(a), a.get("source_id"))):
+            index.setdefault(key, a)
 
     def _replace(m: re.Match) -> str:
         src_id = m.group(1)

@@ -31,8 +31,14 @@ _PREFERENCE_SIGNALS = {
     "enjoy", "hate", "love", "want", "wish", "rather",
 }
 
+# Phrase-level triggers for aggregation (token matching can't catch "how many" / "how much"
+# because "many" and "much" are stopwords).
+_AGGREGATION_PHRASES = {"how many", "how much", "number of"}
+_AGGREGATION_TOKENS = {"total", "count", "times"}
+
 
 class QueryShape(Enum):
+    AGGREGATION = "aggregation"  # counting / totaling queries
     TEMPORAL = "temporal"
     RECOMMENDATION = "recommendation"
     PREFERENCE = "preference"
@@ -53,6 +59,7 @@ class QueryIntent:
     def primary_kind(self) -> str | None:
         """Atom kind prioritized for this query shape. None = no bias."""
         return {
+            QueryShape.AGGREGATION: None,
             QueryShape.TEMPORAL: "event",
             QueryShape.RECOMMENDATION: "recommendation",
             QueryShape.PREFERENCE: "preference",
@@ -72,8 +79,11 @@ def parse_query(query: str) -> QueryIntent:
     tokens = _tokenize(query)
     raw_lower = query.lower()
 
-    # Recommendation check first — "did you tell/suggest/recommend" is specific
-    if _signal_match(tokens, _RECOMMENDATION_SIGNALS) or "did you" in raw_lower:
+    # Aggregation first — "how many times did" would otherwise match RECOMMENDATION via "did you"
+    if _aggregation_match(tokens, raw_lower):
+        shape = QueryShape.AGGREGATION
+    # Recommendation — "did you tell/suggest/recommend" is specific
+    elif _signal_match(tokens, _RECOMMENDATION_SIGNALS) or "did you" in raw_lower:
         shape = QueryShape.RECOMMENDATION
     elif _signal_match(tokens, _TEMPORAL_SIGNALS):
         shape = QueryShape.TEMPORAL
@@ -83,6 +93,12 @@ def parse_query(query: str) -> QueryIntent:
         shape = QueryShape.FACTUAL
 
     return QueryIntent(raw=query, shape=shape, tokens=tokens)
+
+
+def _aggregation_match(tokens: set[str], raw_lower: str) -> bool:
+    if tokens & _AGGREGATION_TOKENS:
+        return True
+    return any(p in raw_lower for p in _AGGREGATION_PHRASES)
 
 
 def _signal_match(tokens: set[str], signals: set[str]) -> bool:

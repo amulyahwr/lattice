@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import uuid
@@ -291,7 +292,13 @@ def _extract_atoms(segment: Segment, metadata: dict, ref: datetime) -> list[dict
     ]
     ingest_model = os.environ.get("INGEST_MODEL") or None
     raw = complete(messages, text_format=_AtomList, model=ingest_model)
-    atoms_data: list[dict] = json.loads(raw)["atoms"]
+    try:
+        atoms_data: list[dict] = json.loads(raw)["atoms"]
+    except (json.JSONDecodeError, KeyError, TypeError):
+        logging.getLogger("lattice.ingest").warning(
+            "segment extraction returned unparseable JSON — skipping segment (len=%d)", len(raw)
+        )
+        return []
 
     source_override = metadata.get("source")
     for a in atoms_data:
