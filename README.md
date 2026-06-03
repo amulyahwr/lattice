@@ -1,244 +1,128 @@
-# lattice
+# Lattice
 
-A local-first personal memory OS. Everything you tell it becomes a typed, timestamped **atom** — one fact per file, stored as human-readable markdown in a directory you control. A persistent daemon watches an inbox folder for new content, ingests it automatically, and serves a local web UI for recall.
+Your personal memory OS — local, private, always running. Everything you tell it becomes a typed, timestamped fact stored as plain markdown on your own machine. Ask it anything; it answers in prose with citations.
 
-MCP integration lets any MCP-compatible AI assistant (Claude Code, Cursor, Cline) read from and write to the same atom store.
+Works as an MCP server so Claude and other AI assistants can read and write your memory automatically during conversations.
 
 ---
 
-## Quick start
+## Setup
+
+### 1. Install
 
 ```bash
-# Install
-uvx lattice
+git clone https://github.com/amulyahwr/lattice
+cd lattice
+uv sync
+```
 
-# Start the daemon (inbox watcher + web UI + MCP server)
+### 2. Configure
+
+Copy and fill in your env vars (or export them in your shell profile):
+
+```bash
+export LATTICE_DIR=~/.lattice
+export LLM_PROVIDER=openai
+export LLM_BASE_URL=https://openrouter.ai/api/v1
+export LLM_MODEL=openai/gpt-4o-mini
+export LLM_API_KEY=sk-or-...       # from openrouter.ai/keys
+```
+
+Using Ollama instead? Drop `LLM_BASE_URL` and `LLM_API_KEY`, set `LLM_PROVIDER=ollama` and `LLM_MODEL=qwen3:4b`.
+
+### 3. Wire into Claude Code
+
+```bash
+claude mcp add lattice -- uv run --directory /path/to/lattice lattice
+```
+
+Claude can now call `lattice_ingest`, `lattice_select`, and `lattice_answer` during your sessions.
+
+**Capture sessions automatically** — add this to your `CLAUDE.md`:
+
+> When the user says any of: "save", "done", "goodbye", "wrap up", "end session", "save session" — summarize what was decided, built, or learned in this session and call `lattice_ingest` with that summary.
+
+### 4. Tell Claude to use Lattice
+
+Add this to your `CLAUDE.md` so Claude routes memory through Lattice instead of its own context:
+
+> **Do not write user facts, preferences, or decisions to Claude's internal auto-memory system.** Lattice is the only memory store for this project.
+>
+> When the user shares a preference, decision, fact, or anything worth remembering, call `lattice_ingest` immediately. When answering a recall question ("what did I decide about X", "what do I prefer"), call `lattice_select` first and ground the answer in returned atoms.
+
+### 5. Remove permission prompts
+
+By default Claude Code asks for approval on every MCP tool call. Add to `.claude/settings.json` to allow Lattice tools automatically:
+
+```json
+{
+  "autoMemoryEnabled": false,
+  "allowedTools": [
+    "mcp__lattice__lattice_ingest",
+    "mcp__lattice__lattice_select",
+    "mcp__lattice__lattice_answer"
+  ]
+}
+```
+
+### 6. Start the daemon
+
+The daemon watches your inbox folder, ingests new files automatically, and serves the web UI.
+
+```bash
 lattice-daemon
-
-# Open the web UI
-open http://localhost:7337
-
-# Drop a file into the inbox — atoms appear within seconds
-echo "I prefer dark roast coffee" > ~/.lattice/inbox/note.txt
 ```
 
----
-
-## How it works
-
-```
-inbox/          ← drop .txt or .md files here
-    │
-    ▼
-lattice-daemon  ← watches inbox, owns all writes to atom store
-    │
-    ├── lattice/           ← atom store (~/.lattice/*.md)
-    ├── web UI             ← http://localhost:7337 (chat + recent atoms)
-    └── daemon.sock        ← IPC socket for MCP server writes
-            │
-            ▼
-    MCP server (lattice_ingest / lattice_select / lattice_answer)
-```
-
-The daemon is the only writer. The web UI and MCP server read atoms directly from disk (atomic writes make reads safe without locking).
-
----
-
-## Daemon
-
-```bash
-lattice-daemon          # start daemon (inbox watcher + web UI on :7337)
-lattice-daemon status   # print running status, atom count, last ingest time
-```
-
-The daemon:
-- Watches `LATTICE_INBOX` (default `~/.lattice/inbox/`) for `.txt` and `.md` files
-- Ingests each file via LLM extraction, moves it to `~/.lattice/processed/`
-- Serves the web UI at `http://LATTICE_WEB_HOST:LATTICE_WEB_PORT`
-- Exposes a Unix domain socket at `LATTICE_SOCK` for MCP server write requests
-- Writes a PID file to `~/.lattice/daemon.pid`
-
-### Auto-start on login (macOS)
-
-A launchd plist is included at `extras/dev.lattice.daemon.plist`. Fill in the env vars before loading:
-
-| Key | What to set |
-|---|---|
-| `LATTICE_DIR` | Path to your atom store, e.g. `/Users/you/.lattice` |
-| `LLM_PROVIDER` | `openai` (for OpenRouter) or `ollama` (local) |
-| `LLM_BASE_URL` | `https://openrouter.ai/api/v1` for OpenRouter; remove for Ollama |
-| `LLM_MODEL` | `openai/gpt-4o-mini` for OpenRouter; `qwen3:4b` for Ollama |
-| `LLM_API_KEY` | Your OpenRouter key from [openrouter.ai/keys](https://openrouter.ai/keys); remove for Ollama |
-
-Then:
+**Auto-start on login (macOS):** fill in your env vars in `extras/dev.lattice.daemon.plist`, then:
 
 ```bash
 cp extras/dev.lattice.daemon.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/dev.lattice.daemon.plist
 ```
 
-The daemon will start automatically on every login.
-
 ---
 
-## Web UI
+## Features
 
-Open `http://localhost:7337` in any browser.
+### Recall via web UI
 
-- **Chat** — ask a natural language question; answer streams with numbered source citations and markdown rendering
-- **Recent atoms** — see what was ingested recently; memory count and kind icons at a glance
-- **Feedback** — rate each answer (👍 / 👎 + reason); written to `~/.lattice/feedback.jsonl`
-- **Dark mode** — manual toggle (☾/☀); persists across sessions
+Open `http://localhost:7337`. Ask a natural language question; Lattice streams a prose answer with numbered source citations. Markdown rendering, dark mode, thumbs-up/down feedback.
 
----
+### Ambient ingest via inbox
 
-## MCP integration
-
-**Claude Code (recommended):**
+Drop any `.txt` or `.md` file into `~/.lattice/inbox/`. The daemon picks it up within seconds, extracts structured facts via LLM, and moves the file to `processed/`. No manual steps.
 
 ```bash
-claude mcp add lattice -- uv run --directory /path/to/lattice-mcp lattice
+echo "Decided to use Postgres over SQLite for the new service" > ~/.lattice/inbox/note.txt
 ```
 
-**Other MCP clients (Cursor, Cline) — add to `.mcp.json`:**
+### MCP tools for AI assistants
 
-```json
-{
-  "mcpServers": {
-    "lattice": {
-      "command": "uv",
-      "args": ["run", "--directory", "/path/to/lattice-mcp", "lattice"],
-      "env": {
-        "LLM_PROVIDER": "openai",
-        "LLM_BASE_URL": "https://openrouter.ai/api/v1",
-        "LLM_MODEL": "openai/gpt-4o-mini",
-        "LLM_API_KEY": "sk-or-...",
-        "LATTICE_DIR": "/Users/you/.lattice"
-      }
-    }
-  }
-}
-```
+Three tools exposed to Claude and any MCP-compatible client:
 
-When the daemon is running, `lattice_ingest` drops content to the inbox folder (daemon ingests it asynchronously). When the daemon is not running, `lattice_ingest` falls back to direct write.
+| Tool             | What it does                                                               |
+| ---------------- | -------------------------------------------------------------------------- |
+| `lattice_ingest` | Decompose text into memory atoms and store them                            |
+| `lattice_select` | Return the most relevant atoms for a query (BM25 + graph BFS, 0 LLM calls) |
+| `lattice_answer` | Synthesize a prose answer from the atom store                              |
+
+### Human-readable atom store
+
+Every fact is a plain `.md` file in `LATTICE_DIR`. Hand-editable, git-trackable. Superseded facts stay on disk with history preserved.
 
 ---
 
-## Configuration
+## Roadmap
 
-All configuration is via environment variables.
-
-### LLM
-
-| Variable | Default | Description |
-|---|---|---|
-| `LLM_PROVIDER` | `ollama` | `ollama` \| `openai` \| `anthropic` |
-| `LLM_MODEL` | _(required)_ | Model name — raises error if unset |
-| `LLM_API_KEY` | — | API key (not required for Ollama) |
-| `LLM_BASE_URL` | — | Override API base URL (e.g. OpenRouter, Anthropic compat) |
-| `INGEST_MODEL` | _(LLM_MODEL)_ | Override model for ingest only |
-| `SYNTHESIS_MODEL` | _(LLM_MODEL)_ | Override model for synthesis only |
-
-**Provider quick reference:**
-
-| Use case | `LLM_PROVIDER` | `LLM_BASE_URL` | `LLM_MODEL` (suggestions) | `LLM_API_KEY` |
-|---|---|---|---|---|
-| Local / fully private | `ollama` | _(unset)_ | `qwen3:4b` | _(not needed)_ |
-| OpenRouter | `openai` | `https://openrouter.ai/api/v1` | `openai/gpt-4o-mini` | `sk-or-...` from [openrouter.ai/keys](https://openrouter.ai/keys) |
-
-> **`INGEST_MODEL` / `SYNTHESIS_MODEL`:** use a cheap fast model for ingest (`gpt-4o-mini`, `qwen3:4b`) and a stronger one for synthesis (`claude-sonnet-4-6`, `gpt-4o`) to balance cost vs. quality.
-
-### Paths
-
-| Variable | Default | Description |
-|---|---|---|
-| `LATTICE_DIR` | `~/.lattice` | Root directory for atom store |
-| `LATTICE_INBOX` | `~/.lattice/inbox` | Drop files here for ambient ingest |
-| `LATTICE_SOCK` | `~/.lattice/daemon.sock` | Unix domain socket for IPC |
-| `LATTICE_WEB_HOST` | `127.0.0.1` | Web UI bind address |
-| `LATTICE_WEB_PORT` | `7337` | Web UI port |
-
----
-
-## MCP tools
-
-### `lattice_ingest(source, metadata?)`
-
-Ingests raw text as atoms. When the daemon is running, drops to the inbox (async). Otherwise writes directly.
-
-```
-source    — raw text string
-metadata  — optional dict (title, url, author, date, …)
-
-→ { atom_ids: [...] }   (direct mode)
-→ { queued: true, inbox_file: "..." }      (daemon mode)
-```
-
-### `lattice_select(query, as_of?)`
-
-Returns the most relevant atoms for a natural language query.
-
-```
-query   — natural language question
-as_of   — optional ISO date (YYYY-MM-DD)
-
-→ [ { atom_id, subject, content, kind, source, valid_from, valid_until }, ... ]
-```
-
-BM25 seeds candidate atoms; bounded BFS through the graph index expands context via segment, source, subject, supersession, and duplicate edges. 0 LLM calls — results are BFS-expanded and BM25-rescored.
-
-### `lattice_answer(query, atom_ids?, as_of?)`
-
-Synthesizes a prose answer from the atom store.
-
-```
-query     — natural language question
-atom_ids  — optional list; auto-selects if empty
-as_of     — optional ISO date
-
-→ answer string
-```
-
-Tool-calling agent loop with `date_diff(date1, date2)` and `sum_numbers(numbers[])` for exact date arithmetic and numeric aggregation.
-
----
-
-## Atom format
-
-```markdown
----
-atom_id: 3f2e1a...
-kind: preference
-source: user
-subject: coffee preference
-observed_at: 2025-01-15
-valid_from: null
-valid_until: null
-is_superseded: false
-superseded_by: null
-supersedes: null
-metadata: {}
----
-Prefers dark roast coffee.
-```
-
-One `.md` file per atom in `LATTICE_DIR`. Human-readable, hand-editable, git-trackable. Superseded atoms stay on disk with `is_superseded: true` — history is preserved, not deleted.
-
----
-
-## Development
-
-```bash
-git clone https://github.com/amulyahwr/lattice
-cd lattice
-uv sync
-uv run pytest
-
-# Run daemon in dev (uses LATTICE_DIR env var)
-LATTICE_DIR=/tmp/lattice-dev uv run lattice-daemon
-
-# Iterate on the web UI without GPU — canned SSE responses, no LLM
-uv run lattice-mock   # http://localhost:7337
-```
-
-Run `scripts/e2e.py` for a full pipeline smoke test (ingest → select → synthesize) against a fixed personal memory corpus — requires `LLM_MODEL` and provider env vars set.
+| What                                                            | Status   |
+| --------------------------------------------------------------- | -------- |
+| `lattice_capture` MCP tool — explicit session-end capture       | Next     |
+| `lc` terminal command — `lc "decided X because Y"`              | Phase 2B |
+| VS Code / Cursor extension — capture + recall from the IDE      | Phase 2B |
+| Browser extension — right-click selected text → save to Lattice | Phase 2B |
+| `lattice setup` wizard — one-command onboarding                 | Phase 2B |
+| PDF ingest                                                      | Phase 2B |
+| Prospective reminders (`trigger_at` atoms surfaced by daemon)   | Phase 2B |
+| Multi-device sync (mDNS discovery + Ed25519 pairing)            | Phase 3  |
+| Screenpipe integration — passive ambient capture                | Phase 3  |
+| Mobile app                                                      | Phase 4  |

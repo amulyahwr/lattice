@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 import mcp.server.stdio
-from mcp.server import Server
+from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
 from mcp.types import TextContent, Tool
 
@@ -120,12 +120,14 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
             return [TextContent(type="text", text=f"queued to inbox: {inbox_file.name}")]
 
     if name == "lattice_select":
+        _db.preload_if_stale()
         as_of_str: str | None = arguments.get("as_of")
         as_of = date.fromisoformat(as_of_str) if as_of_str else None
         atoms = select(query=arguments["query"], as_of=as_of, db=_db)
         return [TextContent(type="text", text=json.dumps(atoms, indent=2))]
 
     if name == "lattice_answer":
+        _db.preload_if_stale()
         as_of_str = arguments.get("as_of")
         as_of = date.fromisoformat(as_of_str) if as_of_str else None
         atom_ids: list[str] = arguments.get("atom_ids", [])
@@ -158,7 +160,7 @@ def main() -> None:
                     server_name="lattice",
                     server_version="0.1.0",
                     capabilities=app.get_capabilities(
-                        notification_options=None,
+                        notification_options=NotificationOptions(),
                         experimental_capabilities={},
                     ),
                 ),

@@ -33,7 +33,7 @@ class AtomNotFound(Exception):
 
 class LatticeDB:
     def __init__(self, lattice_dir: str | Path | None = None) -> None:
-        path = lattice_dir or os.environ.get("LATTICE_DIR", "./lattice")
+        path = lattice_dir or os.environ.get("LATTICE_DIR", Path.home() / ".lattice")
         self.dir = Path(path)
         self.dir.mkdir(parents=True, exist_ok=True)
         self._atom_cache: dict[str, Atom] = {}
@@ -129,6 +129,17 @@ class LatticeDB:
         atom = Atom.from_markdown(p.read_text(encoding="utf-8"))
         self._atom_cache[atom_id] = atom
         return atom
+
+    def preload_if_stale(self) -> None:
+        """O(1) hot path: one manifest read. Falls through to preload() only when atom_count changed."""
+        manifest_path = self.dir / "graph" / "manifest.json"
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            if manifest.get("atom_count", -1) == len(self._atom_cache):
+                return
+        except (OSError, json.JSONDecodeError):
+            pass
+        self.preload()
 
     def preload(self) -> None:
         """Bulk-read all atom files into cache."""

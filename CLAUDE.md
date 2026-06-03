@@ -95,3 +95,11 @@ This is current MVP behavior, not the target product shape.
 ### Test conventions
 
 All tests mock LLM via `unittest.mock.patch`. Ingest responses mock two calls per atom: first the extraction JSON, then the supersession reply (`"null"` or an atom_id string). Use `tmp_path` fixture for isolated `LatticeDB` instances.
+
+### Memory: Lattice is the sole memory system
+
+**Do not write user facts, preferences, or decisions to Claude's internal auto-memory system.** Do not save anything to `~/.claude/projects/.../memory/`. Lattice is the only memory store for this project.
+
+When the user says any of: "save", "done", "goodbye", "wrap up", "end session", "save session" — summarize what was decided, built, or learned in this session and call lattice_ingest with that summary.
+When the user shares a preference, decision, fact, or anything worth remembering, call lattice_ingest immediately.
+When answering a recall question ("what did I decide about X", "what do I prefer", "remind me of Y"), call lattice_select first and ground the answer in returned atoms.
