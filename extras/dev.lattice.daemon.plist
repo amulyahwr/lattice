@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>dev.lattice.daemon</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/amulyagupta/Documents/workspace/lattice-mcp/.venv/bin/lattice-daemon</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- Root dir for atom store, inbox, socket, logs. Default: ~/.lattice -->
+        <key>LATTICE_DIR</key>
+        <string>/Users/amulyagupta/.lattice</string>
+
+        <!--
+            LLM_PROVIDER: always "openai" for OpenRouter (OpenAI-compat wire protocol).
+            For local Ollama: set to "ollama" and remove LLM_BASE_URL + LLM_API_KEY.
+        -->
+        <key>LLM_PROVIDER</key>
+        <string>openai</string>
+
+        <!--
+            LLM_BASE_URL:
+              OpenRouter → https://openrouter.ai/api/v1
+              Ollama     → remove this key entirely (defaults to localhost:11434)
+        -->
+        <key>LLM_BASE_URL</key>
+        <string>https://openrouter.ai/api/v1</string>
+
+        <!--
+            LLM_MODEL:
+              OpenRouter → openai/gpt-4o-mini
+              Ollama     → qwen3:4b
+        -->
+        <key>LLM_MODEL</key>
+        <string>openai/gpt-4o-mini</string>
+
+        <!--
+            LLM_API_KEY:
+              OpenRouter → get key at https://openrouter.ai/keys (starts with sk-or-...)
+              Ollama     → remove this key entirely (no auth needed)
+        -->
+        <key>LLM_API_KEY</key>
+        <string>YOUR-OPENROUTER-KEY</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/amulyagupta/.lattice/daemon.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/amulyagupta/.lattice/daemon.stderr.log</string>
+</dict>
+</plist>
