@@ -36,21 +36,34 @@ Using Ollama instead? Drop `LLM_BASE_URL` and `LLM_API_KEY`, set `LLM_PROVIDER=o
 claude mcp add lattice -- uv run --directory /path/to/lattice lattice
 ```
 
-Claude can now call `lattice_ingest`, `lattice_select`, and `lattice_answer` during your sessions.
+### 4. Add the memory block to your CLAUDE.md
 
-**Capture sessions automatically** — add this to your `CLAUDE.md`:
+Copy this entire block into your `CLAUDE.md` (the one Claude Code reads for your project or globally at `~/.claude/CLAUDE.md`):
 
-> When the user says any of: "save", "done", "goodbye", "wrap up", "end session", "save session" — summarize decisions made, things built, and conclusions reached, then call `lattice_capture` with that summary. Always set `metadata.source_id="claude-code"` and `metadata.observed_at=<current ISO timestamp>`.
+```
+### Memory: Lattice is the sole memory system
 
-### 4. Tell Claude to use Lattice
+**Do not write user facts, preferences, or decisions to Claude's internal
+auto-memory system.** Do not save anything to ~/.claude/projects/.../memory/.
+Lattice is the only memory store.
 
-Add this to your `CLAUDE.md` so Claude routes memory through Lattice instead of its own context:
+When the user says any of: "save", "done", "goodbye", "wrap up", "end session",
+"save session" — summarize decisions made, things built, and conclusions reached,
+then call `lattice_capture` with that summary. Always set
+`metadata.source_id="claude-code"` and `metadata.observed_at=<current ISO timestamp>`.
 
-> **Do not write user facts, preferences, or decisions to Claude's internal auto-memory system.** Lattice is the only memory store for this project.
->
-> When the user shares a preference, decision, fact, or anything worth remembering, call `lattice_ingest` immediately. When answering a recall question ("what did I decide about X", "what do I prefer"), call `lattice_select` first and ground the answer in returned atoms.
+When the user shares a preference, decision, fact, or anything worth remembering,
+call `lattice_ingest` immediately:
+- Single fact from the user → set `metadata.source="user"`,
+  `metadata.source_id="claude-code"`, `metadata.observed_at=<current ISO timestamp>`.
+- Conversation chunk (multiple turns) → format as `"user: ...\nassistant: ..."`
+  and omit `metadata.source` — the pipeline attributes per-turn automatically.
 
-### 5. Remove permission prompts
+When answering a recall question ("what did I decide about X", "what do I prefer",
+"remind me of Y"), call `lattice_select` first and ground the answer in returned atoms.
+```
+
+### 5. Allow Lattice tools without permission prompts
 
 By default Claude Code asks for approval on every MCP tool call. Add to `.claude/settings.json` to allow Lattice tools automatically:
 
