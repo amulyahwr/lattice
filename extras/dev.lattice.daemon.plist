@@ -5,16 +5,17 @@
     <key>Label</key>
     <string>dev.lattice.daemon</string>
 
+    <!-- Replace /path/to/lattice-mcp with your local clone path -->
     <key>ProgramArguments</key>
     <array>
-        <string>/Users/amulyagupta/Documents/workspace/lattice-mcp/.venv/bin/lattice-daemon</string>
+        <string>/path/to/lattice-mcp/.venv/bin/lattice-daemon</string>
     </array>
 
     <key>EnvironmentVariables</key>
     <dict>
-        <!-- Root dir for atom store, inbox, socket, logs. Default: ~/.lattice -->
+        <!-- Root dir for atom store, inbox, socket, logs. Replace with your path, e.g. /Users/you/.lattice -->
         <key>LATTICE_DIR</key>
-        <string>/Users/amulyagupta/.lattice</string>
+        <string>/Users/you/.lattice</string>
 
         <!--
             LLM_PROVIDER: always "openai" for OpenRouter (OpenAI-compat wire protocol).
@@ -53,9 +54,10 @@
     <key>KeepAlive</key>
     <true/>
 
+    <!-- Replace /Users/you/.lattice with your LATTICE_DIR -->
     <key>StandardOutPath</key>
-    <string>/Users/amulyagupta/.lattice/daemon.stdout.log</string>
+    <string>/Users/you/.lattice/daemon.stdout.log</string>
     <key>StandardErrorPath</key>
-    <string>/Users/amulyagupta/.lattice/daemon.stderr.log</string>
+    <string>/Users/you/.lattice/daemon.stderr.log</string>
 </dict>
 </plist>
