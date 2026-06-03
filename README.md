@@ -58,6 +58,27 @@ The daemon:
 - Exposes a Unix domain socket at `LATTICE_SOCK` for MCP server write requests
 - Writes a PID file to `~/.lattice/daemon.pid`
 
+### Auto-start on login (macOS)
+
+A launchd plist is included at `extras/dev.lattice.daemon.plist`. Fill in the env vars before loading:
+
+| Key | What to set |
+|---|---|
+| `LATTICE_DIR` | Path to your atom store, e.g. `/Users/you/.lattice` |
+| `LLM_PROVIDER` | `openai` (for OpenRouter) or `ollama` (local) |
+| `LLM_BASE_URL` | `https://openrouter.ai/api/v1` for OpenRouter; remove for Ollama |
+| `LLM_MODEL` | `openai/gpt-4o-mini` for OpenRouter; `qwen3:4b` for Ollama |
+| `LLM_API_KEY` | Your OpenRouter key from [openrouter.ai/keys](https://openrouter.ai/keys); remove for Ollama |
+
+Then:
+
+```bash
+cp extras/dev.lattice.daemon.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/dev.lattice.daemon.plist
+```
+
+The daemon will start automatically on every login.
+
 ---
 
 ## Web UI
@@ -73,17 +94,25 @@ Open `http://localhost:7337` in any browser.
 
 ## MCP integration
 
-Add to your project's `.mcp.json`:
+**Claude Code (recommended):**
+
+```bash
+claude mcp add lattice -- uv run --directory /path/to/lattice-mcp lattice
+```
+
+**Other MCP clients (Cursor, Cline) — add to `.mcp.json`:**
 
 ```json
 {
   "mcpServers": {
     "lattice": {
-      "command": "uvx",
-      "args": ["lattice"],
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/lattice-mcp", "lattice"],
       "env": {
-        "LLM_PROVIDER": "ollama",
-        "LLM_MODEL": "qwen3:7b",
+        "LLM_PROVIDER": "openai",
+        "LLM_BASE_URL": "https://openrouter.ai/api/v1",
+        "LLM_MODEL": "openai/gpt-4o-mini",
+        "LLM_API_KEY": "sk-or-...",
         "LATTICE_DIR": "/Users/you/.lattice"
       }
     }
@@ -91,7 +120,7 @@ Add to your project's `.mcp.json`:
 }
 ```
 
-Works with Claude Code, Cursor, and Cline. When the daemon is running, `lattice_ingest` drops content to the inbox folder (daemon ingests it asynchronously). When the daemon is not running, `lattice_ingest` falls back to direct write.
+When the daemon is running, `lattice_ingest` drops content to the inbox folder (daemon ingests it asynchronously). When the daemon is not running, `lattice_ingest` falls back to direct write.
 
 ---
 
@@ -112,12 +141,12 @@ All configuration is via environment variables.
 
 **Provider quick reference:**
 
-| Use case | Config |
-|---|---|
-| Local, private — sufficient RAM (recommended) | `LLM_PROVIDER=ollama`, `LLM_MODEL=qwen3:4b` |
-| Cloud API — low RAM or fastest results | `LLM_PROVIDER=openai`, `LLM_BASE_URL=https://openrouter.ai/api/v1`, `LLM_MODEL=openai/gpt-4o-mini`, `LLM_API_KEY=sk-or-...` |
-| Anthropic subscription | `LLM_PROVIDER=openai`, `LLM_BASE_URL=https://api.anthropic.com/v1`, `LLM_MODEL=claude-sonnet-4-6`, `LLM_API_KEY=sk-ant-...` |
-| OpenAI subscription | `LLM_PROVIDER=openai`, `LLM_MODEL=gpt-4o-mini`, `LLM_API_KEY=sk-...` |
+| Use case | `LLM_PROVIDER` | `LLM_BASE_URL` | `LLM_MODEL` (suggestions) | `LLM_API_KEY` |
+|---|---|---|---|---|
+| Local / fully private | `ollama` | _(unset)_ | `qwen3:4b` | _(not needed)_ |
+| OpenRouter | `openai` | `https://openrouter.ai/api/v1` | `openai/gpt-4o-mini` | `sk-or-...` from [openrouter.ai/keys](https://openrouter.ai/keys) |
+
+> **`INGEST_MODEL` / `SYNTHESIS_MODEL`:** use a cheap fast model for ingest (`gpt-4o-mini`, `qwen3:4b`) and a stronger one for synthesis (`claude-sonnet-4-6`, `gpt-4o`) to balance cost vs. quality.
 
 ### Paths
 
@@ -141,7 +170,7 @@ Ingests raw text as atoms. When the daemon is running, drops to the inbox (async
 source    — raw text string
 metadata  — optional dict (title, url, author, date, …)
 
-→ { atoms_created: N, atom_ids: [...] }   (direct mode)
+→ { atom_ids: [...] }   (direct mode)
 → { queued: true, inbox_file: "..." }      (daemon mode)
 ```
 
