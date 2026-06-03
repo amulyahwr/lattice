@@ -324,7 +324,9 @@ def _extract_atoms(segment: Segment, metadata: dict, ref: datetime) -> list[dict
 
     source_override = metadata.get("source")
     for a in atoms_data:
-        if source_override:
+        # Chat segments: preserve per-turn LLM attribution — a blanket override
+        # would mislabel assistant-turn atoms as "user" (or vice-versa).
+        if source_override and segment.source_type != "chat":
             a["source"] = source_override
         a["content"] = _resolve_dates(a["content"], ref)
         a["metadata"] = metadata

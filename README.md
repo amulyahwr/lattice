@@ -40,7 +40,7 @@ Claude can now call `lattice_ingest`, `lattice_select`, and `lattice_answer` dur
 
 **Capture sessions automatically** — add this to your `CLAUDE.md`:
 
-> When the user says any of: "save", "done", "goodbye", "wrap up", "end session", "save session" — summarize what was decided, built, or learned in this session and call `lattice_ingest` with that summary.
+> When the user says any of: "save", "done", "goodbye", "wrap up", "end session", "save session" — summarize decisions made, things built, and conclusions reached, then call `lattice_capture` with that summary. Always set `metadata.source_id="claude-code"` and `metadata.observed_at=<current ISO timestamp>`.
 
 ### 4. Tell Claude to use Lattice
 
@@ -59,6 +59,7 @@ By default Claude Code asks for approval on every MCP tool call. Add to `.claude
   "autoMemoryEnabled": false,
   "allowedTools": [
     "mcp__lattice__lattice_ingest",
+    "mcp__lattice__lattice_capture",
     "mcp__lattice__lattice_select",
     "mcp__lattice__lattice_answer"
   ]
@@ -100,11 +101,12 @@ echo "Decided to use Postgres over SQLite for the new service" > ~/.lattice/inbo
 
 Three tools exposed to Claude and any MCP-compatible client:
 
-| Tool             | What it does                                                               |
-| ---------------- | -------------------------------------------------------------------------- |
-| `lattice_ingest` | Decompose text into memory atoms and store them                            |
-| `lattice_select` | Return the most relevant atoms for a query (BM25 + graph BFS, 0 LLM calls) |
-| `lattice_answer` | Synthesize a prose answer from the atom store                              |
+| Tool               | What it does                                                               |
+| ------------------ | -------------------------------------------------------------------------- |
+| `lattice_ingest`   | Decompose text into memory atoms and store them. Mode A: single fact — set `metadata.source='user'`. Mode B: conversation chunk — format as `user: ...\nassistant: ...` and omit `metadata.source`. |
+| `lattice_capture`  | Persist a session summary at conversation end. Treats injected atoms as authoritative — do not re-verify with `lattice_select`. |
+| `lattice_select`   | Return the most relevant atoms for a query (BM25 + graph BFS, 0 LLM calls) |
+| `lattice_answer`   | Synthesize a prose answer from the atom store                              |
 
 ### Human-readable atom store
 
@@ -116,7 +118,7 @@ Every fact is a plain `.md` file in `LATTICE_DIR`. Hand-editable, git-trackable.
 
 | What                                                            | Status   |
 | --------------------------------------------------------------- | -------- |
-| `lattice_capture` MCP tool — explicit session-end capture       | Next     |
+| `lattice_capture` MCP tool — explicit session-end capture       | ✅ shipped |
 | `lc` terminal command — `lc "decided X because Y"`              | Phase 2B |
 | VS Code / Cursor extension — capture + recall from the IDE      | Phase 2B |
 | Browser extension — right-click selected text → save to Lattice | Phase 2B |

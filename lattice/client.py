@@ -28,9 +28,12 @@ class DaemonClient:
         except (FileNotFoundError, ConnectionRefusedError, OSError):
             return False
 
-    def ingest(self, text: str, source_id: str = "client") -> list[str]:
+    def ingest(self, text: str, source_id: str = "client", metadata: dict | None = None) -> list[str]:
         """Send an ingest request; return atom_ids. Raise RuntimeError on error response."""
-        resp = self._send({"op": "ingest", "text": text, "source_id": source_id})
+        msg: dict = {"op": "ingest", "text": text, "source_id": source_id}
+        if metadata:
+            msg["metadata"] = metadata
+        resp = self._send(msg)
         if not resp.get("ok"):
             raise RuntimeError(resp.get("error", "ingest failed"))
         return resp["atom_ids"]

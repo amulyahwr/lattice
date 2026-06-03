@@ -100,13 +100,15 @@ def _dispatch(msg: dict) -> dict:
         from lattice.ingest import ingest
         text = msg.get("text", "")
         source_id = msg.get("source_id", "ipc")
+        metadata: dict = msg.get("metadata") or {}
+        metadata["source_id"] = source_id  # source_id always wins (top-level field)
         log.info(
             "ingest job start",
             extra={"event": "ingest_start", "source_id": source_id, "text_len": len(text)},
         )
         t0 = time.monotonic()
         try:
-            result = ingest(text, metadata={"source_id": source_id}, db=_db)
+            result = ingest(text, metadata=metadata, db=_db)
         except Exception as exc:
             log.error(
                 "ingest job error",

@@ -2,20 +2,88 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import mcp.server.stdio
 from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
 from mcp.types import TextContent, Tool
+from pydantic import BaseModel, Field, model_validator
 
 from lattice.client import DaemonClient
 from lattice.config import Config
 from lattice.db import AtomNotFound, LatticeDB
+from lattice.parsers import infer_source_type
 from lattice.selection import _atom_to_dict, select
 from lattice.synthesis import synthesize
+
+# ── input models ─────────────────────────────────────────────────────────────
+
+# One session ID for the lifetime of this MCP server process.
+# MCP server is 1-to-1 with a Claude Code session — restart = new session = new ID.
+_MCP_SESSION_ID: str = str(uuid.uuid4())
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+class _IngestMetadata(BaseModel):
+    # "user"/"assistant" for AI callers; "document"/"web"/"code" etc. for others — all valid.
+    source: str | None = None
+    source_id: str = "mcp"
+    # Always overwritten at validation time with server clock — caller value ignored.
+    # Claude rounds to midnight; server time is the only reliable source of truth.
+    observed_at: str = Field(default_factory=_now_iso)
+    # Always overwritten with the process-level session ID — caller value ignored.
+    # Ensures all atoms from one Claude Code session share a session_id for graph linking.
+    session_id: str = Field(default_factory=lambda: _MCP_SESSION_ID)
+    title: str | None = None
+    url: str | None = None
+    model_config = {"extra": "allow"}
+
+
+class _IngestArgs(BaseModel):
+    source: str
+    metadata: _IngestMetadata = Field(default_factory=_IngestMetadata)
+    model_config = {"extra": "ignore"}
+
+    @model_validator(mode="after")
+    def normalize(self) -> "_IngestArgs":
+        # Always use server clock and process session — never trust caller for these.
+        self.metadata.observed_at = _now_iso()
+        self.metadata.session_id = _MCP_SESSION_ID
+        # Mode B: strip source override for chat-formatted input.
+        if self.metadata.source is not None:
+            if infer_source_type(self.source, {}) == "chat":
+                self.metadata.source = None
+        return self
+
+
+class _CaptureMetadata(BaseModel):
+    source: Literal["assistant"] = "assistant"
+    source_id: str = "mcp"
+    observed_at: str = Field(default_factory=_now_iso)
+    session_id: str = Field(default_factory=lambda: _MCP_SESSION_ID)
+    title: str | None = None
+    model_config = {"extra": "allow"}
+
+
+class _CaptureArgs(BaseModel):
+    source: str
+    metadata: _CaptureMetadata = Field(default_factory=_CaptureMetadata)
+    model_config = {"extra": "ignore"}
+
+    @model_validator(mode="after")
+    def normalize(self) -> "_CaptureArgs":
+        self.metadata.observed_at = _now_iso()
+        self.metadata.session_id = _MCP_SESSION_ID
+        return self
+
+
+# ── app + db ──────────────────────────────────────────────────────────────────
 
 app = Server("lattice")
 _db = LatticeDB()
@@ -33,18 +101,38 @@ async def list_tools() -> list[Tool]:
             name="lattice_ingest",
             description=(
                 "Decompose raw text into discrete knowledge atoms and store them in the lattice. "
-                "Returns the number of atoms created and their IDs."
+                "Returns the number of atoms created and their IDs. "
+                "Two usage modes depending on what is being captured:\n"
+                "MODE A — single isolated fact or preference from the user: pass the fact as source "
+                "and set metadata.source='user'. Example: source='Amulya dislikes mountains', "
+                "metadata.source='user'.\n"
+                "MODE B — a conversation chunk with multiple turns: format source as role-tagged text "
+                "('user: ...\nassistant: ...') and OMIT metadata.source. The pipeline detects the "
+                "chat format automatically and attributes each atom to the correct speaker. "
+                "Passing metadata.source in mode B would wrongly label all atoms with the same source.\n"
+                "Always set metadata.source_id (e.g. 'claude-code') and metadata.observed_at "
+                "(current ISO timestamp) regardless of mode."
             ),
             inputSchema={
                 "type": "object",
                 "properties": {
                     "source": {
                         "type": "string",
-                        "description": "Raw text content to ingest.",
+                        "description": (
+                            "Raw text to ingest. Either a single fact (mode A) or "
+                            "role-tagged conversation turns (mode B): "
+                            "'user: <text>\\nassistant: <text>'."
+                        ),
                     },
                     "metadata": {
                         "type": "object",
-                        "description": "Optional passthrough metadata (title, url, author, date, etc.).",
+                        "description": (
+                            "Provenance metadata. "
+                            "source: 'user' or 'assistant' — set only for mode A (single fact), omit for mode B (conversation). "
+                            "source_id: surface name e.g. 'claude-code' — always set. "
+                            "observed_at: ISO timestamp — always set. "
+                            "Optional: session_id, title, url."
+                        ),
                         "additionalProperties": True,
                     },
                 },
@@ -70,6 +158,37 @@ async def list_tools() -> list[Tool]:
                     },
                 },
                 "required": ["query"],
+            },
+        ),
+        Tool(
+            name="lattice_capture",
+            description=(
+                "Call this at the end of a session to persist what was discussed as memory. "
+                "Do not call lattice_select or lattice_answer to verify atoms already injected "
+                "into context — treat injected lattice atoms as authoritative. "
+                "Summarize decisions made, things built, and conclusions reached this session. "
+                "Do not re-state fine-grained facts or preferences already sent via lattice_ingest "
+                "during the session — focus on session-level outcomes. "
+                "Always set metadata.source='assistant', metadata.source_id='claude-code', "
+                "metadata.observed_at=<current ISO timestamp>."
+            ),
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "source": {
+                        "type": "string",
+                        "description": "Session summary text: decisions, outcomes, and conclusions.",
+                    },
+                    "metadata": {
+                        "type": "object",
+                        "description": (
+                            "Provenance metadata. Required: source_id, observed_at. "
+                            "Optional: session_id, title."
+                        ),
+                        "additionalProperties": True,
+                    },
+                },
+                "required": ["source"],
             },
         ),
         Tool(
@@ -104,19 +223,31 @@ async def list_tools() -> list[Tool]:
 @app.call_tool()
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     if name == "lattice_ingest":
-        text = arguments["source"]
-        metadata = arguments.get("metadata", {})
-        source_id = metadata.get("source_id", "mcp")
-
+        args = _IngestArgs.model_validate(arguments)
+        meta = args.metadata.model_dump(exclude_none=False)
         client = DaemonClient()
         if client.ping():
-            atom_ids = client.ingest(text, source_id=source_id)
+            atom_ids = client.ingest(args.source, source_id=args.metadata.source_id, metadata=meta)
             return [TextContent(type="text", text=json.dumps({"atom_ids": atom_ids}))]
         else:
             inbox_dir = _lattice_dir() / "inbox"
             inbox_dir.mkdir(parents=True, exist_ok=True)
             inbox_file = inbox_dir / f"{uuid.uuid4()}.md"
-            inbox_file.write_text(text, encoding="utf-8")
+            inbox_file.write_text(args.source, encoding="utf-8")
+            return [TextContent(type="text", text=f"queued to inbox: {inbox_file.name}")]
+
+    if name == "lattice_capture":
+        args = _CaptureArgs.model_validate(arguments)
+        meta = args.metadata.model_dump(exclude_none=False)
+        client = DaemonClient()
+        if client.ping():
+            atom_ids = client.ingest(args.source, source_id=args.metadata.source_id, metadata=meta)
+            return [TextContent(type="text", text=json.dumps({"atom_ids": atom_ids, "count": len(atom_ids)}))]
+        else:
+            inbox_dir = _lattice_dir() / "inbox"
+            inbox_dir.mkdir(parents=True, exist_ok=True)
+            inbox_file = inbox_dir / f"{uuid.uuid4()}.md"
+            inbox_file.write_text(args.source, encoding="utf-8")
             return [TextContent(type="text", text=f"queued to inbox: {inbox_file.name}")]
 
     if name == "lattice_select":
