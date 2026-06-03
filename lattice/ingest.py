@@ -62,6 +62,17 @@ enabling them to cluster together for retrieval.
   - Resolve relative dates (e.g. "last Tuesday", "next month") to ISO 8601 (YYYY-MM-DD) using today's date.
   - Do NOT extract generic advice or universally-applicable facts that apply to everyone.
 
+Numeric extraction rules:
+  - When text explicitly states a count ("I own 3 bikes", "attended 5 sessions", "takes 4 classes/week"), \
+extract a standalone `kind=count` atom whose content contains the numeric value: \
+"User owns 3 bikes", "User attended 5 yoga sessions", "User takes 4 gym classes per week".
+  - When text enumerates a list of items in the same category ("I have a coffee maker, toaster, \
+blender, and food processor"), ALSO extract a count summary atom: \
+"User owns 4 kitchen appliances: coffee maker, toaster, blender, food processor". \
+Use `kind=count` and a subject matching the category (e.g. "kitchen appliances").
+  - Count atoms must embed the numeric value in the content so synthesis can retrieve the answer \
+directly without counting individual atoms.
+
 Return a JSON object with an `atoms` key containing an array of atom objects. \
 Each atom must have exactly these keys: subject, kind, source, content, valid_from, valid_until.
 """
@@ -110,6 +121,17 @@ Subject examples for chat — note how broad subjects cluster across conversatio
   → subject: "travel"  ✓      NOT: "Japan trip planning for April"  ✗
 
 The same broad subject should appear on atoms from multiple conversations. That is the goal.
+
+Numeric extraction in chat — examples:
+  User: "I own three bikes — a road bike, a mountain bike, and a fixie."
+  → Extract: "User owns 3 bikes: road bike, mountain bike, fixie."  kind=count  subject="bikes"
+  → Also extract individual ownership atoms if they carry distinct facts.
+
+  User: "I have a coffee maker, toaster, blender, and food processor in my kitchen."
+  → Extract: "User owns 4 kitchen appliances: coffee maker, toaster, blender, food processor."  kind=count  subject="kitchen appliances"
+
+  User: "I've attended 5 yoga sessions this month."
+  → Extract: "User attended 5 yoga sessions this month."  kind=count  subject="yoga"
 """
 
 _MARKDOWN_ADDENDUM = """\

@@ -37,8 +37,10 @@ Example: "Alice joined in 2021 [src:abc123]." Use the exact src value from the a
 - For time-bounded facts: if `valid_from` is non-null, use it to determine temporal validity.
 - For conflicting facts: present both versions with their `observed_at` dates and let the answer reflect the change.
 - For counting or totaling questions ("how many", "total", "sum"):
-    First enumerate every distinct item or value from the atoms explicitly.
-    Then call `sum_numbers` with those values to get the exact total — do not add them yourself.
+    First check if any atom has kind=count — these are authoritative aggregate facts extracted \
+at ingest time. If a count atom exists for the relevant subject, use its value directly.
+    If no kind=count atom exists, enumerate every distinct item or value from the atoms explicitly, \
+then call `sum_numbers` with those values to get the exact total — do not add them yourself.
 - For preference or recommendation questions: ground your answer in the user's known context \
 (their preferences, constraints, or situation) as recorded in the atoms before giving advice.
 - If atoms are present, always derive an answer from them. Do not say "no information found."
