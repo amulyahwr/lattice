@@ -47,7 +47,10 @@ def test_ingest_with_daemon_running(patched_server):
     assert len(result) == 1
     body = json.loads(result[0].text)
     assert body["atom_ids"] == ["id1", "id2"]
-    mock_client.ingest.assert_called_once_with("some text", source_id="mcp")
+    args, kwargs = mock_client.ingest.call_args
+    assert args[0] == "some text"
+    assert kwargs["source_id"] == "mcp"
+    assert "metadata" in kwargs
 
 
 def test_ingest_passes_source_id_from_metadata(patched_server):
@@ -62,7 +65,10 @@ def test_ingest_passes_source_id_from_metadata(patched_server):
             {"source": "text", "metadata": {"source_id": "my-src"}}
         ))
 
-    mock_client.ingest.assert_called_once_with("text", source_id="my-src")
+    args, kwargs = mock_client.ingest.call_args
+    assert args[0] == "text"
+    assert kwargs["source_id"] == "my-src"
+    assert "metadata" in kwargs
     body = json.loads(result[0].text)
     assert body["atom_ids"] == ["id1"]
 

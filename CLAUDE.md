@@ -100,6 +100,10 @@ All tests mock LLM via `unittest.mock.patch`. Ingest responses mock two calls pe
 
 **Do not write user facts, preferences, or decisions to Claude's internal auto-memory system.** Do not save anything to `~/.claude/projects/.../memory/`. Lattice is the only memory store for this project.
 
-When the user says any of: "save", "done", "goodbye", "wrap up", "end session", "save session" — summarize what was decided, built, or learned in this session and call lattice_ingest with that summary.
-When the user shares a preference, decision, fact, or anything worth remembering, call lattice_ingest immediately.
-When answering a recall question ("what did I decide about X", "what do I prefer", "remind me of Y"), call lattice_select first and ground the answer in returned atoms.
+When the user says any of: "save", "done", "goodbye", "wrap up", "end session", "save session" — summarize decisions made, things built, and conclusions reached, then call `lattice_capture` (not `lattice_ingest`) with that summary. Always set `metadata.source_id="claude-code"` and `metadata.observed_at=<current ISO timestamp>`.
+
+When the user shares a preference, decision, fact, or anything worth remembering, call `lattice_ingest` immediately.
+- Single fact from the user → set `metadata.source="user"`, `metadata.source_id="claude-code"`, `metadata.observed_at=<current ISO timestamp>`.
+- Conversation chunk (multiple turns) → format as `"user: ...\nassistant: ..."` and omit `metadata.source` — the pipeline attributes per-turn automatically.
+
+When answering a recall question ("what did I decide about X", "what do I prefer", "remind me of Y"), call `lattice_select` first and ground the answer in returned atoms.
