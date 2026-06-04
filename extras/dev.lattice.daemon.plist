@@ -47,6 +47,10 @@
         -->
         <key>LLM_API_KEY</key>
         <string>YOUR-OPENROUTER-KEY</string>
+
+        <!-- Telegram bot token — needed to send inbox-drain confirmations back to user -->
+        <key>LATTICE_TELEGRAM_TOKEN</key>
+        <string></string>
     </dict>
 
     <key>RunAtLoad</key>

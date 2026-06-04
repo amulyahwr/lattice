@@ -137,6 +137,41 @@ def _dispatch(msg: dict) -> dict:
 
 _TEXT_SUFFIXES = {".txt", ".md"}
 
+# Filename pattern for telegram inbox files: telegram-{chat_id}-{uuid}.txt
+_TELEGRAM_INBOX_PREFIX = "telegram-"
+
+
+def _notify_telegram(fname: str, atom_count: int) -> None:
+    """If this inbox file came from the Telegram bot, send a follow-up reply."""
+    if not fname.startswith(_TELEGRAM_INBOX_PREFIX):
+        return
+    token = os.environ.get("LATTICE_TELEGRAM_TOKEN", "").strip()
+    if not token:
+        return
+    # Extract chat_id from filename: telegram-{chat_id}-{uuid}.txt
+    try:
+        chat_id = int(fname[len(_TELEGRAM_INBOX_PREFIX):].split("-")[0])
+    except (ValueError, IndexError):
+        return
+    import urllib.request
+    n = atom_count
+    text = (
+        f"Back online — processed what you sent earlier. {n} thing{'s' if n != 1 else ''} saved. ✓"
+        if n > 0
+        else "Back online — processed what you sent earlier. Nothing new to add this time."
+    )
+    payload = json.dumps({"chat_id": chat_id, "text": text}).encode()
+    req = urllib.request.Request(
+        f"https://api.telegram.org/bot{token}/sendMessage",
+        data=payload,
+        headers={"Content-Type": "application/json"},
+    )
+    try:
+        urllib.request.urlopen(req, timeout=10)
+        log.info("telegram: sent inbox confirmation to chat_id=%d", chat_id)
+    except Exception as exc:
+        log.warning("telegram: failed to send inbox confirmation: %s", exc)
+
 
 class InboxEventHandler(FileSystemEventHandler):
     """Ingest new text files dropped into the inbox dir, then move to processed/."""
@@ -163,6 +198,7 @@ class InboxEventHandler(FileSystemEventHandler):
             dest = self._processed_dir / p.name
             shutil.move(str(p), str(dest))
             log.info("inbox: moved %s → processed/", p.name)
+            _notify_telegram(p.name, atom_count)
         except Exception:
             log.exception("inbox: error processing %s", p.name)
 
@@ -175,11 +211,25 @@ class InboxEventHandler(FileSystemEventHandler):
             self._handle_path(event.dest_path)
 
 
+def _drain_inbox(handler: InboxEventHandler, cfg: Config) -> None:
+    """Process any files already sitting in the inbox at startup."""
+    existing = [
+        p for p in cfg.inbox_dir.iterdir()
+        if p.is_file() and p.suffix.lower() in _TEXT_SUFFIXES
+    ]
+    if existing:
+        log.info("inbox: draining %d pre-existing file(s) at startup", len(existing))
+    for p in existing:
+        handler._handle_path(str(p))
+
+
 def _start_inbox_watcher(db: LatticeDB, cfg: Config) -> Observer:
     cfg.inbox_dir.mkdir(parents=True, exist_ok=True)
     cfg.processed_dir.mkdir(parents=True, exist_ok=True)
 
     handler = InboxEventHandler(db=db, processed_dir=cfg.processed_dir)
+    _drain_inbox(handler, cfg)
+
     observer = Observer()
     observer.schedule(handler, str(cfg.inbox_dir), recursive=False)
     observer.start()

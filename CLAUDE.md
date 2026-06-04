@@ -64,6 +64,11 @@ lattice/
   util.py          Shared helpers: write_file_atomic, _normalized_subject.
   cli.py           Entry point for `lc` terminal command. Uses DaemonClient over Unix socket;
                    fails fast (no inbox fallback) if daemon is not running.
+  telegram_bot.py  Telegram polling bot (STORY-018). Runs as independent launchd service
+                   (dev.lattice.telegram.plist) — not a daemon subprocess. On daemon-down:
+                   writes inbox file as telegram-{chat_id}-{uuid}.txt and replies immediately.
+                   Daemon drains inbox on startup (_drain_inbox) and sends follow-up reply via
+                   urllib using LATTICE_TELEGRAM_TOKEN. Requires: uv sync --group telegram.
   web/app.py       FastAPI app: GET / (chat UI), POST /api/ingest (HTTP capture — source_id +
                    metadata pass-through, observed_at server-stamped), POST /api/query (streaming
                    SSE synthesis), GET /api/atoms/recent (recent atoms JSON), POST /api/feedback.

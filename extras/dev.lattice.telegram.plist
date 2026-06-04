@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>dev.lattice.telegram</string>
+
+    <!-- Replace /path/to/lattice-mcp with your local clone path -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/path/to/lattice-mcp/.venv/bin/lattice-telegram</string>
+    </array>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- Must match LATTICE_DIR in dev.lattice.daemon.plist -->
+        <key>LATTICE_DIR</key>
+        <string>/Users/you/.lattice</string>
+
+        <!-- Bot token from @BotFather -->
+        <key>LATTICE_TELEGRAM_TOKEN</key>
+        <string>YOUR-BOT-TOKEN</string>
+
+        <!-- Your Telegram numeric user ID from @userinfobot (comma-separated for multiple) -->
+        <key>LATTICE_TELEGRAM_ALLOWED_IDS</key>
+        <string>YOUR-TELEGRAM-USER-ID</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <!-- Wake during Power Nap to process queued messages -->
+    <key>ProcessType</key>
+    <string>Background</string>
+
+    <!-- Replace /Users/you/.lattice with your LATTICE_DIR -->
+    <key>StandardOutPath</key>
+    <string>/Users/you/.lattice/telegram.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/you/.lattice/telegram.stderr.log</string>
+</dict>
+</plist>

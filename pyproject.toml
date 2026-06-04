@@ -22,6 +22,7 @@ lattice = "server:main"
 lattice-daemon = "lattice.daemon:main"
 lattice-mock = "lattice.web.mock:main"
 lc = "lattice.cli:lc"
+lattice-telegram = "lattice.telegram_bot:main"
 
 [build-system]
 requires = ["hatchling"]
@@ -33,6 +34,7 @@ packages = ["lattice", "server.py"]
 [dependency-groups]
 dev = ["pytest>=8"]
 semantic = ["fastembed>=0.4"]
+telegram = ["python-telegram-bot>=21.0"]
 eval = [
     "python-dotenv>=1.0",
     "tqdm>=4.0",
