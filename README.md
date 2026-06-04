@@ -96,6 +96,47 @@ launchctl load ~/Library/LaunchAgents/dev.lattice.daemon.plist
 
 ---
 
+## Use with other AI assistants
+
+### Claude desktop app (macOS / Windows)
+
+Claude desktop supports local MCP servers natively. Add Lattice to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+
+```json
+{
+  "mcpServers": {
+    "lattice": {
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/lattice", "lattice"]
+    }
+  }
+}
+```
+
+Restart Claude desktop. Lattice tools appear automatically in every conversation.
+
+### ChatGPT desktop app
+
+ChatGPT desktop supports MCP servers. Add Lattice the same way as Claude desktop via ChatGPT's MCP configuration panel (Settings → Integrations → MCP Servers).
+
+### Claude mobile / ChatGPT mobile / other cloud AI apps
+
+Mobile and web AI apps cannot reach `localhost` directly. Bridge the gap with a Cloudflare Tunnel — a free, persistent HTTPS URL that forwards to your local Lattice:
+
+```bash
+# Install once
+brew install cloudflare/cloudflare/cloudflared
+
+# Start tunnel (add to launchd plist for auto-start)
+cloudflared tunnel --url http://localhost:7337
+```
+
+This gives you a stable `https://xxxx.trycloudflare.com` URL. Add it as a remote MCP server in any AI app that supports MCP, or use it as the base URL for ChatGPT Custom GPT Actions (OpenAPI spec at `/openapi.json` — coming in Phase 2B).
+
+**Note:** the tunnel exposes your Lattice to the internet. It is stateless relay-only — your atoms never leave your machine — but protect the URL or add token auth if concerned.
+
+---
+
 ## Features
 
 ### Recall via web UI
@@ -129,15 +170,19 @@ Every fact is a plain `.md` file in `LATTICE_DIR`. Hand-editable, git-trackable.
 
 ## Roadmap
 
-| What                                                            | Status   |
-| --------------------------------------------------------------- | -------- |
-| `lattice_capture` MCP tool — explicit session-end capture       | ✅ shipped |
-| `lc` terminal command — `lc "decided X because Y"`              | Phase 2B |
-| VS Code / Cursor extension — capture + recall from the IDE      | Phase 2B |
-| Browser extension — right-click selected text → save to Lattice | Phase 2B |
-| `lattice setup` wizard — one-command onboarding                 | Phase 2B |
-| PDF ingest                                                      | Phase 2B |
-| Prospective reminders (`trigger_at` atoms surfaced by daemon)   | Phase 2B |
-| Multi-device sync (mDNS discovery + Ed25519 pairing)            | Phase 3  |
-| Screenpipe integration — passive ambient capture                | Phase 3  |
-| Mobile app                                                      | Phase 4  |
+| What                                                                        | Status    |
+| --------------------------------------------------------------------------- | --------- |
+| `lattice_capture` MCP tool — explicit session-end capture                   | ✅ shipped |
+| `lc` terminal command — `lc "decided X because Y"`                          | Phase 2B  |
+| VS Code / Cursor extension — capture + recall from the IDE                  | Phase 2B  |
+| Telegram bot — send a message from your phone → saved as atoms              | Phase 2B  |
+| Browser extension — right-click selected text → save to Lattice             | Phase 2B  |
+| Apple Shortcuts — global hotkey capture (iPhone / macOS)                    | Phase 2B  |
+| Menu bar app — macOS status icon + quick capture hotkey                     | Phase 2B  |
+| Cloudflare Tunnel — bridge to Claude mobile, ChatGPT mobile, any cloud AI  | Phase 2B  |
+| `lattice setup` wizard — one-command onboarding                             | Phase 2B  |
+| PDF ingest                                                                  | Phase 2B  |
+| Prospective reminders (`trigger_at` atoms surfaced by daemon)               | Phase 2B  |
+| Multi-device sync (mDNS discovery + Ed25519 pairing)                        | Phase 3   |
+| Native mobile app (iOS / Android, on-device inference)                      | Phase 3   |
+| Screenpipe integration — passive ambient capture                            | Phase 3   |

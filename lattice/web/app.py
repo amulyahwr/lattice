@@ -1,12 +1,14 @@
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from fastapi import FastAPI
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
+from lattice.client import DaemonClient
 from lattice.config import Config
 from lattice.db import LatticeDB
 from lattice.selection import select
@@ -25,6 +27,12 @@ def _get_db() -> LatticeDB:
     if _db is None:
         _db = LatticeDB(Config.from_env().lattice_dir)
     return _db
+
+
+class IngestRequest(BaseModel):
+    text: str
+    source_id: str = "http"
+    metadata: dict[str, Any] = {}
 
 
 class QueryRequest(BaseModel):
@@ -46,6 +54,19 @@ async def index():
 @app.get("/health")
 async def health():
     return {"ok": True}
+
+
+@app.post("/api/ingest")
+async def api_ingest(req: IngestRequest):
+    metadata = {**req.metadata, "observed_at": datetime.now(timezone.utc).isoformat()}
+    try:
+        atom_ids = DaemonClient().ingest(req.text, req.source_id, metadata=metadata)
+    except (RuntimeError, OSError):
+        return JSONResponse(
+            status_code=503,
+            content={"ok": False, "error": "daemon unavailable"},
+        )
+    return {"ok": True, "atom_ids": atom_ids}
 
 
 @app.post("/api/query")
