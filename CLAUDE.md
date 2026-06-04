@@ -12,6 +12,7 @@ uv run pytest -k test_supersession_links_atoms  # single test
 uv run lattice             # run MCP server (requires env vars)
 uv run lattice-daemon          # start persistent daemon
 uv run lattice-daemon status   # check daemon health (JSON)
+uv run lc "text"               # capture a one-liner from terminal
 ```
 
 Web UI auto-starts with the daemon at http://localhost:7337 (port tunable via `LATTICE_WEB_PORT`).
@@ -61,8 +62,12 @@ lattice/
   embed.py         Optional semantic embedding via fastembed (install semantic extra). Guards
                    import; no-ops cleanly if fastembed absent. Not on hot query path.
   util.py          Shared helpers: write_file_atomic, _normalized_subject.
-  web/app.py       FastAPI app: GET / (chat UI), POST /api/query (streaming SSE synthesis),
-                   GET /api/atoms/recent (recent atoms JSON), POST /api/feedback. Started by daemon.
+  cli.py           Entry point for `lc` terminal command. Uses DaemonClient over Unix socket;
+                   fails fast (no inbox fallback) if daemon is not running.
+  web/app.py       FastAPI app: GET / (chat UI), POST /api/ingest (HTTP capture — source_id +
+                   metadata pass-through, observed_at server-stamped), POST /api/query (streaming
+                   SSE synthesis), GET /api/atoms/recent (recent atoms JSON), POST /api/feedback.
+                   Started by daemon.
 ```
 
 ### Ingest drop mechanism

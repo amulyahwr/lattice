@@ -21,6 +21,7 @@ dependencies = [
 lattice = "server:main"
 lattice-daemon = "lattice.daemon:main"
 lattice-mock = "lattice.web.mock:main"
+lc = "lattice.cli:lc"
 
 [build-system]
 requires = ["hatchling"]
