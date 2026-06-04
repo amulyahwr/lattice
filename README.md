@@ -94,6 +94,31 @@ cp extras/dev.lattice.daemon.plist ~/Library/LaunchAgents/
 launchctl load ~/Library/LaunchAgents/dev.lattice.daemon.plist
 ```
 
+### 7. Set up Telegram capture (optional)
+
+Capture thoughts from your phone via a Telegram bot — works even when your laptop is offline (messages queue and process when daemon restarts).
+
+**a. Create a bot** — message [@BotFather](https://t.me/botfather) on Telegram, run `/newbot`, copy the token.
+
+**b. Get your Telegram user ID** — message [@userinfobot](https://t.me/userinfobot), it replies with your numeric ID.
+
+**c. Install the bot dep and plist:**
+
+```bash
+uv sync --group telegram
+cp extras/dev.lattice.telegram.plist ~/Library/LaunchAgents/
+```
+
+**d.** Edit `~/Library/LaunchAgents/dev.lattice.telegram.plist` — fill in your bot token, user ID, and paths. Also add `LATTICE_TELEGRAM_TOKEN` to your daemon plist (used to send follow-up confirmations after offline messages are processed).
+
+**e.** Load the bot:
+
+```bash
+launchctl load ~/Library/LaunchAgents/dev.lattice.telegram.plist
+```
+
+The bot runs independently of the daemon. If the daemon is offline, it replies immediately with a confirmation and queues your message to the inbox for processing on restart.
+
 ---
 
 ## Use with other AI assistants
@@ -151,6 +176,23 @@ Drop any `.txt` or `.md` file into `~/.lattice/inbox/`. The daemon picks it up w
 echo "Decided to use Postgres over SQLite for the new service" > ~/.lattice/inbox/note.txt
 ```
 
+### Mobile capture via Telegram
+
+Send any message to your Lattice bot on Telegram — it's saved as memory instantly. Works from any device, any network.
+
+- **Daemon online** → reply within seconds: `Saved. 2 new things added to your memory.`
+- **Daemon offline** → message queued to inbox, immediate reply: `Lattice is offline right now. Your message is safe — I'll confirm once it's processed. 📥`
+- **Daemon restarts** → inbox drained automatically, follow-up sent: `Back online — processed what you sent earlier. 2 things saved. ✓`
+
+Commands: `/status` to see your memory count. Bot only responds to your user ID — silently ignores everyone else.
+
+### Terminal capture via `lc`
+
+```bash
+lc "decided to use Postgres over SQLite for the new service"
+# Saved. 1 new thing added to your memory.
+```
+
 ### MCP tools for AI assistants
 
 Three tools exposed to Claude and any MCP-compatible client:
@@ -173,9 +215,9 @@ Every fact is a plain `.md` file in `LATTICE_DIR`. Hand-editable, git-trackable.
 | What                                                                        | Status    |
 | --------------------------------------------------------------------------- | --------- |
 | `lattice_capture` MCP tool — explicit session-end capture                   | ✅ shipped |
-| `lc` terminal command — `lc "decided X because Y"`                          | Phase 2B  |
+| `lc` terminal command — `lc "decided X because Y"`                          | ✅ shipped |
+| Telegram bot — send a message from your phone → saved as atoms              | ✅ shipped |
 | VS Code / Cursor extension — capture + recall from the IDE                  | Phase 2B  |
-| Telegram bot — send a message from your phone → saved as atoms              | Phase 2B  |
 | Browser extension — right-click selected text → save to Lattice             | Phase 2B  |
 | Apple Shortcuts — global hotkey capture (iPhone / macOS)                    | Phase 2B  |
 | Menu bar app — macOS status icon + quick capture hotkey                     | Phase 2B  |
