@@ -8,23 +8,24 @@ MCP integration exposes the atom store to AI coding assistants as a read-mostly 
 
 ## Write path
 
-All writes go through the daemon. MCP `lattice_ingest` and external callers do not write atoms directly.
+All writes go through the daemon. No caller writes atoms directly.
 
 ```
-inbox/*.txt|*.md          MCP lattice_ingest (daemon running)
-        │                         │
-        └──────────┬──────────────┘
-                   ▼
-           lattice-daemon        ← sole writer; owns LatticeDB instance
-                   │
-                   ▼
-           ingest pipeline (below)
-                   │
-                   ▼
-           LatticeDB.write() → atom .md files + graph sidecars
+inbox/*.txt|*.md   MCP lattice_ingest   MCP lattice_capture   POST /api/ingest
+        │                  │                     │                    │
+        └──────────────────┴─────────────────────┴────────────────────┘
+                                        │
+                                        ▼
+                                lattice-daemon        ← sole writer; owns LatticeDB instance
+                                        │
+                                        ▼
+                                ingest pipeline (below)
+                                        │
+                                        ▼
+                                LatticeDB.write() → atom .md files + graph sidecars
 ```
 
-When the daemon is not running, `lattice_ingest` falls back to inbox drop (file written to `LATTICE_INBOX`; picked up when daemon restarts).
+When the daemon is not running: MCP tools and `POST /api/ingest` fall back to inbox drop (file written to `LATTICE_INBOX`; picked up when daemon restarts).
 
 ---
 
@@ -95,9 +96,11 @@ stream_synthesis(query, atoms)
 
 | Module | Role |
 |--------|------|
-| `lattice/daemon.py` | Persistent daemon. Sole writer to `LatticeDB`. Watches `LATTICE_INBOX` via `watchdog`; ingests `.txt`/`.md` files on drop, moves to `processed/`. Binds a Unix domain socket (`LATTICE_SOCK`) for IPC. Runs the FastAPI web server inline via `uvicorn` on `LATTICE_WEB_PORT` (default 7337). Manages PID file and graceful shutdown on SIGTERM/SIGINT. CLI: `lattice-daemon` (start), `lattice-daemon status`. |
+| `lattice/daemon.py` | Persistent daemon. Sole writer to `LatticeDB`. Watches `LATTICE_INBOX` via `watchdog`; ingests `.txt`/`.md` files on drop, moves to `processed/`. On startup, drains any pre-existing inbox files (`_drain_inbox`) — processes queued messages written while daemon was down. After draining a `telegram-{chat_id}-{uuid}.txt` file, sends a follow-up reply to the user via Telegram HTTP API (`_notify_telegram`) using `LATTICE_TELEGRAM_TOKEN`. Binds a Unix domain socket (`LATTICE_SOCK`) for IPC. Runs the FastAPI web server inline via `uvicorn` on `LATTICE_WEB_PORT` (default 7337). Manages PID file and graceful shutdown on SIGTERM/SIGINT. CLI: `lattice-daemon` (start), `lattice-daemon status`. |
+| `lattice/cli.py` | `lc` entry point — `lc "decided X because Y"` captures a thought from the terminal. Sends text to daemon via `DaemonClient().ingest(text, "lc")` over Unix socket. Prints `✓ captured (N atoms)` on success; exits 1 with actionable message if daemon is not running. No HTTP dependency — uses the socket directly. |
+| `lattice/telegram_bot.py` | Telegram capture bot. Runs as an **independent** launchd service (`dev.lattice.telegram.plist`) — not a daemon subprocess. Polls Telegram via `python-telegram-bot` (`bootstrap_retries=-1`, `timeout=30`). Accepts messages only from `LATTICE_TELEGRAM_ALLOWED_IDS`; silently drops all others. On message: calls `DaemonClient().ingest()` over Unix socket; replies with human confirmation. Daemon-down path: writes `telegram-{chat_id}-{uuid}.txt` to inbox (chat_id encoded in filename for follow-up), replies immediately so user always gets acknowledgment. Commands: `/start`, `/status`. Requires `uv sync --group telegram`. |
 | `lattice/client.py` | `DaemonClient` — thin IPC client. Connects to `LATTICE_SOCK`, sends JSON-newline messages (`ping`, `ingest`), returns responses. `ingest(text, source_id, metadata)` passes the full metadata dict through the socket so provenance fields (`observed_at`, `session_id`, `source`, etc.) reach `ingest()` in the daemon. Used by `server.py` when daemon is running. Falls back gracefully when socket is absent. |
-| `lattice/web/app.py` | FastAPI web UI. Serves static files from `lattice/web/static/` via `StaticFiles`. Routes: `GET /` → `index.html`, `POST /api/query` (streaming SSE synthesis with numbered citations + markdown), `GET /api/atoms/recent`, `POST /api/feedback` (appends `{ts, question, answer, rating, reason}` to `LATTICE_DIR/feedback.jsonl`). Holds a module-level `LatticeDB` singleton — not re-created per request. |
+| `lattice/web/app.py` | FastAPI web UI. Serves static files from `lattice/web/static/` via `StaticFiles`. Routes: `GET /` → `index.html`, `POST /api/query` (streaming SSE synthesis with numbered citations + markdown), `GET /api/atoms/recent`, `POST /api/feedback` (appends `{ts, question, answer, rating, reason}` to `LATTICE_DIR/feedback.jsonl`), `POST /api/ingest` (HTTP ingest for VS Code extension, browser extension, Telegram bot, Apple Shortcuts — calls `DaemonClient().ingest()`; returns `503` if daemon unavailable; bound to `127.0.0.1`). Holds a module-level `LatticeDB` singleton — not re-created per request. |
 | `lattice/web/mock.py` | GPU-free dev server (`uv run lattice-mock`). Serves the same static files as `app.py` but stubs `/api/query` with canned SSE token stream and `/api/atoms/recent` with hardcoded atoms. Hot-reloads on file save. Use this to iterate on HTML/CSS/JS without a running daemon or LLM. |
 | `lattice/config.py` | `Config` dataclass. Reads all path/network env vars (`LATTICE_DIR`, `LATTICE_INBOX`, `LATTICE_SOCK`, `LATTICE_WEB_HOST`, `LATTICE_WEB_PORT`) in one place. LLM vars remain in `llm.py`. |
 | `server.py` | MCP stdio entrypoint. Exposes four tools: `lattice_ingest`, `lattice_capture` (session-end summary, always `source=assistant`), `lattice_select`, `lattice_answer`. Validates ingest args via `_IngestArgs`/`_CaptureArgs` Pydantic models — auto-strips `metadata.source` for chat-formatted input (mode B), enforces `_MCP_SESSION_ID` (process-level UUID, stable across all calls in one Claude Code session) and precise `observed_at` (server clock, overrides caller). Calls `_db.preload_if_stale()` before select/answer (O(1) manifest check). |
@@ -196,4 +199,14 @@ LATTICE_DIR/
 
 **Phase 1 complete.** Daemon, inbox watcher, IPC protocol, MCP read-only refactor, web UI (chat + recent atoms + feedback), streaming synthesis, numbered source citations, markdown rendering, circular ETA ring with localStorage history, dark mode toggle, Anthropic via OpenAI-compat. Feedback collected to `feedback.jsonl`; mock server (`lattice-mock`) ships for GPU-free UI development.
 
-**Phase 2 next:** answer feedback analysis tooling, Homebrew install + first-run setup wizard, multi-device sync (mDNS discovery, Ed25519 device pairing, mTLS delta sync).
+**Phase 2A complete.** `lattice_capture` session-end MCP tool (distinct from `lattice_ingest`; enforces `source=assistant`); `_db` staleness fix (`preload_if_stale()` on select/answer); `POST /api/ingest` HTTP endpoint; Pydantic input validation for MCP tools with mode A/B ingest routing.
+
+**Phase 2B in progress** — capture channel expansion.
+- ✅ `lc` CLI (`lattice/cli.py`) — terminal one-liner capture via Unix socket
+- ✅ Telegram bot (`lattice/telegram_bot.py`) — phone capture; independent launchd service; inbox fallback with chat_id-encoded filename; daemon drains inbox on restart and sends follow-up reply
+- ✅ Daemon Power Nap (`ProcessType=Background` in plist) — wakes on macOS Power Nap
+- Next: VS Code extension (TypeScript, separate repo) → `lattice setup` wizard → browser extension → Apple Shortcuts → macOS menu bar → Cloudflare Tunnel
+
+See STORIES.md for acceptance criteria and FEATURES.md for rationale.
+
+**Phase 3:** multi-device sync (mDNS discovery, Ed25519 pairing, mTLS delta), native iOS/Android app (on-device inference), Screenpipe integration.
