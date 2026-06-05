@@ -12,11 +12,42 @@ def lc() -> None:
         sys.exit(1)
 
     if sys.argv[1] == "status":
+        from pathlib import Path as _Path
         from lattice.config import Config
         from lattice.db import LatticeDB
-        db = LatticeDB(Config.from_env().lattice_dir)
-        count = len([a for a in db.all() if not a.is_superseded])
-        print(f"{count} memories stored")
+        cfg = Config.from_env()
+        db = LatticeDB(cfg.lattice_dir)
+        active = [a for a in db.all() if not a.is_superseded]
+        count = len(active)
+        topics = list(dict.fromkeys(a.subject for a in active if a.subject))[:5]
+
+        # Fetch streak from usage.jsonl directly (no daemon needed)
+        import json as _json
+        from datetime import date as _date, datetime as _dt, timezone as _tz, timedelta as _td
+        usage_path = _Path(cfg.lattice_dir) / "usage.jsonl"
+        query_days: set[_date] = set()
+        if usage_path.exists():
+            for line in usage_path.read_text(encoding="utf-8").splitlines():
+                try:
+                    r = _json.loads(line)
+                    if r.get("type") != "grace_day_used":
+                        query_days.add(_date.fromisoformat(r["ts"][:10]))
+                except Exception:
+                    pass
+        today = _dt.now(_tz.utc).date()
+        streak = 0
+        current = today
+        while current in query_days:
+            streak += 1
+            current = _date.fromordinal(current.toordinal() - 1)
+
+        parts = [f"{count} memories"]
+        if topics:
+            parts.append(f"Topics: {', '.join(topics)}")
+        if streak > 0:
+            depth = "day deep" if streak == 1 else "days deep"
+            parts.append(f"{streak} {depth}")
+        print(" · ".join(parts))
         return
 
     text = " ".join(sys.argv[1:])

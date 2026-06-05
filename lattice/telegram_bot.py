@@ -82,6 +82,33 @@ def _match_reason(text: str) -> str | None:
     return None
 
 
+_MILESTONE_MESSAGES = {
+    1:  "First recall. Good start.",
+    7:  "A week in. Lattice is starting to know you.",
+    30: "30 days. You've built something here.",
+}
+
+
+def _milestone_message(streak: int, atom_count: int = 0) -> str | None:
+    """Return a milestone message if streak is a milestone, else None."""
+    if streak == 14:
+        return f"Two weeks of asking and remembering. You have {atom_count} things stored — this is becoming real."
+    return _MILESTONE_MESSAGES.get(streak)
+
+
+def _get_streak_info() -> tuple[int, bool, int]:
+    """Fetch (streak, grace_day_active, atom_count) from web API. Returns (0, False, 0) on failure."""
+    import json
+    import urllib.request as _ur
+    port = os.environ.get("LATTICE_WEB_PORT", "7337")
+    try:
+        with _ur.urlopen(f"http://127.0.0.1:{port}/api/usage/summary", timeout=3) as r:
+            data = json.loads(r.read())
+            return data.get("streak", 0), data.get("grace_day_active", False), data.get("atom_count", 0)
+    except Exception:
+        return 0, False, 0
+
+
 # --- Helpers -----------------------------------------------------------------
 
 def _allowed_ids() -> set[int]:
@@ -166,8 +193,37 @@ async def _do_recall(update, context, question: str) -> None:
             sources = "\n".join(f"· {l}" for l in labels)
             clean = f"{clean}\n\nSources:\n{sources}"
 
+        # Rediscovery: note if any cited atom is ≥30 days old
+        from datetime import datetime, timezone as _tz
+        _now = datetime.now(_tz.utc)
+        old_days: list[int] = []
+        for atom_meta in body.get("atoms", []):
+            ia = atom_meta.get("ingested_at")
+            if not ia:
+                continue
+            try:
+                ts = datetime.fromisoformat(ia.replace("Z", "+00:00"))
+                days = (_now - ts).days
+                if days >= 30:
+                    old_days.append(days)
+            except Exception:
+                pass
+        if old_days:
+            oldest = max(old_days)
+            clean = f"{clean}\n\n_One of these memories is from {oldest} days ago._"
+
         _append_history(context, "user", question)
         _append_history(context, "assistant", clean)
+
+        # Milestone moment — prepend once per milestone day, once per session
+        streak, _, atom_count = _get_streak_info()
+        milestone_key = f"milestone_shown_{streak}"
+        if streak > 0 and not context.bot_data.get(milestone_key):
+            msg = _milestone_message(streak, atom_count)
+            if msg:
+                context.bot_data[milestone_key] = True
+                await update.message.reply_text(msg)
+
         for i in range(0, len(clean), 4096):
             await update.message.reply_text(clean[i:i + 4096])
         # Only ask for feedback on uncertain answers (≤1 atom = low confidence)
@@ -181,17 +237,42 @@ async def _do_recall(update, context, question: str) -> None:
 
 # --- Handlers ----------------------------------------------------------------
 
+def _spark_question(atom) -> str:
+    subject = atom.subject or "that"
+    if atom.kind == "decision":
+        return f"What did I decide about {subject}?"
+    if atom.kind == "preference":
+        return f"What do I prefer about {subject}?"
+    return f"Tell me about {subject}"
+
+
 async def _handle_start(update, context) -> None:
     if not _is_allowed(update):
         return
-    await update.message.reply_text(
-        "Hey — just send me anything worth keeping. "
-        "A thought, a decision, something you don't want to forget. I've got it.\n\n"
-        "Ask me anything naturally and I'll look it up, or just tell me something and I'll save it.\n\n"
-        "/ask <question> — recall anything from your memory\n"
-        "/save — capture this session's conversation as memory\n"
-        "/status — see how many things are stored"
-    )
+    from lattice.config import Config
+    from lattice.db import LatticeDB
+    cfg = Config.from_env()
+    db = LatticeDB(cfg.lattice_dir)
+    atoms = [a for a in db.all() if not a.is_superseded]
+    if atoms:
+        suggestions = "\n".join(f"· {_spark_question(a)}" for a in atoms[:3])
+        body = (
+            "Hey — just send me anything worth keeping. "
+            "A thought, a decision, something you don't want to forget.\n\n"
+            f"You could ask:\n{suggestions}\n\n"
+            "Or just send me a thought and I'll save it.\n\n"
+            "/ask <question> — recall anything\n"
+            "/save — capture this session\n"
+            "/status — memory count"
+        )
+    else:
+        body = (
+            "Hey, good to have you here.\n\n"
+            "Send me anything worth keeping — a decision you made, something you learned, "
+            "a preference you want to remember. I'll hold onto it and surface it when you need it.\n\n"
+            "What's on your mind?"
+        )
+    await update.message.reply_text(body)
 
 
 async def _handle_message(update, context) -> None:
@@ -294,11 +375,35 @@ async def _handle_status(update, context) -> None:
     if not _is_allowed(update):
         return
     try:
+        import urllib.request as _ur
+        import json as _json
         from lattice.db import LatticeDB
         from lattice.config import Config
-        db = LatticeDB(Config.from_env().lattice_dir)
+        cfg = Config.from_env()
+        db = LatticeDB(cfg.lattice_dir)
         count = len([a for a in db.all() if not a.is_superseded])
-        await update.message.reply_text(f"{count} things in your memory right now.")
+
+        # Fetch streak from web API (handles grace day logic centrally)
+        streak = 0
+        grace = False
+        try:
+            url = f"http://127.0.0.1:{os.environ.get('LATTICE_WEB_PORT', '7337')}/api/usage/summary"
+            with _ur.urlopen(url, timeout=3) as r:
+                summary = _json.loads(r.read())
+                streak = summary.get("streak", 0)
+                grace = summary.get("grace_day_active", False)
+        except Exception:
+            pass
+
+        parts = [f"{count} memories"]
+        if streak > 0:
+            depth = "day deep" if streak == 1 else "days deep"
+            streak_str = f"{streak} {depth}"
+            if grace:
+                streak_str += " · rest day"
+            parts.append(streak_str)
+
+        await update.message.reply_text(" · ".join(parts))
     except Exception:
         await update.message.reply_text("Couldn't reach your Lattice store. Try again in a moment.")
 

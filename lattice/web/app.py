@@ -74,22 +74,65 @@ def _utc_today() -> date:
 
 
 def _compute_streak(records: list[dict]) -> int:
+    streak, _ = _compute_streak_with_grace(records)
+    return streak
+
+
+def _compute_streak_with_grace(records: list[dict]) -> tuple[int, bool]:
+    """Return (streak, grace_day_active).
+
+    grace_day_active is True when the user has not queried today but did query
+    yesterday — streak is held at yesterday's value for one day before resetting.
+    One grace day is allowed per 7-day window; after use it is recorded as a
+    {type: 'grace_day_used'} sentinel in usage.jsonl so we don't double-grant.
+    """
     today = _utc_today()
-    days_with_queries: set[date] = set()
+    yesterday = date.fromordinal(today.toordinal() - 1)
+
+    query_days: set[date] = set()
+    grace_used_dates: set[date] = set()
     for r in records:
         try:
             d = date.fromisoformat(r["ts"][:10])
-            days_with_queries.add(d)
+            if r.get("type") == "grace_day_used":
+                grace_used_dates.add(d)
+            else:
+                query_days.add(d)
         except (KeyError, ValueError):
             pass
-    if today not in days_with_queries:
-        return 0
-    streak = 0
-    current = today
-    while current in days_with_queries:
-        streak += 1
-        current = date.fromordinal(current.toordinal() - 1)
-    return streak
+
+    # Normal streak from today
+    if today in query_days:
+        streak = 0
+        current = today
+        while current in query_days:
+            streak += 1
+            current = date.fromordinal(current.toordinal() - 1)
+        return streak, False
+
+    # Today has no queries — check grace day eligibility
+    if yesterday in query_days:
+        # Check no grace day used in the last 7 days
+        week_ago = date.fromordinal(today.toordinal() - 6)
+        grace_used_recently = any(d >= week_ago for d in grace_used_dates)
+        if not grace_used_recently:
+            # Grace day active: compute streak from yesterday
+            streak = 0
+            current = yesterday
+            while current in query_days:
+                streak += 1
+                current = date.fromordinal(current.toordinal() - 1)
+            return streak, True
+
+    return 0, False
+
+
+def _record_grace_day() -> None:
+    """Write a grace_day_used sentinel to usage.jsonl."""
+    path = Config.from_env().lattice_dir / "usage.jsonl"
+    entry = json.dumps({"type": "grace_day_used", "ts": datetime.now(timezone.utc).isoformat()})
+    with path.open("a", encoding="utf-8") as f:
+        f.write(entry + "\n")
 
 
 # ── models ────────────────────────────────────────────────────────────────────
@@ -170,7 +213,8 @@ async def api_answer(req: QueryRequest):
     result = synthesize(req.question, atoms)
     syn_ms = int((time.monotonic() - t1) * 1000)
     _record_usage(req.question, sel_ms, syn_ms, len(atoms), channel="telegram")
-    return {"ok": True, "answer": result.answer, "atom_count": len(atoms)}
+    atom_meta = [{"atom_id": a.get("atom_id"), "ingested_at": a.get("ingested_at")} for a in atoms]
+    return {"ok": True, "answer": result.answer, "atom_count": len(atoms), "atoms": atom_meta}
 
 
 @app.get("/api/usage/summary")
@@ -179,8 +223,8 @@ async def api_usage_summary():
     today = _utc_today().isoformat()
     seven_days_ago = date.fromordinal(_utc_today().toordinal() - 6).isoformat()
 
-    today_count = sum(1 for r in records if r.get("ts", "")[:10] == today)
-    week_count = sum(1 for r in records if r.get("ts", "")[:10] >= seven_days_ago)
+    today_count = sum(1 for r in records if r.get("ts", "")[:10] == today and r.get("type") != "grace_day_used")
+    week_count = sum(1 for r in records if r.get("ts", "")[:10] >= seven_days_ago and r.get("type") != "grace_day_used")
 
     latencies = [
         r.get("selection_ms", 0) + r.get("synthesis_ms", 0)
@@ -189,13 +233,18 @@ async def api_usage_summary():
     ]
     avg_latency_ms = int(sum(latencies) / len(latencies)) if latencies else 0
 
-    streak = _compute_streak(records)
+    streak, grace_day_active = _compute_streak_with_grace(records)
+
+    db = _get_db()
+    atom_count = len([a for a in db.all() if not a.is_superseded])
 
     return {
         "today": today_count,
         "last_7_days": week_count,
         "avg_latency_ms": avg_latency_ms,
         "streak": streak,
+        "grace_day_active": grace_day_active,
+        "atom_count": atom_count,
     }
 
 

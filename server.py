@@ -296,7 +296,16 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     if name == "lattice_status":
         _db.preload_if_stale()
         count = len([a for a in _db.all() if not a.is_superseded])
-        return [TextContent(type="text", text=json.dumps({"count": count}))]
+        try:
+            from lattice.web.app import _compute_streak_with_grace, _load_usage
+            streak, grace_day_active = _compute_streak_with_grace(_load_usage())
+        except Exception:
+            streak, grace_day_active = 0, False
+        return [TextContent(type="text", text=json.dumps({
+            "count": count,
+            "streak": streak,
+            "grace_day_active": grace_day_active,
+        }))]
 
     raise ValueError(f"Unknown tool: {name}")
 

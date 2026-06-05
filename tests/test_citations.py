@@ -127,9 +127,10 @@ def test_citations_applied_comes_before_done():
     assert types.index("citations_applied") < types.index("done")
 
 
-def test_index_contains_citation_css():
+def test_index_loads_style_and_script():
     resp = client.get("/")
-    assert "citation" in resp.text
+    assert "style.css" in resp.text
+    assert "app.js" in resp.text
 
 
 def test_index_contains_render_citations_js():
