@@ -43,9 +43,11 @@ at ingest time. If a count atom exists for the relevant subject, use its value d
 then call `sum_numbers` with those values to get the exact total — do not add them yourself.
 - For preference or recommendation questions: ground your answer in the user's known context \
 (their preferences, constraints, or situation) as recorded in the atoms before giving advice.
-- If atoms are present, always derive an answer from them. Do not say "no information found."
-- If atoms only partially answer the question, give a best-effort answer and note the gap.
-- Only return "no information" if the atoms list is literally empty.
+- If the atoms directly or partially answer the question, synthesise an answer from them.
+- If atoms only partially answer the question, give a best-effort answer and note the specific gap briefly.
+- If the atoms are present but NOT relevant to the question, respond with exactly: \
+"Nothing stored about that yet." — do not explain what IS stored, do not list unrelated facts.
+- Only the above short phrase when irrelevant — never a paragraph explaining the absence.
 - Be concise: one to three paragraphs at most.
 """
 

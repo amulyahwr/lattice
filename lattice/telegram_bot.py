@@ -45,6 +45,43 @@ def _classify(text: str) -> str:
     return "unclear"
 
 
+# --- Feedback ----------------------------------------------------------------
+
+_THUMBS_UP   = {"👍", "yes", "good", "great", "helpful", "y", "up"}
+_THUMBS_DOWN = {"👎", "no", "bad", "wrong", "unhelpful", "n", "down"}
+_REASON_MAP  = {
+    "wrong sources": "wrong_sources",
+    "wrong source":  "wrong_sources",
+    "inaccurate":    "inaccurate",
+    "incorrect":     "inaccurate",
+    "incomplete":    "incomplete",
+    "missing":       "incomplete",
+    "off topic":     "off_topic",
+    "irrelevant":    "off_topic",
+}
+
+
+def _post_feedback(question: str, answer: str, rating: str, reason: str | None = None) -> None:
+    import json
+    import urllib.request
+    port = os.environ.get("LATTICE_WEB_PORT", "7337")
+    url = f"http://127.0.0.1:{port}/api/feedback"
+    payload = json.dumps({"question": question, "answer": answer, "rating": rating, "reason": reason}).encode()
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+    try:
+        urllib.request.urlopen(req, timeout=5)
+    except Exception:
+        pass  # feedback is non-critical
+
+
+def _match_reason(text: str) -> str | None:
+    t = text.lower().strip()
+    for phrase, code in _REASON_MAP.items():
+        if phrase in t:
+            return code
+    return None
+
+
 # --- Helpers -----------------------------------------------------------------
 
 def _allowed_ids() -> set[int]:
@@ -133,6 +170,10 @@ async def _do_recall(update, context, question: str) -> None:
         _append_history(context, "assistant", clean)
         for i in range(0, len(clean), 4096):
             await update.message.reply_text(clean[i:i + 4096])
+        # Only ask for feedback on uncertain answers (≤1 atom = low confidence)
+        if body.get("atom_count", 0) <= 1:
+            context.chat_data["pending_feedback"] = {"question": question, "answer": clean}
+            await update.message.reply_text("Was this helpful? Reply 👍 or 👎")
     except Exception:
         log.exception("recall error")
         await update.message.reply_text("Lattice is offline right now. Try again in a moment.")
@@ -160,6 +201,33 @@ async def _handle_message(update, context) -> None:
     text = (update.message.text or "").strip()
     if not text:
         return
+
+    # Check if we're waiting for a feedback rating reply
+    pending_fb = context.chat_data.get("pending_feedback")
+    if pending_fb:
+        reply = text.lower().strip()
+        if reply in _THUMBS_UP:
+            del context.chat_data["pending_feedback"]
+            _post_feedback(pending_fb["question"], pending_fb["answer"], "up")
+            await update.message.reply_text("Thanks! 👍")
+            return
+        elif reply in _THUMBS_DOWN:
+            context.chat_data["pending_feedback"]["rating"] = "down"
+            await update.message.reply_text(
+                "What went wrong? Reply:\n"
+                "wrong sources · inaccurate · incomplete · off topic"
+            )
+            return
+        elif "rating" in pending_fb:
+            # waiting for reason after 👎
+            reason = _match_reason(reply)
+            _post_feedback(pending_fb["question"], pending_fb["answer"], "down", reason)
+            del context.chat_data["pending_feedback"]
+            await update.message.reply_text("Got it, thanks.")
+            return
+        else:
+            # not a feedback reply — drop pending feedback, process normally
+            del context.chat_data["pending_feedback"]
 
     # Check if we're waiting for a clarification reply
     pending = context.chat_data.get("pending_text")

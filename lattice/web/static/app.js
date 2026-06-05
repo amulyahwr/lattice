@@ -36,6 +36,7 @@ const scrollBtn      = document.getElementById('scroll-btn');
 const memCount       = document.getElementById('memory-count');
 const greetingEl     = document.getElementById('greeting');
 const saveSessionBtn = document.getElementById('save-session');
+const streakBadge    = document.getElementById('streak-badge');
 
 // ── theme ─────────────────────────────────────────────────────────────────
 
@@ -474,6 +475,7 @@ async function ask(question) {
           labelEl.textContent = count
             ? `Found ${count} relevant memor${count === 1 ? 'y' : 'ies'}…`
             : 'Writing answer…';
+          turn._atomCount = count;  // store for feedback threshold check
           citIndex  = buildCitationIndex(evt.atoms || []);
           atomsById  = {};
           atomNumMap = citIndex.byId;
@@ -509,12 +511,14 @@ async function ask(question) {
           const citedIds = new Set([...evt.answer.matchAll(/\[src:([^\]]+)\]/g)].map(m => m[1]));
           const citedAtoms = citIndex.ordered.filter(a => citedIds.has(a.atom_id || a.source_id));
           refsEl.innerHTML = renderReferences(citedAtoms);
-          feedbackEl.style.display = 'flex';
+          // Only show feedback for uncertain answers (≤1 atom = low confidence)
+          if ((turn._atomCount || 0) <= 1) feedbackEl.style.display = 'flex';
           bindFeedback(turn, question, evt.answer);
           bindCitationLinks(turn);
           bindSourcesToggle(turn);
           bindCopyBtn(turn, evt.answer);
           loadRecentAtoms();
+          loadUsageSummary();
           sessionQA.push({ question, answer: evt.answer });
           saveSessionBtn.disabled = false;
 
@@ -562,6 +566,26 @@ form.addEventListener('submit', async e => {
   input.focus();
 });
 
+// ── usage streak ──────────────────────────────────────────────────────────
+
+async function loadUsageSummary() {
+  try {
+    const resp = await fetch('/api/usage/summary');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    const streak = data.streak || 0;
+    if (streak === 0) {
+      streakBadge.textContent = '';
+      streakBadge.style.display = 'none';
+    } else {
+      streakBadge.textContent = `Day ${streak}`;
+      streakBadge.style.display = 'flex';
+    }
+  } catch {
+    // silently ignore — streak is non-critical
+  }
+}
+
 // ── save session ──────────────────────────────────────────────────────────
 
 saveSessionBtn.addEventListener('click', async () => {
@@ -598,6 +622,7 @@ initGreeting();
 initScrollBtn();
 checkDaemonStatus();
 loadRecentAtoms();
+loadUsageSummary();
 setInterval(loadRecentAtoms, 15000);
 setInterval(checkDaemonStatus, 30000);
 input.focus();

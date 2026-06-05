@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 import uuid
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -268,6 +269,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         as_of = date.fromisoformat(as_of_str) if as_of_str else None
         atom_ids: list[str] = arguments.get("atom_ids", [])
 
+        t0 = time.monotonic()
         if atom_ids:
             atoms = []
             for aid in atom_ids:
@@ -277,8 +279,18 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                     pass
         else:
             atoms = select(query=arguments["query"], as_of=as_of, db=_db)
+        sel_ms = int((time.monotonic() - t0) * 1000)
 
+        t1 = time.monotonic()
         result = synthesize(query=arguments["query"], atoms=atoms)
+        syn_ms = int((time.monotonic() - t1) * 1000)
+
+        try:
+            from lattice.web.app import _record_usage
+            _record_usage(arguments["query"], sel_ms, syn_ms, len(atoms), channel="mcp")
+        except Exception:
+            pass
+
         return [TextContent(type="text", text=result.answer)]
 
     if name == "lattice_status":

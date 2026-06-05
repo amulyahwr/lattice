@@ -96,6 +96,8 @@ Lattice has multiple capture/recall channels: MCP tools (Claude Code), web UI, `
 | Recall (synthesized answer) | ✅ | ✅ | — (out of scope) | ✅ auto-detect + `/ask` | planned | — |
 | Session-end capture | ✅ | ✅ Save session btn | — (atomic by design) | ✅ `/save` | — | — |
 | Memory count / status | ✅ `lattice_status` | ✅ (recent atoms) | ✅ `lc status` | ✅ `/status` | — | — |
+| Recall feedback | ❌ redundant (Claude Code has own UI) | ✅ thumbs + reason (atom_count ≤ 1) | — (no recall) | ✅ 👍/👎 (atom_count ≤ 1) | — | — |
+| Usage streak | — | ✅ "N days deep" badge | ✅ `lc status` shows streak | ✅ `/status` shows streak | — | — |
 
 *not yet built. Update this table whenever a channel ships or gains a capability.
 
