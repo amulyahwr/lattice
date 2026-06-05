@@ -45,9 +45,8 @@ then call `sum_numbers` with those values to get the exact total — do not add 
 (their preferences, constraints, or situation) as recorded in the atoms before giving advice.
 - If the atoms directly or partially answer the question, synthesise an answer from them.
 - If atoms only partially answer the question, give a best-effort answer and note the specific gap briefly.
-- If the atoms are present but NOT relevant to the question, respond with exactly: \
-"Nothing stored about that yet." — do not explain what IS stored, do not list unrelated facts.
-- Only the above short phrase when irrelevant — never a paragraph explaining the absence.
+- If the atoms are present but NOT relevant to the question, respond with exactly the token: \
+<<NO_INFO>> — nothing else, no explanation, no list of what IS stored.
 - Be concise: one to three paragraphs at most.
 """
 
@@ -107,6 +106,29 @@ def _execute_tool(name: str, args: dict) -> str:
 
 
 _CITATION_RE = re.compile(r"\[src:([^\]]+)\]")
+
+_NO_ANSWER_SENTINEL = "<<NO_INFO>>"
+
+_NO_ANSWER_RE = re.compile(
+    r"(i can'?t determine|cannot determine|not mentioned|no information about|"
+    r"atoms do not|do not contain|doesn'?t contain|don'?t contain|"
+    r"there is no|there are no|no record|nothing in the|"
+    r"not stored|not in the lattice|no relevant|not available)",
+    re.IGNORECASE,
+)
+
+_NO_ANSWER_PHRASE = "Nothing saved on that yet — drop a note into Lattice and it'll be here next time you ask."
+
+
+def _is_no_answer(text: str) -> bool:
+    """Return True when the LLM signalled no relevant answer.
+
+    Checks for the <<NO_INFO>> sentinel first (exact prompt instruction),
+    then falls back to fuzzy regex for LLMs that paraphrase instead.
+    """
+    if _NO_ANSWER_SENTINEL in text:
+        return True
+    return bool(_NO_ANSWER_RE.search(text))
 
 
 def _atom_src_key(a: dict) -> str:
@@ -204,6 +226,8 @@ def synthesize(
     )
     raw = resp.choices[0].message.content or ""
     answer = replace_citations(raw, atoms)
+    if _is_no_answer(answer):
+        answer = _NO_ANSWER_PHRASE
     return SynthesisResult(answer=answer, raw_response=raw, tool_calls=tool_calls_log)
 
 
@@ -260,5 +284,7 @@ def stream_synthesis(
 
     # Citation markers may span chunk boundaries, so replacement runs on full assembled text.
     processed = replace_citations("".join(full_answer), atoms)
+    if _is_no_answer(processed):
+        processed = _NO_ANSWER_PHRASE
     yield f'data: {json.dumps({"type": "citations_applied", "answer": processed})}\n\n'
     yield 'data: {"type": "done"}\n\n'

@@ -221,8 +221,12 @@ Every fact is a plain `.md` file in `LATTICE_DIR`. Hand-editable, git-trackable.
 | Telegram bot — capture, `/ask` recall, `/save` session, auto-intent detect  | ✅ shipped |
 | Web UI "Save session" button — capture Q&A thread as memory                 | ✅ shipped |
 | `lattice_status` MCP tool — memory count for Claude Code                    | ✅ shipped |
-| Usage telemetry + streak — `usage.jsonl`, `Day N` badge, cross-channel      | ✅ shipped |
+| Usage telemetry + streak — `usage.jsonl`, streak badge, cross-channel       | ✅ shipped |
 | Telegram recall feedback — 👍/👎 on uncertain answers (≤1 atom)             | ✅ shipped |
+| Synthesis cleanup — verbose non-answers replaced with warm short phrase      | ✅ shipped |
+| Memory Sparks — spark cards, ghost queries, Telegram suggestions, lc topics  | ✅ shipped |
+| Memory Depth — "N days deep" streak, grace day, milestone cards, cross-channel | ✅ shipped |
+| Rediscovery highlight — amber glow on old citations, Telegram age note       | ✅ shipped |
 | VS Code / Cursor extension — capture + recall from the IDE                  | Phase 2B  |
 | Browser extension — right-click selected text → save to Lattice             | Phase 2B  |
 | Apple Shortcuts — global hotkey capture (iPhone / macOS)                    | Phase 2B  |

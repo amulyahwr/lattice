@@ -109,8 +109,9 @@ class TestComputeStreak:
         assert _compute_streak(records) == 1
 
     # --- negative ---
-    def test_streak_0_no_query_today(self):
-        records = [self._record(-1), self._record(-2)]
+    def test_streak_0_no_query_today_or_yesterday(self):
+        # Missed both today AND yesterday — no grace day eligible → streak 0
+        records = [self._record(-2), self._record(-3)]
         assert _compute_streak(records) == 0
 
     def test_streak_0_empty_records(self):

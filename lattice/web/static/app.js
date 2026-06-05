@@ -234,14 +234,28 @@ function bindCitationLinks(turn) {
 
 // ── sources section ───────────────────────────────────────────────────────
 
+const _REDISCOVERY_DAYS = 30;
+
+function _atomAgeDays(a) {
+  if (!a.ingested_at) return null;
+  const ms = Date.now() - new Date(a.ingested_at).getTime();
+  return Math.floor(ms / 86400000);
+}
+
 function renderReferences(orderedAtoms) {
   if (!orderedAtoms.length) return '';
   const collapsed = orderedAtoms.length > 3;
-  const items = orderedAtoms.map((a, i) => `
-    <li class="ref-item" id="ref-${escHtml(a.atom_id || a.source_id || String(i+1))}">
+  const items = orderedAtoms.map((a, i) => {
+    const days = _atomAgeDays(a);
+    const old = days != null && days >= _REDISCOVERY_DAYS;
+    const ageLabel = old ? `<span class="ref-age"> · from ${days} days ago</span>` : '';
+    const oldClass = old ? ' rediscovery' : '';
+    return `
+    <li class="ref-item${oldClass}" id="ref-${escHtml(a.atom_id || a.source_id || String(i+1))}">
       <span class="ref-num">[${i + 1}]</span>
-      <span class="ref-source">${escHtml(a.source_title ? `${a.source_title} · ${a.subject || ''}` : (a.subject || a.source_id || '—'))}</span>
-    </li>`).join('');
+      <span class="ref-source">${escHtml(a.source_title ? `${a.source_title} · ${a.subject || ''}` : (a.subject || a.source_id || '—'))}</span>${ageLabel}
+    </li>`;
+  }).join('');
 
   const label = `${orderedAtoms.length} source${orderedAtoms.length > 1 ? 's' : ''}`;
   return `
@@ -307,6 +321,7 @@ async function loadRecentAtoms() {
     const atoms = await res.json();
     renderAtomsList(atoms);
     if (memCount) memCount.textContent = atoms.length ? `· ${atoms.length}` : '';
+    initSparks(atoms);
   } catch (_) {}
 }
 
@@ -326,6 +341,99 @@ function renderAtomsList(atoms) {
         <span class="atom-time">${relativeTime(a.observed_at)}</span>
       </div>
     </div>`).join('');
+}
+
+// ── memory sparks ────────────────────────────────────────────────────────
+
+let _ghostInterval = null;
+
+function _sparkQuestion(atom) {
+  const s = atom.subject || 'that';
+  if (atom.kind === 'decision') return `What did I decide about ${s}?`;
+  if (atom.kind === 'preference') return `What do I prefer about ${s}?`;
+  return `Tell me about ${s}`;
+}
+
+function initSparks(atoms) {
+  // Only affect empty state — stop if a conversation is active
+  if (!history.querySelector('.empty-state')) return;
+
+  const emptyState = history.querySelector('.empty-state');
+  const existingSparks = emptyState.querySelector('.spark-cards');
+  if (existingSparks) existingSparks.remove();
+
+  if (!atoms.length) {
+    // True empty state — no cards, no ghost
+    input.setAttribute('placeholder', 'Ask your memory anything…');
+    if (_ghostInterval) { clearInterval(_ghostInterval); _ghostInterval = null; }
+    const emptyMsg = emptyState.querySelector('.empty-spark-msg');
+    if (!emptyMsg) {
+      const msg = document.createElement('p');
+      msg.className = 'empty-spark-msg';
+      msg.textContent = 'Your memory starts here. Save something worth keeping, then come back and ask about it.';
+      emptyState.appendChild(msg);
+    }
+    return;
+  }
+
+  // Remove true-empty message if atoms now exist
+  const emptyMsg = emptyState.querySelector('.empty-spark-msg');
+  if (emptyMsg) emptyMsg.remove();
+
+  // Warm welcome message — only inject once
+  if (!emptyState.querySelector('.spark-welcome')) {
+    const welcome = document.createElement('p');
+    welcome.className = 'spark-welcome';
+    welcome.textContent = 'What would you like to remember today?';
+    emptyState.appendChild(welcome);
+  }
+
+  // Ghost queries — cycle every 3s
+  const ghostQueries = atoms.slice(0, 4).map(_sparkQuestion);
+  let ghostIdx = 0;
+  input.setAttribute('placeholder', ghostQueries[0]);
+  if (_ghostInterval) clearInterval(_ghostInterval);
+  _ghostInterval = setInterval(() => {
+    ghostIdx = (ghostIdx + 1) % ghostQueries.length;
+    input.setAttribute('placeholder', ghostQueries[ghostIdx]);
+  }, 3000);
+
+  // Clicking placeholder area fills the input with the current ghost query
+  input.addEventListener('focus', () => {
+    if (!input.value) input.value = input.getAttribute('placeholder') === 'Ask anything…' ? '' : '';
+  }, { once: true });
+
+  // Spark cards — 3 cards from first 3 atoms
+  const cardAtoms = atoms.slice(0, 3);
+  const cards = cardAtoms.map(a => {
+    const q = _sparkQuestion(a);
+    const timeLabel = relativeTime(a.ingested_at || a.observed_at);
+    const icon = kindIcon(a.kind);
+    return `<button class="spark-card" data-question="${escHtml(q)}">
+      <span class="spark-icon">${icon}</span>
+      <span class="spark-question">${escHtml(q)}</span>
+      <span class="spark-time">${escHtml(timeLabel)}</span>
+    </button>`;
+  }).join('');
+
+  const wrap = document.createElement('div');
+  wrap.className = 'spark-cards';
+  wrap.innerHTML = cards;
+  emptyState.appendChild(wrap);
+
+  wrap.querySelectorAll('.spark-card').forEach(card => {
+    card.addEventListener('click', () => {
+      input.value = card.dataset.question;
+      input.focus();
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    });
+  });
+}
+
+// Hide sparks and ghost queries once conversation starts
+function clearSparks() {
+  if (_ghostInterval) { clearInterval(_ghostInterval); _ghostInterval = null; }
+  input.setAttribute('placeholder', 'Ask anything…');
 }
 
 // ── scroll-to-bottom ──────────────────────────────────────────────────────
@@ -379,6 +487,7 @@ function appendTurn(question) {
 
   const empty = history.querySelector('.empty-state');
   if (empty) empty.remove();
+  clearSparks();
 
   history.appendChild(turn);
   turn.scrollIntoView({ behavior: 'smooth', block: 'end' });
@@ -511,6 +620,15 @@ async function ask(question) {
           const citedIds = new Set([...evt.answer.matchAll(/\[src:([^\]]+)\]/g)].map(m => m[1]));
           const citedAtoms = citIndex.ordered.filter(a => citedIds.has(a.atom_id || a.source_id));
           refsEl.innerHTML = renderReferences(citedAtoms);
+          // Amber glow on inline citations for atoms ≥30 days old
+          citedAtoms.forEach(a => {
+            const days = _atomAgeDays(a);
+            if (days == null || days < _REDISCOVERY_DAYS) return;
+            const src = a.atom_id || a.source_id;
+            if (!src) return;
+            turn.querySelectorAll(`.citation[data-src="${CSS.escape(src)}"]`)
+                .forEach(el => el.classList.add('rediscovery'));
+          });
           // Only show feedback for uncertain answers (≤1 atom = low confidence)
           if ((turn._atomCount || 0) <= 1) feedbackEl.style.display = 'flex';
           bindFeedback(turn, question, evt.answer);
@@ -518,7 +636,7 @@ async function ask(question) {
           bindSourcesToggle(turn);
           bindCopyBtn(turn, evt.answer);
           loadRecentAtoms();
-          loadUsageSummary();
+          loadUsageSummary({ checkMilestone: true });
           sessionQA.push({ question, answer: evt.answer });
           saveSessionBtn.disabled = false;
 
@@ -566,21 +684,75 @@ form.addEventListener('submit', async e => {
   input.focus();
 });
 
-// ── usage streak ──────────────────────────────────────────────────────────
+// ── usage streak + milestones ─────────────────────────────────────────────
 
-async function loadUsageSummary() {
+const _MILESTONES = {
+  1:  "First recall. Good start.",
+  7:  "A week in. Lattice is starting to know you.",
+  14: null, // built dynamically with atom count
+  30: "30 days. You've built something here. Try going a week without it — you'll know it's working.",
+};
+
+function _milestoneKey(day) { return `lattice_milestone_shown_${day}`; }
+
+function showMilestoneCard(streak, atomCount) {
+  if (!_MILESTONES.hasOwnProperty(streak)) return;
+  if (localStorage.getItem(_milestoneKey(streak))) return;
+  localStorage.setItem(_milestoneKey(streak), '1');
+
+  let msg = _MILESTONES[streak];
+  if (streak === 14) {
+    msg = `Two weeks of asking and remembering. You have ${atomCount} things stored — this is becoming real.`;
+  }
+
+  const card = document.createElement('div');
+  card.className = 'milestone-card';
+  card.innerHTML = `
+    <span class="milestone-msg">${escHtml(msg)}</span>
+    <button class="milestone-dismiss" aria-label="Dismiss">✕</button>`;
+  card.querySelector('.milestone-dismiss').addEventListener('click', () => card.remove());
+
+  // Insert before the first turn, or at top of history
+  const firstTurn = history.querySelector('.turn');
+  if (firstTurn) history.insertBefore(card, firstTurn);
+  else history.appendChild(card);
+
+  // Cube particle burst — one per session
+  if (!sessionStorage.getItem('lattice_burst_done')) {
+    sessionStorage.setItem('lattice_burst_done', '1');
+    const cube = document.querySelector('.logo-cube');
+    if (cube) {
+      cube.classList.add('milestone-burst');
+      setTimeout(() => cube.classList.remove('milestone-burst'), 900);
+    }
+  }
+}
+
+async function loadUsageSummary({ checkMilestone = false } = {}) {
   try {
     const resp = await fetch('/api/usage/summary');
     if (!resp.ok) return;
     const data = await resp.json();
     const streak = data.streak || 0;
-    if (streak === 0) {
+    const grace = data.grace_day_active || false;
+    const atomCount = data.atom_count || 0;
+
+    if (streak === 0 && !grace) {
       streakBadge.textContent = '';
       streakBadge.style.display = 'none';
     } else {
-      streakBadge.textContent = `Day ${streak}`;
+      let label;
+      if (streak >= 30) label = `${streak} days deep 🎯`;
+      else if (streak === 1) label = `1 day deep`;
+      else label = `${streak} days deep`;
+      if (grace) label += ' · rest day';
+      streakBadge.textContent = label;
+      streakBadge.title = 'Consecutive days you\'ve recalled something. Goal: 30 days deep.';
       streakBadge.style.display = 'flex';
     }
+
+    // Only show milestone card after a real query — not on page load
+    if (checkMilestone && streak > 0) showMilestoneCard(streak, atomCount);
   } catch {
     // silently ignore — streak is non-critical
   }

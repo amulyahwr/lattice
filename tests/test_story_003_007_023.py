@@ -173,6 +173,7 @@ class TestLcCli:
             with patch("lattice.db.LatticeDB") as mock_db_cls:
                 mock_atom = MagicMock()
                 mock_atom.is_superseded = False
+                mock_atom.subject = "coffee"
                 mock_db_cls.return_value.all.return_value = [mock_atom, mock_atom]
                 cli_mod.lc()
         captured = capsys.readouterr()
@@ -184,8 +185,8 @@ class TestLcCli:
         monkeypatch.setenv("LATTICE_DIR", str(tmp_path))
         with patch.object(sys, "argv", ["lc", "status"]):
             with patch("lattice.db.LatticeDB") as mock_db_cls:
-                live = MagicMock(); live.is_superseded = False
-                dead = MagicMock(); dead.is_superseded = True
+                live = MagicMock(); live.is_superseded = False; live.subject = "hiking"
+                dead = MagicMock(); dead.is_superseded = True; dead.subject = "coffee"
                 mock_db_cls.return_value.all.return_value = [live, dead]
                 cli_mod.lc()
         captured = capsys.readouterr()
