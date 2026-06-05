@@ -20,20 +20,22 @@ const MAX_HISTORY = 6;
 let atomsById  = {};
 let atomNumMap = {};
 let busy       = false;
+let sessionQA  = []; // {question, answer} pairs accumulated this session
 
 // ── DOM refs ──────────────────────────────────────────────────────────────
 
-const form        = document.getElementById('query-form');
-const input       = document.getElementById('question');
-const submitBtn   = document.getElementById('submit');
-const history     = document.getElementById('chat-history');
-const atomsList   = document.getElementById('atoms-list');
-const statusDot   = document.getElementById('status-dot');
-const statusLbl   = document.getElementById('status-label');
-const themeToggle = document.getElementById('theme-toggle');
-const scrollBtn   = document.getElementById('scroll-btn');
-const memCount    = document.getElementById('memory-count');
-const greetingEl  = document.getElementById('greeting');
+const form           = document.getElementById('query-form');
+const input          = document.getElementById('question');
+const submitBtn      = document.getElementById('submit');
+const history        = document.getElementById('chat-history');
+const atomsList      = document.getElementById('atoms-list');
+const statusDot      = document.getElementById('status-dot');
+const statusLbl      = document.getElementById('status-label');
+const themeToggle    = document.getElementById('theme-toggle');
+const scrollBtn      = document.getElementById('scroll-btn');
+const memCount       = document.getElementById('memory-count');
+const greetingEl     = document.getElementById('greeting');
+const saveSessionBtn = document.getElementById('save-session');
 
 // ── theme ─────────────────────────────────────────────────────────────────
 
@@ -513,6 +515,8 @@ async function ask(question) {
           bindSourcesToggle(turn);
           bindCopyBtn(turn, evt.answer);
           loadRecentAtoms();
+          sessionQA.push({ question, answer: evt.answer });
+          saveSessionBtn.disabled = false;
 
         } else if (evt.type === 'error') {
           if (cursorEl) cursorEl.remove();
@@ -556,6 +560,36 @@ form.addEventListener('submit', async e => {
   busy = false;
   submitBtn.disabled = false;
   input.focus();
+});
+
+// ── save session ──────────────────────────────────────────────────────────
+
+saveSessionBtn.addEventListener('click', async () => {
+  if (!sessionQA.length) return;
+  saveSessionBtn.disabled = true;
+  saveSessionBtn.textContent = 'Saving…';
+
+  const chunk = sessionQA
+    .map(({ question, answer }) => `user: ${question}\nassistant: ${answer}`)
+    .join('\n\n');
+
+  try {
+    const resp = await fetch('/api/ingest', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: chunk, source_id: 'web' }),
+    });
+    if (!resp.ok) throw new Error('ingest failed');
+    sessionQA = [];
+    saveSessionBtn.textContent = '✓ Saved';
+    setTimeout(() => {
+      saveSessionBtn.textContent = 'Save session';
+      saveSessionBtn.disabled = true; // re-disable until next Q&A
+    }, 2000);
+  } catch {
+    saveSessionBtn.textContent = 'Save session';
+    saveSessionBtn.disabled = false;
+  }
 });
 
 // ── init ──────────────────────────────────────────────────────────────────

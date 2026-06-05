@@ -217,6 +217,11 @@ async def list_tools() -> list[Tool]:
                 "required": ["query"],
             },
         ),
+        Tool(
+            name="lattice_status",
+            description="Return the number of memories (non-superseded atoms) currently stored in the lattice.",
+            inputSchema={"type": "object", "properties": {}},
+        ),
     ]
 
 
@@ -275,6 +280,11 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
 
         result = synthesize(query=arguments["query"], atoms=atoms)
         return [TextContent(type="text", text=result.answer)]
+
+    if name == "lattice_status":
+        _db.preload_if_stale()
+        count = len([a for a in _db.all() if not a.is_superseded])
+        return [TextContent(type="text", text=json.dumps({"count": count}))]
 
     raise ValueError(f"Unknown tool: {name}")
 

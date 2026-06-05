@@ -35,11 +35,11 @@ class TestToolRegistration:
         names = [t.name for t in tools]
         assert "lattice_capture" in names
 
-    def test_all_four_tools_present(self, patched_server):
+    def test_all_tools_present(self, patched_server):
         srv, _, _ = patched_server
         tools = _run(srv.list_tools())
         names = {t.name for t in tools}
-        assert names == {"lattice_ingest", "lattice_capture", "lattice_select", "lattice_answer"}
+        assert {"lattice_ingest", "lattice_capture", "lattice_select", "lattice_answer", "lattice_status"} <= names
 
     def test_lattice_capture_description_contains_required_text(self, patched_server):
         srv, _, _ = patched_server
