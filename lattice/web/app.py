@@ -12,7 +12,7 @@ from lattice.client import DaemonClient
 from lattice.config import Config
 from lattice.db import LatticeDB
 from lattice.selection import select
-from lattice.synthesis import stream_synthesis
+from lattice.synthesis import stream_synthesis, synthesize
 
 _STATIC = Path(__file__).parent / "static"
 
@@ -83,6 +83,16 @@ async def api_query(req: QueryRequest) -> StreamingResponse:
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@app.post("/api/answer")
+async def api_answer(req: QueryRequest):
+    db = _get_db()
+    atoms = select(req.question, db=db)
+    if not atoms:
+        return {"ok": True, "answer": None, "atom_count": 0}
+    result = synthesize(req.question, atoms)
+    return {"ok": True, "answer": result.answer, "atom_count": len(atoms)}
 
 
 @app.post("/api/feedback")

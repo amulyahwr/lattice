@@ -3,10 +3,49 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import uuid
+
+_CITATION_RE = re.compile(r"\[([^\]]*)\]\[src:[^\]]+\]")
 
 log = logging.getLogger("lattice.telegram_bot")
 
+# --- Intent detection --------------------------------------------------------
+
+_QUESTION_STARTERS = re.compile(
+    r"^(what|who|where|when|why|how|which|is|are|was|were|do|does|did|"
+    r"have|has|had|can|could|will|would|should|remind|tell|show|find|list)\b",
+    re.IGNORECASE,
+)
+
+_RECALL_PHRASES = re.compile(
+    r"\b(remind me|what do i|what did i|have i|do i have|"
+    r"what is my|what are my|what was my|tell me about|look up)\b",
+    re.IGNORECASE,
+)
+
+_CAPTURE_PHRASES = re.compile(
+    r"^(i |just |today |yesterday |we |decided |bought |learned |finished |"
+    r"started |going to |planning |note:|fyi:|btw:)",
+    re.IGNORECASE,
+)
+
+
+def _classify(text: str) -> str:
+    """Return 'recall', 'capture', or 'unclear'."""
+    t = text.strip()
+    if t.endswith("?"):
+        return "recall"
+    if _QUESTION_STARTERS.match(t):
+        return "recall"
+    if _RECALL_PHRASES.search(t):
+        return "recall"
+    if _CAPTURE_PHRASES.match(t):
+        return "capture"
+    return "unclear"
+
+
+# --- Helpers -----------------------------------------------------------------
 
 def _allowed_ids() -> set[int]:
     raw = os.environ.get("LATTICE_TELEGRAM_ALLOWED_IDS", "")
@@ -21,6 +60,14 @@ def _allowed_ids() -> set[int]:
     return ids
 
 
+def _is_allowed(update) -> bool:
+    allowed = _allowed_ids()
+    if not allowed:
+        return True
+    user_id = update.effective_user.id if update.effective_user else None
+    return user_id in allowed
+
+
 def _inbox_fallback(text: str, chat_id: int) -> None:
     from lattice.config import Config
     inbox = Config.from_env().inbox_dir
@@ -30,13 +77,68 @@ def _inbox_fallback(text: str, chat_id: int) -> None:
     log.info("telegram: queued to inbox as %s", fname)
 
 
-def _is_allowed(update) -> bool:
-    allowed = _allowed_ids()
-    if not allowed:
-        return True  # no allowlist = accept everyone (not recommended)
-    user_id = update.effective_user.id if update.effective_user else None
-    return user_id in allowed
+def _append_history(context, role: str, text: str) -> None:
+    context.chat_data.setdefault("history", []).append({"role": role, "text": text})
 
+
+async def _do_capture(update, context, text: str) -> None:
+    chat_id = update.effective_chat.id
+    try:
+        from lattice.client import DaemonClient
+        atom_ids = DaemonClient().ingest(text, source_id="telegram")
+        n = len(atom_ids)
+        if n == 0:
+            await update.message.reply_text("Got it — nothing new to add, looks like this is already in there.")
+        else:
+            _append_history(context, "user", text)
+            await update.message.reply_text(f"Saved. {n} new thing{'s' if n != 1 else ''} added to your memory.")
+    except (RuntimeError, OSError):
+        _inbox_fallback(text, chat_id)
+        await update.message.reply_text("Lattice is offline right now. Your message is safe — I'll confirm once it's processed. 📥")
+
+
+async def _do_recall(update, context, question: str) -> None:
+    import json
+    import urllib.request
+    from lattice.config import Config
+
+    cfg = Config.from_env()
+    url = f"http://127.0.0.1:{os.environ.get('LATTICE_WEB_PORT', '7337')}/api/answer"
+    payload = json.dumps({"question": question}).encode()
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            body = json.loads(resp.read())
+        answer = body.get("answer")
+        if not answer:
+            await update.message.reply_text("Nothing stored about that yet.")
+            return
+
+        # Collect unique source labels, strip markers from prose
+        labels: list[str] = []
+        seen: set[str] = set()
+        def _collect(m: re.Match) -> str:
+            label = m.group(1).strip()
+            if label and label not in seen:
+                seen.add(label)
+                labels.append(label)
+            return ""
+
+        clean = _CITATION_RE.sub(_collect, answer).strip()
+        if labels:
+            sources = "\n".join(f"· {l}" for l in labels)
+            clean = f"{clean}\n\nSources:\n{sources}"
+
+        _append_history(context, "user", question)
+        _append_history(context, "assistant", clean)
+        for i in range(0, len(clean), 4096):
+            await update.message.reply_text(clean[i:i + 4096])
+    except Exception:
+        log.exception("recall error")
+        await update.message.reply_text("Lattice is offline right now. Try again in a moment.")
+
+
+# --- Handlers ----------------------------------------------------------------
 
 async def _handle_start(update, context) -> None:
     if not _is_allowed(update):
@@ -44,7 +146,10 @@ async def _handle_start(update, context) -> None:
     await update.message.reply_text(
         "Hey — just send me anything worth keeping. "
         "A thought, a decision, something you don't want to forget. I've got it.\n\n"
-        "/status to see what's stored."
+        "Ask me anything naturally and I'll look it up, or just tell me something and I'll save it.\n\n"
+        "/ask <question> — recall anything from your memory\n"
+        "/save — capture this session's conversation as memory\n"
+        "/status — see how many things are stored"
     )
 
 
@@ -56,19 +161,65 @@ async def _handle_message(update, context) -> None:
     if not text:
         return
 
-    chat_id = update.effective_chat.id
+    # Check if we're waiting for a clarification reply
+    pending = context.chat_data.get("pending_text")
+    if pending:
+        reply = text.lower().strip()
+        if reply in ("save", "capture", "s"):
+            del context.chat_data["pending_text"]
+            await _do_capture(update, context, pending)
+            return
+        elif reply in ("ask", "recall", "look up", "a", "r"):
+            del context.chat_data["pending_text"]
+            await _do_recall(update, context, pending)
+            return
+        else:
+            # Not a clarification — treat new message normally, drop pending
+            del context.chat_data["pending_text"]
 
+    intent = _classify(text)
+
+    if intent == "recall":
+        await _do_recall(update, context, text)
+    elif intent == "capture":
+        await _do_capture(update, context, text)
+    else:
+        # Ambiguous — ask user to clarify
+        context.chat_data["pending_text"] = text
+        await update.message.reply_text(
+            "Save this to memory or look something up?\n\nReply save or ask."
+        )
+
+
+async def _handle_ask(update, context) -> None:
+    if not _is_allowed(update):
+        return
+    question = " ".join(context.args).strip() if context.args else ""
+    if not question:
+        await update.message.reply_text("What would you like to know? Usage: /ask <question>")
+        return
+    await _do_recall(update, context, question)
+
+
+async def _handle_save(update, context) -> None:
+    if not _is_allowed(update):
+        return
+    history = context.chat_data.get("history", [])
+    if not history:
+        await update.message.reply_text("Nothing to save from this session yet.")
+        return
+    chunk = "\n".join(f"{h['role']}: {h['text']}" for h in history)
     try:
         from lattice.client import DaemonClient
-        atom_ids = DaemonClient().ingest(text, source_id="telegram")
+        atom_ids = DaemonClient().ingest(chunk, source_id="telegram")
+        context.chat_data["history"] = []
         n = len(atom_ids)
         if n == 0:
-            await update.message.reply_text("Got it — nothing new to add, looks like this is already in there.")
+            await update.message.reply_text("Session saved — nothing new to add, looks like it's all already in there.")
         else:
-            await update.message.reply_text(f"Saved. {n} new thing{'s' if n != 1 else ''} added to your memory.")
+            await update.message.reply_text(f"Session saved. {n} new thing{'s' if n != 1 else ''} added to your memory.")
     except (RuntimeError, OSError):
-        _inbox_fallback(text, chat_id)
-        await update.message.reply_text("Lattice is offline right now. Your message is safe — I'll confirm once it's processed. 📥")
+        await update.message.reply_text("Lattice is offline right now. Try again in a moment.")
 
 
 async def _handle_status(update, context) -> None:
@@ -90,6 +241,8 @@ async def _handle_non_text(update, context) -> None:
     await update.message.reply_text("I can only handle text for now — just type it out and I'll save it.")
 
 
+# --- Entry point -------------------------------------------------------------
+
 def run(token: str) -> None:
     try:
         from telegram.ext import Application, CommandHandler, MessageHandler, filters
@@ -101,14 +254,16 @@ def run(token: str) -> None:
     app = Application.builder().token(token).build()
     app.add_handler(CommandHandler("start", _handle_start))
     app.add_handler(CommandHandler("status", _handle_status))
+    app.add_handler(CommandHandler("ask", _handle_ask))
+    app.add_handler(CommandHandler("save", _handle_save))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_message))
     app.add_handler(MessageHandler(~filters.TEXT, _handle_non_text))
 
     log.info("Telegram bot starting (polling mode)")
     app.run_polling(
-        drop_pending_updates=False,  # process queued messages after restart
-        bootstrap_retries=-1,        # retry forever on startup network error
-        timeout=30,                  # long-poll timeout — fewer requests, faster delivery
+        drop_pending_updates=False,
+        bootstrap_retries=-1,
+        timeout=30,
     )
 
 

@@ -74,7 +74,8 @@ By default Claude Code asks for approval on every MCP tool call. Add to `.claude
     "mcp__lattice__lattice_ingest",
     "mcp__lattice__lattice_capture",
     "mcp__lattice__lattice_select",
-    "mcp__lattice__lattice_answer"
+    "mcp__lattice__lattice_answer",
+    "mcp__lattice__lattice_status"
   ]
 }
 ```
@@ -195,7 +196,7 @@ lc "decided to use Postgres over SQLite for the new service"
 
 ### MCP tools for AI assistants
 
-Three tools exposed to Claude and any MCP-compatible client:
+Five tools exposed to Claude and any MCP-compatible client:
 
 | Tool               | What it does                                                               |
 | ------------------ | -------------------------------------------------------------------------- |
@@ -203,6 +204,7 @@ Three tools exposed to Claude and any MCP-compatible client:
 | `lattice_capture`  | Persist a session summary at conversation end. Treats injected atoms as authoritative — do not re-verify with `lattice_select`. |
 | `lattice_select`   | Return the most relevant atoms for a query (BM25 + graph BFS, 0 LLM calls) |
 | `lattice_answer`   | Synthesize a prose answer from the atom store                              |
+| `lattice_status`   | Return the number of memories currently stored                             |
 
 ### Human-readable atom store
 
@@ -215,8 +217,10 @@ Every fact is a plain `.md` file in `LATTICE_DIR`. Hand-editable, git-trackable.
 | What                                                                        | Status    |
 | --------------------------------------------------------------------------- | --------- |
 | `lattice_capture` MCP tool — explicit session-end capture                   | ✅ shipped |
-| `lc` terminal command — `lc "decided X because Y"`                          | ✅ shipped |
-| Telegram bot — send a message from your phone → saved as atoms              | ✅ shipped |
+| `lc` terminal command — capture + `lc status` memory count                  | ✅ shipped |
+| Telegram bot — capture, `/ask` recall, `/save` session, auto-intent detect  | ✅ shipped |
+| Web UI "Save session" button — capture Q&A thread as memory                 | ✅ shipped |
+| `lattice_status` MCP tool — memory count for Claude Code                    | ✅ shipped |
 | VS Code / Cursor extension — capture + recall from the IDE                  | Phase 2B  |
 | Browser extension — right-click selected text → save to Lattice             | Phase 2B  |
 | Apple Shortcuts — global hotkey capture (iPhone / macOS)                    | Phase 2B  |

@@ -236,6 +236,30 @@ header h1 {
 
 /* ── theme toggle ────────────────────────────────────────────────────────── */
 
+.save-session-btn {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  height: 28px;
+  padding: 0 10px;
+  font-size: 0.78rem;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+  white-space: nowrap;
+}
+
+.save-session-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.save-session-btn:not(:disabled):hover {
+  background: var(--bg);
+  border-color: var(--text-dim);
+  color: var(--text);
+}
+
 .theme-toggle {
   background: none;
   border: 1px solid var(--border);

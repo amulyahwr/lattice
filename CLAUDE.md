@@ -62,8 +62,9 @@ lattice/
   embed.py         Optional semantic embedding via fastembed (install semantic extra). Guards
                    import; no-ops cleanly if fastembed absent. Not on hot query path.
   util.py          Shared helpers: write_file_atomic, _normalized_subject.
-  cli.py           Entry point for `lc` terminal command. Uses DaemonClient over Unix socket;
-                   fails fast (no inbox fallback) if daemon is not running.
+  cli.py           Entry point for `lc` terminal command. `lc <text>` captures via DaemonClient
+                   over Unix socket; fails fast if daemon not running. `lc status` reads LatticeDB
+                   directly (no daemon needed) and prints memory count.
   telegram_bot.py  Telegram polling bot (STORY-018). Runs as independent launchd service
                    (dev.lattice.telegram.plist) — not a daemon subprocess. On daemon-down:
                    writes inbox file as telegram-{chat_id}-{uuid}.txt and replies immediately.
@@ -78,6 +79,25 @@ lattice/
 ### Ingest drop mechanism
 
 Drop any `.md` (or text) file into `LATTICE_INBOX` (default `LATTICE_DIR/inbox/`). The daemon's watchdog picks it up within seconds, runs `ingest()`, then moves it to `processed/`. This is the primary human-facing write path; MCP `ingest_text` goes through `DaemonClient` to the same daemon.
+
+### Distribution channel consistency
+
+Lattice has multiple capture/recall channels: MCP tools (Claude Code), web UI, `lc` CLI, Telegram bot, and future channels (VS Code extension, browser extension, Apple Shortcuts, menu bar app).
+
+**Rule 1 — New channel:** when a new distribution channel is added, all existing functionality (capture + recall) should be implemented in that channel where technically feasible. Don't ship a channel that only does half the job if the other half is achievable.
+
+**Rule 2 — New functionality:** when a new capability is added to any channel, evaluate adding it to all other channels. If feasible, add it. If not feasible for a channel (e.g. streaming synthesis in a CLI), note it explicitly.
+
+**Current channel capability matrix:**
+
+| Capability | MCP | Web UI | `lc` CLI | Telegram | VS Code* | Browser ext* |
+|---|---|---|---|---|---|---|
+| Capture (ingest) | ✅ | ✅ | ✅ | ✅ | planned | planned |
+| Recall (synthesized answer) | ✅ | ✅ | — (out of scope) | ✅ auto-detect + `/ask` | planned | — |
+| Session-end capture | ✅ | ✅ Save session btn | — (atomic by design) | ✅ `/save` | — | — |
+| Memory count / status | ✅ `lattice_status` | ✅ (recent atoms) | ✅ `lc status` | ✅ `/status` | — | — |
+
+*not yet built. Update this table whenever a channel ships or gains a capability.
 
 ### Product roadmap guardrails
 
