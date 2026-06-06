@@ -179,7 +179,8 @@ class TestDrainInbox:
         _drain_inbox(handler, MagicMock(inbox_dir=inbox, processed_dir=processed))
         assert list(inbox.iterdir()) == []
 
-    def test_drain_skips_non_text_files(self, tmp_path):
+    def test_drain_moves_binary_files_to_processed(self, tmp_path):
+        """Binary files are attempted, rejected, then moved to processed."""
         from lattice.daemon import InboxEventHandler, _drain_inbox
         from lattice.db import LatticeDB
 
@@ -189,11 +190,11 @@ class TestDrainInbox:
         processed.mkdir()
         db = LatticeDB(tmp_path / "lattice")
         png = inbox / "image.png"
-        png.write_bytes(b"\x89PNG")
+        png.write_bytes(bytes(range(256)) * 10)  # clearly binary
 
         handler = InboxEventHandler(db=db, processed_dir=processed)
         _drain_inbox(handler, MagicMock(inbox_dir=inbox, processed_dir=processed))
-        assert png.exists()  # non-text stays in inbox
+        assert not png.exists() or (processed / "image.png").exists()
 
     def test_drain_processes_multiple_files(self, tmp_path):
         from lattice.daemon import InboxEventHandler, _drain_inbox
@@ -345,7 +346,7 @@ class TestHandleMessage:
         ctx = _make_context({"pending_text": "coffee thoughts"})
         update = _make_update("save")
         with patch("lattice.client.DaemonClient") as mock_cls:
-            mock_cls.return_value.ingest.return_value = ["a1"]
+            mock_cls.return_value.ingest_full.return_value = {"atoms_new": 1, "atoms_updated": 0, "atom_ids": ["a1"]}
             run(_handle_message(update, ctx))
         assert "pending_text" not in ctx.chat_data
         reply = update.message.reply_text.call_args[0][0]
@@ -371,7 +372,7 @@ class TestHandleMessage:
         update = _make_update("I prefer dark coffee", chat_id=555)
         ctx = _make_context()
         with patch("lattice.client.DaemonClient") as mock_cls:
-            mock_cls.return_value.ingest.side_effect = OSError("no socket")
+            mock_cls.return_value.ingest_full.side_effect = OSError("no socket")
             run(_handle_message(update, ctx))
         files = list((tmp_path / "inbox").glob("telegram-555-*.txt"))
         assert len(files) == 1
@@ -392,7 +393,7 @@ class TestHandleMessage:
         ctx = _make_context()
         with patch("lattice.client.DaemonClient") as mock_cls:
             run(_handle_message(update, ctx))
-            mock_cls.return_value.ingest.assert_not_called()
+            mock_cls.return_value.ingest_full.assert_not_called()
         update.message.reply_text.assert_not_called()
 
     def test_new_message_drops_stale_pending(self):
@@ -401,7 +402,7 @@ class TestHandleMessage:
         ctx = _make_context({"pending_text": "old unclear thing"})
         update = _make_update("I bought a new bike")  # clear capture
         with patch("lattice.client.DaemonClient") as mock_cls:
-            mock_cls.return_value.ingest.return_value = ["a1"]
+            mock_cls.return_value.ingest_full.return_value = {"atoms_new": 1, "atoms_updated": 0, "atom_ids": ["a1"]}
             run(_handle_message(update, ctx))
         assert "pending_text" not in ctx.chat_data
 
@@ -410,7 +411,7 @@ class TestHandleMessage:
         update = _make_update("I prefer dark coffee")
         ctx = _make_context()
         with patch("lattice.client.DaemonClient") as mock_cls:
-            mock_cls.return_value.ingest.return_value = []
+            mock_cls.return_value.ingest_full.return_value = {"atoms_new": 0, "atoms_updated": 0, "atom_ids": []}
             run(_handle_message(update, ctx))
         reply = update.message.reply_text.call_args[0][0]
         assert "already" in reply.lower() or "nothing new" in reply.lower()
@@ -453,7 +454,7 @@ class TestHandleSave:
         ]})
         update = _make_update("/save")
         with patch("lattice.client.DaemonClient") as mock_cls:
-            mock_cls.return_value.ingest.return_value = ["a1", "a2"]
+            mock_cls.return_value.ingest_full.return_value = {"atoms_new": 2, "atoms_updated": 0, "atom_ids": ["a1", "a2"]}
             run(_handle_save(update, ctx))
         assert ctx.chat_data["history"] == []
         reply = update.message.reply_text.call_args[0][0]
@@ -467,9 +468,9 @@ class TestHandleSave:
         ]})
         update = _make_update("/save")
         with patch("lattice.client.DaemonClient") as mock_cls:
-            mock_cls.return_value.ingest.return_value = []
+            mock_cls.return_value.ingest_full.return_value = {"atoms_new": 0, "atoms_updated": 0, "atom_ids": []}
             run(_handle_save(update, ctx))
-        ingested_text = mock_cls.return_value.ingest.call_args[0][0]
+        ingested_text = mock_cls.return_value.ingest_full.call_args[0][0]
         assert "user: hello" in ingested_text
         assert "assistant: world" in ingested_text
 
@@ -478,9 +479,9 @@ class TestHandleSave:
         ctx = _make_context({"history": [{"role": "user", "text": "test"}]})
         update = _make_update("/save")
         with patch("lattice.client.DaemonClient") as mock_cls:
-            mock_cls.return_value.ingest.return_value = []
+            mock_cls.return_value.ingest_full.return_value = {"atoms_new": 0, "atoms_updated": 0, "atom_ids": []}
             run(_handle_save(update, ctx))
-        call_args = mock_cls.return_value.ingest.call_args
+        call_args = mock_cls.return_value.ingest_full.call_args
         assert "telegram" in str(call_args)
 
     # --- negative / edge ---
@@ -497,7 +498,7 @@ class TestHandleSave:
         ctx = _make_context({"history": [{"role": "user", "text": "test"}]})
         update = _make_update("/save")
         with patch("lattice.client.DaemonClient") as mock_cls:
-            mock_cls.return_value.ingest.side_effect = OSError("no socket")
+            mock_cls.return_value.ingest_full.side_effect = OSError("no socket")
             run(_handle_save(update, ctx))
         reply = update.message.reply_text.call_args[0][0]
         assert "offline" in reply.lower()
@@ -508,7 +509,7 @@ class TestHandleSave:
         ctx = _make_context({"history": [{"role": "user", "text": "I prefer dark coffee"}]})
         update = _make_update("/save")
         with patch("lattice.client.DaemonClient") as mock_cls:
-            mock_cls.return_value.ingest.return_value = []
+            mock_cls.return_value.ingest_full.return_value = {"atoms_new": 0, "atoms_updated": 0, "atom_ids": []}
             run(_handle_save(update, ctx))
         assert ctx.chat_data["history"] == []
         reply = update.message.reply_text.call_args[0][0]

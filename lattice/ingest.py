@@ -61,6 +61,11 @@ enabling them to cluster together for retrieval.
 "starting next Monday"). Otherwise null.
   - Resolve relative dates (e.g. "last Tuesday", "next month") to ISO 8601 (YYYY-MM-DD) using today's date.
   - Do NOT extract generic advice or universally-applicable facts that apply to everyone.
+  - Named person rule: when the source is a document (not a chat log), use the actual names from \
+the text in atom content — never "User". "User" belongs only in atoms derived from the memory \
+owner's own chat turns. For a resume, bio, CV, article, or any third-party document, write \
+"Jane Smith has 8 years of experience" not "User has 8 years of experience". If the document \
+subject's name appears anywhere in the text, carry it through every atom extracted from that document.
 
 Numeric extraction rules:
   - When text explicitly states a count ("I own 3 bikes", "attended 5 sessions", "takes 4 classes/week"), \
@@ -421,51 +426,61 @@ def ingest(source: str, metadata: dict | None = None, db: LatticeDB | None = Non
             nested_atoms = list(pool.map(lambda s: _extract_atoms(s, metadata, ref), segments))
     atoms_data = [a for atoms in nested_atoms for a in atoms]
     created_ids: list[str] = []
+    new_ids: list[str] = []
+    updated_ids: list[str] = []
     duplicate_ids: list[str] = []
 
     for data in atoms_data:
         content = data["content"]
         content_hash = _hash_text(content)
         normalized_hash = _hash_text(_normalized_content(content))
-        duplicate = db.find_by_normalized_hash(normalized_hash)
-        if duplicate is not None:
-            duplicate_ids.append(duplicate.atom_id)
-            continue
 
-        atom = Atom(
-            kind=data.get("kind", "fact"),
-            source=data.get("source", "document"),
-            subject=data["subject"],
-            content=content,
-            valid_from=_parse_date(data.get("valid_from")),
-            valid_until=_parse_date(data.get("valid_until")),
-            ingested_at=ref,
-            observed_at=observed_at,
-            source_id=source_id,
-            source_title=metadata.get("title") or metadata.get("source_title"),
-            session_id=metadata.get("session_id"),
-            segment_id=data.get("segment_id"),
-            source_type=data.get("source_type"),
-            source_span=data.get("source_span"),
-            content_hash=content_hash,
-            normalized_content_hash=normalized_hash,
-            metadata=data.get("metadata", {}),
-        )
+        with db.lock:
+            duplicate = db.find_by_normalized_hash(normalized_hash)
+            if duplicate is not None:
+                duplicate_ids.append(duplicate.atom_id)
+                continue
 
-        old_id = _detect_supersession(db, atom)
-        if old_id:
-            db.supersede(old_id, atom)
-        else:
-            db.write(atom)
+            atom = Atom(
+                kind=data.get("kind", "fact"),
+                source=data.get("source", "document"),
+                subject=data["subject"],
+                content=content,
+                valid_from=_parse_date(data.get("valid_from")),
+                valid_until=_parse_date(data.get("valid_until")),
+                ingested_at=ref,
+                observed_at=observed_at,
+                source_id=source_id,
+                source_title=metadata.get("title") or metadata.get("source_title"),
+                session_id=metadata.get("session_id"),
+                segment_id=data.get("segment_id"),
+                source_type=data.get("source_type"),
+                source_span=data.get("source_span"),
+                content_hash=content_hash,
+                normalized_content_hash=normalized_hash,
+                metadata=data.get("metadata", {}),
+            )
 
-        if atom.subject:
-            db.register_subject(atom.subject, atom.atom_id)
+            old_id = _detect_supersession(db, atom)
+            if old_id:
+                db.supersede(old_id, atom)
+                updated_ids.append(atom.atom_id)
+            else:
+                db.write(atom)
+                new_ids.append(atom.atom_id)
 
-        created_ids.append(atom.atom_id)
+            if atom.subject:
+                db.register_subject(atom.subject, atom.atom_id)
+
+            created_ids.append(atom.atom_id)
 
     return {
         "atoms_created": len(created_ids),
+        "atoms_new": len(new_ids),
+        "atoms_updated": len(updated_ids),
         "atom_ids": created_ids,
+        "new_atom_ids": new_ids,
+        "updated_atom_ids": updated_ids,
         "duplicates_skipped": len(duplicate_ids),
         "duplicate_atom_ids": duplicate_ids,
         "source_id": source_id,

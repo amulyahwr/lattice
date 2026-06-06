@@ -504,7 +504,7 @@ Start only after Phase 2A exit criterion is met.
 
 ### Epic 9 — PDF ingest (Phase 2B, parallel track)
 
-#### STORY-014 · PDF parser
+#### STORY-014 ✅ · PDF parser (extended: all file types, all channels)
 
 **As a** user who drops a PDF into the inbox,
 **I want** Lattice to extract and atomize its text,
@@ -864,27 +864,36 @@ Something new: Travel planning
 
 > **Why now:** the technical pitch explicitly commits to this — "Lattice takes responsibility for ensuring no PII reaches the API." That promise needs an implementation. Also directly addresses the privacy tailwind from the SWOT — local-first is only a durable moat if the cloud fallback path is equally trustworthy.
 
-#### STORY-033 · PII scrubbing for cloud providers
+#### STORY-033 · PII round-trip redaction for cloud providers
 
 **As a** user whose device can't run a local model and falls back to OpenRouter,
-**I want** Lattice to scrub PII from atom content before it leaves my machine,
-**so that** sensitive personal facts never reach a third-party API even in the fallback path.
+**I want** Lattice to redact PII before text leaves my machine and restore it after,
+**so that** sensitive personal facts never reach a third-party API, and atom content on disk always has real names.
+
+**Background:** Simple scrubbing (replace with `[NAME]`) is destructive — the name is lost forever from the atom. Round-trip redaction maps entities to numbered tags (`PER_0`, `ORG_0`), sends the tagged text to the cloud LLM, receives back tagged output, then restores real values before writing to disk. Atoms on disk always contain real names; names never leave the machine.
 
 **Acceptance criteria:**
-- When `LLM_PROVIDER != ollama`, atom content passed to synthesis is scanned for PII patterns: names (NER regex), email addresses, phone numbers, physical addresses
-- Detected PII replaced with typed placeholders: `[NAME]`, `[EMAIL]`, `[PHONE]`, `[ADDRESS]`
-- Original atoms on disk are **never modified** — scrubbing applies only to the in-memory payload sent to the LLM
+- When `LLM_PROVIDER != ollama` and `LATTICE_NER_MODEL` is set: full round-trip NER redaction (persons, orgs, emails, phones)
+- When `LLM_PROVIDER != ollama` and `LATTICE_NER_MODEL` not set: regex-only (emails, phones, URLs — no name NER)
+- When `LLM_PROVIDER=ollama`: skip entirely — data never leaves machine
+- Entity types redacted: PER → `PER_0/PER_1/…`, ORG → `ORG_0/ORG_1/…`, EMAIL → `EMAIL_0/…`, PHONE → `PHONE_0/…`. **DATE is never redacted** — breaks temporal reasoning.
+- Original atoms on disk always contain real values — redaction is in-memory only
+- LLM instructed to preserve entity tags exactly as written
 - `LATTICE_PII_SCRUB=true` default when not ollama; `false` to disable explicitly
-- Web UI: subtle `🔒 PII protected` label in synthesis header when scrubbing is active
-- Applies to all synthesis paths: `POST /api/query` (web), `POST /api/answer` (Telegram), `lattice_answer` MCP tool
-- Scrubbing is skipped entirely when `LLM_PROVIDER=ollama` (on-device, no data leaves machine)
+- Web UI: subtle `🔒 PII protected` label in synthesis header when active
+- Applies to both ingest (segment text → LLM extraction) and synthesis (atom content → LLM synthesis)
 
 **Technical notes:**
-- New `lattice/privacy.py` — `scrub_pii(text: str) -> str` using compiled regex patterns; no heavy NLP deps
-- Start with high-precision patterns (email, phone, URL) before attempting name NER
-- Called in `synthesis.py` on atom `content` field before building the LLM prompt
-- `LATTICE_PII_SCRUB` parsed in `config.py`
-- Optional future upgrade: `presidio-analyzer` (Microsoft, MIT license) for higher recall — keep as opt-in dep
+- New `lattice/privacy.py` — `EntityRedactor` class:
+  - `.redact(text, provider) → (redacted_text, entity_map)` — no-op if ollama or scrub disabled
+  - `.restore(text, entity_map) → text` — replaces `PER_0` etc. back with real values
+- `LATTICE_NER_MODEL` env var (e.g. `qwen3:0.6b`) — if set, uses that Ollama model for NER via `lattice/llm.py`; if absent, regex-only
+- NER call batches all segments from one document in a single LLM call → consistent entity map across segments, one inference call per document
+- `ingest.py`: redact segment text before `_extract_atoms()`, restore entity tags in returned atom `content` and `subject` fields
+- `synthesis.py`: redact atom content before building prompt, restore entity tags in prose response before yielding to caller
+- `LATTICE_PII_SCRUB` and `LATTICE_NER_MODEL` parsed in `config.py`
+- **Accuracy tradeoff:** spaCy en_core_web_sm (~85% F1 on Western names) rejected — too low recall for diverse names (South Asian, East Asian, etc.) where a miss means real names reach the API. Ollama NER has better generalization but requires a local model to be available. Regex-only is the honest fallback when no local model is present.
+- **NER reuse:** `EntityRedactor` is the shared foundation for M16 (named entity graph nodes). M16 depends on M7 (topic hubs) to avoid p21-style over-connection.
 - **Independent** — no other story dependencies
 
 ---
@@ -944,7 +953,7 @@ Phase 2B ordering
 ├── STORY-030 (Memory Depth + grace day + milestones) — depends on STORY-013 ✅
 ├── STORY-031 (Weekly report + topic depth) — depends on STORY-013 ✅; new /api/usage/weekly endpoint
 ├── STORY-032 (Rediscovery highlight) — independent; uses existing SSE atom payload
-├── STORY-014 (PDF parser) — independent, parallel
+├── STORY-014 ✅ (PDF parser + all file types + all channels) — independent, parallel
 ├── STORY-015 (Reminders) — independent, parallel
 ├── STORY-017 (Semantic dedup) — independent, parallel; requires fastembed optional dep
 ├── STORY-033 (PII scrubbing) — independent, parallel; activates only when LLM_PROVIDER != ollama

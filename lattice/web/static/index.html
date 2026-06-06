@@ -66,10 +66,16 @@
 
     <button class="scroll-btn" id="scroll-btn">↓ Latest</button>
     <div class="input-bar">
+      <div class="upload-progress" id="upload-progress"></div>
       <form id="query-form" style="display:contents">
         <input id="question" type="text" placeholder="Ask anything…" autocomplete="off" />
         <button id="submit" type="submit">Ask</button>
       </form>
+      <label class="upload-btn" title="Upload any file — PDF, Word, PowerPoint, Excel, code, text">
+        <input type="file" id="file-upload" style="display:none" multiple>
+        <svg class="upload-icon" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M8 2v8M5 5l3-3 3 3M3 11v2h10v-2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <svg class="upload-spinner" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg"><circle cx="8" cy="8" r="6" stroke="currentColor" stroke-width="1.5" stroke-dasharray="28" stroke-dashoffset="10" stroke-linecap="round"/></svg>
+      </label>
     </div>
     <div class="input-hint">↵ Enter &nbsp;·&nbsp; Esc to clear</div>
   </div>

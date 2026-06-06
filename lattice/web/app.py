@@ -5,7 +5,7 @@ from hashlib import sha1
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -170,13 +170,51 @@ async def health():
 async def api_ingest(req: IngestRequest):
     metadata = {**req.metadata, "observed_at": datetime.now(timezone.utc).isoformat()}
     try:
-        atom_ids = DaemonClient().ingest(req.text, req.source_id, metadata=metadata)
+        result = DaemonClient().ingest_full(req.text, req.source_id, metadata=metadata)
     except (RuntimeError, OSError):
         return JSONResponse(
             status_code=503,
             content={"ok": False, "error": "daemon unavailable"},
         )
-    return {"ok": True, "atom_ids": atom_ids}
+    return {"ok": True, "atom_ids": result.get("atom_ids", [])}
+
+
+@app.post("/api/ingest-file")
+async def api_ingest_file(file: UploadFile = File(...)):
+    """Accept any file and ingest its text. PDF, .docx, and plain text supported."""
+    import tempfile, os
+    suffix = Path(file.filename or "upload").suffix.lower() or ".txt"
+    data = await file.read()
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp.write(data)
+        tmp_path = tmp.name
+
+    try:
+        from lattice.util import extract_file_text
+        try:
+            text, source_id = extract_file_text(tmp_path)
+            if file.filename:
+                source_id = source_id.replace(os.path.basename(tmp_path), file.filename)
+        except ImportError as exc:
+            return JSONResponse(status_code=501, content={"ok": False, "error": str(exc)})
+        except ValueError as exc:
+            return JSONResponse(status_code=422, content={"ok": False, "error": str(exc)})
+
+        metadata = {"observed_at": datetime.now(timezone.utc).isoformat()}
+        try:
+            result = DaemonClient().ingest_full(text, source_id, metadata=metadata)
+        except (RuntimeError, OSError):
+            return JSONResponse(status_code=503, content={"ok": False, "error": "daemon unavailable"})
+        return {
+            "ok": True,
+            "atom_ids": result.get("atom_ids", []),
+            "atoms_new": result.get("atoms_new", 0),
+            "atoms_updated": result.get("atoms_updated", 0),
+            "duplicates_skipped": result.get("duplicates_skipped", 0),
+            "filename": file.filename,
+        }
+    finally:
+        os.unlink(tmp_path)
 
 
 @app.post("/api/query")

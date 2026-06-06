@@ -50,18 +50,48 @@ def lc() -> None:
         print(" · ".join(parts))
         return
 
-    text = " ".join(sys.argv[1:])
+    arg = " ".join(sys.argv[1:])
+
+    # If the argument is a path to an existing file, extract its text
+    from pathlib import Path as _Path
+    _arg_path = _Path(arg)
+    source_id = "lc"
+    if _arg_path.exists() and _arg_path.is_file():
+        from lattice.util import extract_file_text
+        try:
+            text, source_id = extract_file_text(_arg_path)
+        except ImportError as exc:
+            print(str(exc), file=sys.stderr)
+            sys.exit(1)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            sys.exit(1)
+    else:
+        text = arg
 
     from lattice.client import DaemonClient
     try:
-        atom_ids = DaemonClient().ingest(text, source_id="lc")
+        result = DaemonClient().ingest_full(text, source_id=source_id)
     except (RuntimeError, OSError):
         print("Lattice daemon not running. Start with: lattice-daemon", file=sys.stderr)
         sys.exit(1)
 
-    print(f"Saved. {len(atom_ids)} new thing{'s' if len(atom_ids) != 1 else ''} added to your memory.")
+    added   = result.get("atoms_new", 0)
+    updated = result.get("atoms_updated", 0)
+    skipped = result.get("duplicates_skipped", 0)
+
+    s = lambda n: "s" if n != 1 else ""
+    if added == 0 and updated == 0:
+        print("Already knew all of this — nothing new.")
+    elif added and updated:
+        print(f"Saved. {added} new idea{s(added)} picked up, {updated} refreshed with newer info.")
+    elif added:
+        print(f"Saved. {added} new idea{s(added)} added to your memory.")
+    else:
+        print(f"Saved. {updated} thing{s(updated)} refreshed with newer info.")
 
     # Topic depth check — notify once per subject when threshold crossed
+    atom_ids = result.get("atom_ids", [])
     if atom_ids:
         import json as _json
         from pathlib import Path as _Path

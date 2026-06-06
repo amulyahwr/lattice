@@ -191,13 +191,18 @@ async def _do_capture(update, context, text: str) -> None:
         from lattice.db import LatticeDB
         from lattice.config import Config
         client = DaemonClient()
-        atom_ids = client.ingest(text, source_id="telegram")
-        n = len(atom_ids)
-        if n == 0:
+        result = client.ingest_full(text, source_id="telegram")
+        atom_ids = result.get("atom_ids", [])
+        added   = result.get("atoms_new", 0)
+        updated = result.get("atoms_updated", 0)
+        if added == 0 and updated == 0:
             await update.message.reply_text("Got it — nothing new to add, looks like this is already in there.")
         else:
             _append_history(context, "user", text)
-            await update.message.reply_text(f"Saved. {n} new thing{'s' if n != 1 else ''} added to your memory.")
+            parts = []
+            if added:   parts.append(f"{added} new thing{'s' if added != 1 else ''}")
+            if updated: parts.append(f"{updated} updated")
+            await update.message.reply_text(f"Saved. {', '.join(parts)}.")
             # Topic depth check for newly created atoms
             try:
                 db = LatticeDB(Config.from_env().lattice_dir)
@@ -453,7 +458,7 @@ async def _handle_save(update, context) -> None:
     chunk = "\n".join(f"{h['role']}: {h['text']}" for h in history)
     try:
         from lattice.client import DaemonClient
-        atom_ids = DaemonClient().ingest(chunk, source_id="telegram")
+        result = DaemonClient().ingest_full(chunk, source_id="telegram"); atom_ids = result.get("atom_ids", [])
         context.chat_data["history"] = []
         n = len(atom_ids)
         if n == 0:
@@ -501,10 +506,70 @@ async def _handle_status(update, context) -> None:
         await update.message.reply_text("Couldn't reach your Lattice store. Try again in a moment.")
 
 
+async def _handle_document(update, context) -> None:
+    """Handle PDF (and .txt/.md) document uploads."""
+    if not _is_allowed(update):
+        return
+    doc = update.message.document
+    if not doc:
+        await update.message.reply_text("I can only handle text and PDF files for now.")
+        return
+
+    fname = doc.file_name or "upload"
+    suffix = ("." + fname.rsplit(".", 1)[-1].lower()) if "." in fname else ""
+
+    await update.message.reply_text("Got it — reading the file now…")
+
+    import tempfile, os
+    try:
+        tg_file = await doc.get_file()
+        with tempfile.NamedTemporaryFile(suffix=suffix or ".bin", delete=False) as tmp:
+            await tg_file.download_to_drive(tmp.name)
+            tmp_path = tmp.name
+    except Exception:
+        log.exception("telegram: failed to download document")
+        await update.message.reply_text("Couldn't download the file. Try again in a moment.")
+        return
+
+    try:
+        from lattice.util import extract_file_text
+        try:
+            text, source_id = extract_file_text(tmp_path)
+            # Restore original filename in source_id
+            source_id = source_id.replace(os.path.basename(tmp_path), fname) if fname != "upload" else source_id
+        except ImportError as exc:
+            await update.message.reply_text(str(exc))
+            return
+        except ValueError as exc:
+            await update.message.reply_text(str(exc))
+            return
+    finally:
+        os.unlink(tmp_path)
+
+    chat_id = update.effective_chat.id
+    try:
+        from lattice.client import DaemonClient
+        result = DaemonClient().ingest_full(text, source_id=source_id)
+        added   = result.get("atoms_new", 0)
+        updated = result.get("atoms_updated", 0)
+        s = lambda n: "s" if n != 1 else ""
+        if added == 0 and updated == 0:
+            await update.message.reply_text(f"Already knew all of this — {fname} is fully up to date. Nothing new.")
+        elif added and updated:
+            await update.message.reply_text(f"{fname} absorbed ✓ — {added} new idea{s(added)} picked up, {updated} refreshed with newer info.")
+        elif added:
+            await update.message.reply_text(f"{fname} absorbed ✓ — {added} new idea{s(added)} saved to your memory.")
+        else:
+            await update.message.reply_text(f"{fname} absorbed ✓ — {updated} thing{s(updated)} refreshed with newer info.")
+    except (RuntimeError, OSError):
+        _inbox_fallback(text, chat_id)
+        await update.message.reply_text(f"{fname} received. Lattice is offline — I'll process it when it's back. 📥")
+
+
 async def _handle_non_text(update, context) -> None:
     if not _is_allowed(update):
         return
-    await update.message.reply_text("I can only handle text for now — just type it out and I'll save it.")
+    await update.message.reply_text("I can only handle text and PDF files. Send a .pdf, .txt, or .md and I'll save it.")
 
 
 # --- Entry point -------------------------------------------------------------
@@ -523,7 +588,8 @@ def run(token: str) -> None:
     app.add_handler(CommandHandler("ask", _handle_ask))
     app.add_handler(CommandHandler("save", _handle_save))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_message))
-    app.add_handler(MessageHandler(~filters.TEXT, _handle_non_text))
+    app.add_handler(MessageHandler(filters.Document.ALL, _handle_document))
+    app.add_handler(MessageHandler(~filters.TEXT & ~filters.Document.ALL, _handle_non_text))
 
     log.info("Telegram bot starting (polling mode)")
     app.run_polling(
