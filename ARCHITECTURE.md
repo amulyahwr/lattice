@@ -213,7 +213,8 @@ LATTICE_DIR/
 - ✅ Memory Sparks (STORY-029) — ghost queries cycling in input placeholder; spark cards in empty state; Telegram `/start` suggestions; `lc status` topics
 - ✅ Memory Depth (STORY-030) — streak reframe ("N days deep"); grace day logic; milestone cards (Day 1/7/14/30) with cube animation; cross-channel streak in `/status`, `lc status`, `lattice_status`
 - ✅ Rediscovery highlight (STORY-032) — amber glow on citations from atoms ≥30 days old; Telegram appends old-memory note
-- Next: STORY-031 (weekly report + topic depth) → VS Code extension
+- ✅ Weekly report + topic depth (STORY-031) — `GET /api/usage/weekly`, `GET /api/topic/depth`; Monday report card in web UI; topic depth cards at 5/10/20 atoms; cross-channel (Telegram weekly summary, lc topic depth, `notified_depths.json`)
+- Next: STORY-014 (PDF parser) → STORY-033 (PII scrubbing) → STORY-034 (lattice export) → VS Code extension
 
 See STORIES.md for acceptance criteria and FEATURES.md for rationale.
 

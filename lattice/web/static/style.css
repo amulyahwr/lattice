@@ -598,6 +598,12 @@ header h1 {
 
 .milestone-dismiss:hover { color: var(--text); }
 
+.weekly-report-body { display: flex; flex-direction: column; gap: 3px; }
+.weekly-report-title { font-size: 0.7rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-dim); }
+.weekly-report-lines { font-size: 0.82rem; color: var(--text); line-height: 1.5; }
+
+.topic-depth-card { border-left: 3px solid var(--accent); }
+
 /* ── cube milestone burst ────────────────────────────────────────────────── */
 
 @keyframes cubeBurst {

@@ -637,6 +637,9 @@ async function ask(question) {
           bindCopyBtn(turn, evt.answer);
           loadRecentAtoms();
           loadUsageSummary({ checkMilestone: true });
+          // Topic depth check for cited subjects
+          const citedSubjects = [...new Set(citedAtoms.map(a => a.subject).filter(Boolean))];
+          if (citedSubjects.length) checkTopicDepth(citedSubjects);
           sessionQA.push({ question, answer: evt.answer });
           saveSessionBtn.disabled = false;
 
@@ -758,6 +761,90 @@ async function loadUsageSummary({ checkMilestone = false } = {}) {
   }
 }
 
+// ── weekly report ─────────────────────────────────────────────────────────
+
+function _isoWeek(d) {
+  // Returns "YYYY-Www" for a given Date
+  const jan4 = new Date(d.getFullYear(), 0, 4);
+  const weekNum = Math.ceil(((d - jan4) / 86400000 + jan4.getDay() + 1) / 7);
+  return `${d.getFullYear()}-W${String(weekNum).padStart(2, '0')}`;
+}
+
+async function loadWeeklyReport() {
+  try {
+    const now = new Date();
+    if (now.getDay() !== 1) return; // Monday only
+    const weekKey = `lattice_weekly_report_${_isoWeek(now)}`;
+    if (localStorage.getItem(weekKey)) return;
+
+    const resp = await fetch('/api/usage/weekly');
+    if (!resp.ok) return;
+    const data = await resp.json();
+    if (data.streak < 7) return; // only after first full week
+
+    localStorage.setItem(weekKey, '1');
+
+    const topicLine = data.top_topic ? `Most on your mind: ${data.top_topic}` : '';
+    const newLine = data.new_topics?.length ? `Something new: ${data.new_topics[0]}` : '';
+    const streakLine = data.streak ? `${data.streak} days deep.` : '';
+    const body = [
+      `${data.atoms_this_week} things saved · ${data.recalls_this_week} questions asked · ${data.topics_this_week} topics`,
+      topicLine, newLine, streakLine,
+    ].filter(Boolean).join('\n');
+
+    const card = document.createElement('div');
+    card.className = 'milestone-card weekly-report-card';
+    card.innerHTML = `
+      <div class="weekly-report-body">
+        <div class="weekly-report-title">This week</div>
+        <div class="weekly-report-lines">${escHtml(body).replace(/\n/g, '<br>')}</div>
+      </div>
+      <button class="milestone-dismiss" aria-label="Dismiss">✕</button>`;
+    card.querySelector('.milestone-dismiss').addEventListener('click', () => card.remove());
+
+    const emptyState = history.querySelector('.empty-state');
+    if (emptyState) emptyState.insertAdjacentElement('afterend', card);
+    else history.prepend(card);
+  } catch {
+    // non-critical
+  }
+}
+
+// ── topic depth ───────────────────────────────────────────────────────────
+
+const _DEPTH_THRESHOLDS = [
+  [20, "This is one of the things you know best."],
+  [10, "You've thought about this a lot."],
+  [5,  "That's a topic you know well."],
+];
+
+async function checkTopicDepth(subjects) {
+  for (const subject of subjects) {
+    if (!subject) continue;
+    const key = `lattice_topic_depth_${subject.toLowerCase().replace(/\s+/g, '_')}`;
+    if (localStorage.getItem(key)) continue;
+
+    try {
+      const resp = await fetch(`/api/topic/depth?subject=${encodeURIComponent(subject)}`);
+      if (!resp.ok) continue;
+      const { count } = await resp.json();
+      const hit = _DEPTH_THRESHOLDS.find(([t]) => count >= t);
+      if (!hit) continue;
+      localStorage.setItem(key, String(hit[0]));
+
+      const card = document.createElement('div');
+      card.className = 'milestone-card topic-depth-card';
+      card.innerHTML = `
+        <span class="milestone-msg">You've saved ${count} things about <em>${escHtml(subject)}</em>. ${escHtml(hit[1])}</span>
+        <button class="milestone-dismiss" aria-label="Dismiss">✕</button>`;
+      card.querySelector('.milestone-dismiss').addEventListener('click', () => card.remove());
+      history.appendChild(card);
+    } catch {
+      // non-critical
+    }
+  }
+}
+
 // ── save session ──────────────────────────────────────────────────────────
 
 saveSessionBtn.addEventListener('click', async () => {
@@ -795,6 +882,7 @@ initScrollBtn();
 checkDaemonStatus();
 loadRecentAtoms();
 loadUsageSummary();
+loadWeeklyReport();
 setInterval(loadRecentAtoms, 15000);
 setInterval(checkDaemonStatus, 30000);
 input.focus();
