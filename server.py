@@ -47,7 +47,8 @@ class _IngestMetadata(BaseModel):
 
 
 class _IngestArgs(BaseModel):
-    source: str
+    source: str = ""
+    file_path: str | None = None  # optional — if set, read file instead of source
     metadata: _IngestMetadata = Field(default_factory=_IngestMetadata)
     model_config = {"extra": "ignore"}
 
@@ -122,7 +123,16 @@ async def list_tools() -> list[Tool]:
                         "description": (
                             "Raw text to ingest. Either a single fact (mode A) or "
                             "role-tagged conversation turns (mode B): "
-                            "'user: <text>\\nassistant: <text>'."
+                            "'user: <text>\\nassistant: <text>'. "
+                            "Omit when file_path is provided."
+                        ),
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": (
+                            "Optional absolute path to a local .pdf, .txt, or .md file. "
+                            "When set, source is ignored and the file is read and ingested directly. "
+                            "PDF text is extracted automatically. Image-only PDFs are rejected."
                         ),
                     },
                     "metadata": {
@@ -230,6 +240,21 @@ async def list_tools() -> list[Tool]:
 async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
     if name == "lattice_ingest":
         args = _IngestArgs.model_validate(arguments)
+
+        # file_path mode: read/extract from a local file instead of inline source text
+        if args.file_path:
+            fp = Path(args.file_path)
+            if not fp.exists():
+                return [TextContent(type="text", text=json.dumps({"error": f"file not found: {args.file_path}"}))]
+            from lattice.util import extract_file_text
+            try:
+                args.source, source_id = extract_file_text(fp)
+                args.metadata.source_id = source_id
+            except ImportError as exc:
+                return [TextContent(type="text", text=json.dumps({"error": str(exc)}))]
+            except ValueError as exc:
+                return [TextContent(type="text", text=json.dumps({"error": str(exc)}))]
+
         meta = args.metadata.model_dump(exclude_none=False)
         client = DaemonClient()
         if client.ping():

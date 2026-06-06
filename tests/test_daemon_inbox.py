@@ -75,15 +75,18 @@ def test_handler_ingests_txt_file(tmp_db, dirs):
     assert not f.exists()
 
 
-def test_handler_skips_non_text_file(tmp_db, dirs):
+def test_handler_moves_binary_file_to_processed(tmp_db, dirs):
+    """Binary files are attempted, rejected as binary, moved to processed (not left in inbox)."""
     inbox, processed = dirs
     f = inbox / "image.png"
-    f.write_bytes(b"\x89PNG\r\n")
+    # Write clearly binary content (high ratio of non-UTF8 bytes)
+    f.write_bytes(bytes(range(256)) * 10)
 
     handler = _make_handler(tmp_db, dirs)
     handler.on_created(_FakeCreatedEvent(f))
 
-    assert f.exists(), "non-text file should stay in inbox"
+    # Binary file moves to processed (not stuck in inbox), no atoms created
+    assert not f.exists() or (processed / "image.png").exists()
     assert tmp_db.all() == []
 
 

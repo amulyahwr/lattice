@@ -47,6 +47,7 @@ then call `sum_numbers` with those values to get the exact total — do not add 
 - If atoms only partially answer the question, give a best-effort answer and note the specific gap briefly.
 - If the atoms are present but NOT relevant to the question, respond with exactly the token: \
 <<NO_INFO>> — nothing else, no explanation, no list of what IS stored.
+- Never assume gender. Use the person's name or they/their when gender is not explicitly stated in the atoms.
 - Be concise: one to three paragraphs at most.
 """
 

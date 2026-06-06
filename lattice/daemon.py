@@ -127,7 +127,13 @@ def _dispatch(msg: dict) -> dict:
                 "duration_ms": duration_ms,
             },
         )
-        return {"ok": True, "atom_ids": result.get("atom_ids", [])}
+        return {
+            "ok": True,
+            "atom_ids": result.get("atom_ids", []),
+            "atoms_new": result.get("atoms_new", 0),
+            "atoms_updated": result.get("atoms_updated", 0),
+            "duplicates_skipped": result.get("duplicates_skipped", 0),
+        }
     return {"ok": False, "error": f"unknown op: {op!r}"}
 
 
@@ -135,7 +141,7 @@ def _dispatch(msg: dict) -> dict:
 # Inbox watcher
 # ---------------------------------------------------------------------------
 
-_TEXT_SUFFIXES = {".txt", ".md"}
+# No extension whitelist — all files attempted; binary files rejected at read time
 
 # Filename pattern for telegram inbox files: telegram-{chat_id}-{uuid}.txt
 _TELEGRAM_INBOX_PREFIX = "telegram-"
@@ -182,13 +188,20 @@ class InboxEventHandler(FileSystemEventHandler):
 
     def _handle_path(self, path: str) -> None:
         p = Path(path)
-        if p.suffix.lower() not in _TEXT_SUFFIXES:
-            log.warning("inbox: skipping non-text file %s", p.name)
-            return
         try:
-            text = p.read_text(encoding="utf-8", errors="replace")
+            from lattice.util import extract_file_text
+            try:
+                text, source_id = extract_file_text(p)
+            except ImportError as exc:
+                log.error("inbox: missing optional dep for %s — %s", p.name, exc)
+                return
+            except ValueError as exc:
+                log.warning("inbox: skipping %s — %s", p.name, exc)
+                dest = self._processed_dir / p.name
+                shutil.move(str(p), str(dest))
+                return
             from lattice.ingest import ingest
-            result = ingest(text, metadata={"source_id": p.name}, db=self._db)
+            result = ingest(text, metadata={"source_id": source_id}, db=self._db)
             atom_count = result.get("atoms_created", 0)
             log.info(
                 "inbox: ingested %s atoms from %s",
@@ -213,10 +226,7 @@ class InboxEventHandler(FileSystemEventHandler):
 
 def _drain_inbox(handler: InboxEventHandler, cfg: Config) -> None:
     """Process any files already sitting in the inbox at startup."""
-    existing = [
-        p for p in cfg.inbox_dir.iterdir()
-        if p.is_file() and p.suffix.lower() in _TEXT_SUFFIXES
-    ]
+    existing = [p for p in cfg.inbox_dir.iterdir() if p.is_file()]
     if existing:
         log.info("inbox: draining %d pre-existing file(s) at startup", len(existing))
     for p in existing:

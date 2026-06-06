@@ -20,7 +20,7 @@ class TestApiIngest:
     # --- positive ---
     def test_returns_ok_and_atom_ids(self):
         with patch("lattice.web.app.DaemonClient") as mock_cls:
-            mock_cls.return_value.ingest.return_value = ["atom-1", "atom-2"]
+            mock_cls.return_value.ingest_full.return_value = {"atom_ids": ["atom-1", "atom-2"], "atoms_new": 2, "atoms_updated": 0, "duplicates_skipped": 0}
             resp = client.post("/api/ingest", json={"text": "I prefer dark coffee"})
         assert resp.status_code == 200
         body = resp.json()
@@ -29,50 +29,50 @@ class TestApiIngest:
 
     def test_default_source_id_is_http(self):
         with patch("lattice.web.app.DaemonClient") as mock_cls:
-            mock_cls.return_value.ingest.return_value = []
+            mock_cls.return_value.ingest_full.return_value = {"atom_ids": [], "atoms_new": 0, "atoms_updated": 0, "duplicates_skipped": 0}
             client.post("/api/ingest", json={"text": "test"})
-            call_args = mock_cls.return_value.ingest.call_args
+            call_args = mock_cls.return_value.ingest_full.call_args
             assert call_args[0][1] == "http" or call_args[1].get("source_id") == "http"
 
     def test_custom_source_id_passed_through(self):
         with patch("lattice.web.app.DaemonClient") as mock_cls:
-            mock_cls.return_value.ingest.return_value = []
+            mock_cls.return_value.ingest_full.return_value = {"atom_ids": [], "atoms_new": 0, "atoms_updated": 0, "duplicates_skipped": 0}
             client.post("/api/ingest", json={"text": "test", "source_id": "vscode"})
-            call_args = mock_cls.return_value.ingest.call_args
+            call_args = mock_cls.return_value.ingest_full.call_args
             assert "vscode" in str(call_args)
 
     def test_observed_at_stamped_in_metadata(self):
         with patch("lattice.web.app.DaemonClient") as mock_cls:
-            mock_cls.return_value.ingest.return_value = []
+            mock_cls.return_value.ingest_full.return_value = {"atom_ids": [], "atoms_new": 0, "atoms_updated": 0, "duplicates_skipped": 0}
             client.post("/api/ingest", json={"text": "test"})
-            call_args = mock_cls.return_value.ingest.call_args
+            call_args = mock_cls.return_value.ingest_full.call_args
             assert "observed_at" in str(call_args)
 
     def test_metadata_passthrough(self):
         with patch("lattice.web.app.DaemonClient") as mock_cls:
-            mock_cls.return_value.ingest.return_value = []
+            mock_cls.return_value.ingest_full.return_value = {"atom_ids": [], "atoms_new": 0, "atoms_updated": 0, "duplicates_skipped": 0}
             client.post("/api/ingest", json={
                 "text": "test",
                 "metadata": {"title": "My Page", "url": "https://example.com"}
             })
-            call_args = mock_cls.return_value.ingest.call_args
+            call_args = mock_cls.return_value.ingest_full.call_args
             assert "My Page" in str(call_args)
 
     def test_caller_observed_at_overwritten_by_server(self):
         """Caller-supplied observed_at must be replaced by server clock."""
         with patch("lattice.web.app.DaemonClient") as mock_cls:
-            mock_cls.return_value.ingest.return_value = []
+            mock_cls.return_value.ingest_full.return_value = {"atom_ids": [], "atoms_new": 0, "atoms_updated": 0, "duplicates_skipped": 0}
             client.post("/api/ingest", json={
                 "text": "test",
                 "metadata": {"observed_at": "2000-01-01T00:00:00+00:00"}
             })
-            call_args = mock_cls.return_value.ingest.call_args
+            call_args = mock_cls.return_value.ingest_full.call_args
             metadata = call_args[1].get("metadata", {})
             assert metadata.get("observed_at") != "2000-01-01T00:00:00+00:00"
 
     def test_zero_atom_ids_returns_ok(self):
         with patch("lattice.web.app.DaemonClient") as mock_cls:
-            mock_cls.return_value.ingest.return_value = []
+            mock_cls.return_value.ingest_full.return_value = {"atom_ids": [], "atoms_new": 0, "atoms_updated": 0, "duplicates_skipped": 0}
             resp = client.post("/api/ingest", json={"text": "test"})
         assert resp.status_code == 200
         assert resp.json()["atom_ids"] == []
@@ -80,7 +80,7 @@ class TestApiIngest:
     # --- negative / edge ---
     def test_daemon_down_returns_503(self):
         with patch("lattice.web.app.DaemonClient") as mock_cls:
-            mock_cls.return_value.ingest.side_effect = OSError("no socket")
+            mock_cls.return_value.ingest_full.side_effect = OSError("no socket")
             resp = client.post("/api/ingest", json={"text": "test"})
         assert resp.status_code == 503
         body = resp.json()
@@ -89,7 +89,7 @@ class TestApiIngest:
 
     def test_runtime_error_returns_503(self):
         with patch("lattice.web.app.DaemonClient") as mock_cls:
-            mock_cls.return_value.ingest.side_effect = RuntimeError("ingest failed")
+            mock_cls.return_value.ingest_full.side_effect = RuntimeError("ingest failed")
             resp = client.post("/api/ingest", json={"text": "test"})
         assert resp.status_code == 503
 
@@ -103,7 +103,7 @@ class TestApiIngest:
 
     def test_empty_text_still_accepted(self):
         with patch("lattice.web.app.DaemonClient") as mock_cls:
-            mock_cls.return_value.ingest.return_value = []
+            mock_cls.return_value.ingest_full.return_value = {"atom_ids": [], "atoms_new": 0, "atoms_updated": 0, "duplicates_skipped": 0}
             resp = client.post("/api/ingest", json={"text": ""})
         assert resp.status_code == 200
 
@@ -114,7 +114,7 @@ class TestApiIngest:
     def test_503_body_structure(self):
         """503 body must always have ok=False and error field."""
         with patch("lattice.web.app.DaemonClient") as mock_cls:
-            mock_cls.return_value.ingest.side_effect = OSError("gone")
+            mock_cls.return_value.ingest_full.side_effect = OSError("gone")
             resp = client.post("/api/ingest", json={"text": "test"})
         body = resp.json()
         assert "ok" in body
@@ -131,7 +131,7 @@ class TestLcCli:
         import lattice.cli as cli_mod
         with patch.object(sys, "argv", ["lc", "I prefer dark coffee"]):
             with patch("lattice.client.DaemonClient") as mock_cls:
-                mock_cls.return_value.ingest.return_value = ["atom-1"]
+                mock_cls.return_value.ingest_full.return_value = {"atom_ids": ["atom-1"], "atoms_new": 1, "atoms_updated": 0, "duplicates_skipped": 0}
                 cli_mod.lc()
         captured = capsys.readouterr()
         assert "Saved" in captured.out
@@ -141,29 +141,29 @@ class TestLcCli:
         import lattice.cli as cli_mod
         with patch.object(sys, "argv", ["lc", "test"]):
             with patch("lattice.client.DaemonClient") as mock_cls:
-                mock_cls.return_value.ingest.return_value = ["a1", "a2"]
+                mock_cls.return_value.ingest_full.return_value = {"atom_ids": ["a1", "a2"], "atoms_new": 2, "atoms_updated": 0, "duplicates_skipped": 0}
                 cli_mod.lc()
         captured = capsys.readouterr()
         assert "2" in captured.out
-        assert "things" in captured.out
+        assert "ideas" in captured.out
 
     def test_capture_singular_grammar(self, capsys):
         import lattice.cli as cli_mod
         with patch.object(sys, "argv", ["lc", "test"]):
             with patch("lattice.client.DaemonClient") as mock_cls:
-                mock_cls.return_value.ingest.return_value = ["a1"]
+                mock_cls.return_value.ingest_full.return_value = {"atom_ids": ["a1"], "atoms_new": 1, "atoms_updated": 0, "duplicates_skipped": 0}
                 cli_mod.lc()
         captured = capsys.readouterr()
-        assert "thing" in captured.out
-        assert "things" not in captured.out
+        assert "1 new idea" in captured.out
+        assert "ideas" not in captured.out
 
     def test_capture_multiword_text_joined(self, capsys):
         import lattice.cli as cli_mod
         with patch.object(sys, "argv", ["lc", "decided", "to", "use", "postgres"]):
             with patch("lattice.client.DaemonClient") as mock_cls:
-                mock_cls.return_value.ingest.return_value = ["a1"]
+                mock_cls.return_value.ingest_full.return_value = {"atom_ids": ["a1"], "atoms_new": 1, "atoms_updated": 0, "duplicates_skipped": 0}
                 cli_mod.lc()
-        call_args = mock_cls.return_value.ingest.call_args
+        call_args = mock_cls.return_value.ingest_full.call_args
         assert call_args[0][0] == "decided to use postgres"
 
     def test_status_returns_count(self, tmp_path, capsys, monkeypatch):
@@ -236,7 +236,7 @@ class TestLcCli:
         import lattice.cli as cli_mod
         with patch.object(sys, "argv", ["lc", "test"]):
             with patch("lattice.client.DaemonClient") as mock_cls:
-                mock_cls.return_value.ingest.side_effect = OSError("no socket")
+                mock_cls.return_value.ingest_full.side_effect = OSError("no socket")
                 with pytest.raises(SystemExit) as exc:
                     cli_mod.lc()
         assert exc.value.code == 1
@@ -247,7 +247,7 @@ class TestLcCli:
         import lattice.cli as cli_mod
         with patch.object(sys, "argv", ["lc", "test"]):
             with patch("lattice.client.DaemonClient") as mock_cls:
-                mock_cls.return_value.ingest.side_effect = RuntimeError("failed")
+                mock_cls.return_value.ingest_full.side_effect = RuntimeError("failed")
                 with pytest.raises(SystemExit) as exc:
                     cli_mod.lc()
         assert exc.value.code == 1
@@ -257,7 +257,7 @@ class TestLcCli:
         import lattice.cli as cli_mod
         with patch.object(sys, "argv", ["lc", "test"]):
             with patch("lattice.client.DaemonClient") as mock_cls:
-                mock_cls.return_value.ingest.return_value = []
+                mock_cls.return_value.ingest_full.return_value = {"atom_ids": [], "atoms_new": 0, "atoms_updated": 0, "duplicates_skipped": 0}
                 cli_mod.lc()  # must not raise
         captured = capsys.readouterr()
-        assert "0" in captured.out
+        assert "nothing new" in captured.out.lower() or "up to date" in captured.out.lower()

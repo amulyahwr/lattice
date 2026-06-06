@@ -4,6 +4,7 @@ import json
 import os
 import re
 import tempfile
+import threading
 from datetime import date
 from pathlib import Path
 
@@ -40,6 +41,11 @@ class LatticeDB:
         self._subjects_cache: dict[str, str] | None = None
         self._graph: LatticeGraph = LatticeGraph()
         self._bm25_cache: tuple[frozenset, object, list] | None = None
+        self._lock = threading.RLock()
+
+    @property
+    def lock(self) -> threading.RLock:
+        return self._lock
 
     @property
     def _subjects_file(self) -> Path:
@@ -48,21 +54,23 @@ class LatticeDB:
     # ── subject registry ──────────────────────────────────────────────────
 
     def _load_subjects(self) -> dict[str, str]:
-        if self._subjects_cache is not None:
-            return self._subjects_cache
-        data = json.loads(self._subjects_file.read_text()) if self._subjects_file.exists() else {}
-        self._subjects_cache = data
-        return data
+        with self._lock:
+            if self._subjects_cache is not None:
+                return self._subjects_cache
+            data = json.loads(self._subjects_file.read_text()) if self._subjects_file.exists() else {}
+            self._subjects_cache = data
+            return data
 
     def register_subject(self, subject: str, atom_id: str) -> str | None:
         """Map subject → atom_id. Returns displaced atom_id if subject already existed."""
-        key = subject.lower().strip()
-        subjects = self._load_subjects()
-        old_id = subjects.get(key)
-        subjects[key] = atom_id
-        _write_json_atomic(self._subjects_file, subjects)
-        self._subjects_cache = subjects
-        return old_id if old_id != atom_id else None
+        with self._lock:
+            key = subject.lower().strip()
+            subjects = self._load_subjects()
+            old_id = subjects.get(key)
+            subjects[key] = atom_id
+            _write_json_atomic(self._subjects_file, subjects)
+            self._subjects_cache = subjects
+            return old_id if old_id != atom_id else None
 
     def lookup_subject(self, subject: str) -> str | None:
         return self._load_subjects().get(subject.lower().strip())
@@ -84,51 +92,54 @@ class LatticeDB:
     # ── write ─────────────────────────────────────────────────────────────
 
     def write(self, atom: Atom) -> None:
-        text = atom.to_markdown()
-        path = self._path(atom.atom_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", text=True)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(text)
-            Path(tmp_name).replace(path)
-        finally:
-            tmp = Path(tmp_name)
-            if tmp.exists():
-                tmp.unlink()
-        self._atom_cache[atom.atom_id] = atom
-        self._bm25_cache = None
-        if self._graph is not None:
-            self._graph.add_atom(atom)
-            self._graph.save(self.dir)
+        with self._lock:
+            text = atom.to_markdown()
+            path = self._path(atom.atom_id)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", text=True)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(text)
+                Path(tmp_name).replace(path)
+            finally:
+                tmp = Path(tmp_name)
+                if tmp.exists():
+                    tmp.unlink()
+            self._atom_cache[atom.atom_id] = atom
+            self._bm25_cache = None
+            if self._graph is not None:
+                self._graph.add_atom(atom)
+                self._graph.save(self.dir)
 
     def _write_no_graph_save(self, atom: Atom) -> None:
-        text = atom.to_markdown()
-        path = self._path(atom.atom_id)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", text=True)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(text)
-            Path(tmp_name).replace(path)
-        finally:
-            tmp = Path(tmp_name)
-            if tmp.exists():
-                tmp.unlink()
-        self._atom_cache[atom.atom_id] = atom
-        self._bm25_cache = None
+        with self._lock:
+            text = atom.to_markdown()
+            path = self._path(atom.atom_id)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", text=True)
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as f:
+                    f.write(text)
+                Path(tmp_name).replace(path)
+            finally:
+                tmp = Path(tmp_name)
+                if tmp.exists():
+                    tmp.unlink()
+            self._atom_cache[atom.atom_id] = atom
+            self._bm25_cache = None
 
     # ── read ──────────────────────────────────────────────────────────────
 
     def read(self, atom_id: str) -> Atom:
-        if atom_id in self._atom_cache:
-            return self._atom_cache[atom_id]
-        p = self._path(atom_id)
-        if not p.exists():
-            raise AtomNotFound(atom_id)
-        atom = Atom.from_markdown(p.read_text(encoding="utf-8"))
-        self._atom_cache[atom_id] = atom
-        return atom
+        with self._lock:
+            if atom_id in self._atom_cache:
+                return self._atom_cache[atom_id]
+            p = self._path(atom_id)
+            if not p.exists():
+                raise AtomNotFound(atom_id)
+            atom = Atom.from_markdown(p.read_text(encoding="utf-8"))
+            self._atom_cache[atom_id] = atom
+            return atom
 
     def preload_if_stale(self) -> None:
         """O(1) hot path: one manifest read. Falls through to preload() only when atom_count changed."""
@@ -203,16 +214,17 @@ class LatticeDB:
     # ── supersession ──────────────────────────────────────────────────────
 
     def supersede(self, old_id: str, new_atom: Atom) -> None:
-        old = self.read(old_id)
-        old.is_superseded = True
-        old.superseded_by = new_atom.atom_id
-        self._write_no_graph_save(old)
-        new_atom.supersedes = old_id
-        self._write_no_graph_save(new_atom)
-        self._graph.add_atom(old)
-        self._graph.add_atom(new_atom)
-        self._graph.mark_superseded(old_id, new_atom.atom_id)
-        self._graph.save(self.dir)
+        with self._lock:
+            old = self.read(old_id)
+            old.is_superseded = True
+            old.superseded_by = new_atom.atom_id
+            self._write_no_graph_save(old)
+            new_atom.supersedes = old_id
+            self._write_no_graph_save(new_atom)
+            self._graph.add_atom(old)
+            self._graph.add_atom(new_atom)
+            self._graph.mark_superseded(old_id, new_atom.atom_id)
+            self._graph.save(self.dir)
 
     @property
     def graph(self) -> LatticeGraph:
@@ -356,13 +368,14 @@ class LatticeDB:
         return pack
 
     def _get_bm25(self, atoms: list[Atom]) -> tuple[object, list[Atom]]:
-        key = frozenset(a.atom_id for a in atoms)
-        if self._bm25_cache is not None and self._bm25_cache[0] == key:
-            return self._bm25_cache[1], self._bm25_cache[2]
-        corpus = [_query_words(f"{a.subject} {a.content}") for a in atoms]
-        bm25 = BM25Okapi(corpus)
-        self._bm25_cache = (key, bm25, atoms)
-        return bm25, atoms
+        with self._lock:
+            key = frozenset(a.atom_id for a in atoms)
+            if self._bm25_cache is not None and self._bm25_cache[0] == key:
+                return self._bm25_cache[1], self._bm25_cache[2]
+            corpus = [_query_words(f"{a.subject} {a.content}") for a in atoms]
+            bm25 = BM25Okapi(corpus)
+            self._bm25_cache = (key, bm25, atoms)
+            return bm25, atoms
 
     # ── search ────────────────────────────────────────────────────────────
 

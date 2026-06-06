@@ -8,6 +8,10 @@ const KIND_ICON = {
   goal:           '◎',
   recommendation: '★',
   event:          '◷',
+  decision:       '◈',
+  habit:          '↻',
+  reminder:       '◌',
+  count:          '#',
 };
 
 const CIRCUMFERENCE = 2 * Math.PI * 10; // 62.83 — matches r=10 in SVG
@@ -37,6 +41,8 @@ const memCount       = document.getElementById('memory-count');
 const greetingEl     = document.getElementById('greeting');
 const saveSessionBtn = document.getElementById('save-session');
 const streakBadge    = document.getElementById('streak-badge');
+const fileUpload     = document.getElementById('file-upload');
+const uploadProgress = document.getElementById('upload-progress');
 
 // ── theme ─────────────────────────────────────────────────────────────────
 
@@ -333,14 +339,53 @@ function renderAtomsList(atoms) {
       </div>`;
     return;
   }
-  atomsList.innerHTML = atoms.slice(0, 20).map(a => `
-    <div class="atom-item">
-      <div class="atom-subject">${escHtml(a.subject || '(no subject)')}</div>
-      <div class="atom-meta">
-        <span class="atom-kind" data-kind="${escHtml(a.kind || 'fact')}">${kindIcon(a.kind)} ${escHtml(a.kind || 'fact')}</span>
-        <span class="atom-time">${relativeTime(a.observed_at)}</span>
-      </div>
-    </div>`).join('');
+
+  // Group by kind, preserving recency order within each group
+  const kindOrder = ['preference', 'decision', 'fact', 'goal', 'event', 'habit', 'reminder', 'count'];
+  const groups = {};
+  for (const a of atoms) {
+    const k = a.kind || 'fact';
+    if (!groups[k]) groups[k] = [];
+    groups[k].push(a);
+  }
+
+  // Sort groups: known kinds first in defined order, then unknowns alphabetically
+  const sortedKinds = [
+    ...kindOrder.filter(k => groups[k]),
+    ...Object.keys(groups).filter(k => !kindOrder.includes(k)).sort(),
+  ];
+
+  // Preserve expanded state across re-renders
+  const expanded = new Set(
+    [...atomsList.querySelectorAll('.kind-group.open')].map(el => el.dataset.kind)
+  );
+
+  atomsList.innerHTML = sortedKinds.map(kind => {
+    const items = groups[kind];
+    const isOpen = expanded.size === 0 ? true : expanded.has(kind); // default all open on first render
+    const rows = items.map(a => `
+      <div class="atom-item">
+        <div class="atom-subject">${escHtml(a.subject || '(no subject)')}</div>
+        <div class="atom-time">${relativeTime(a.observed_at)}</div>
+      </div>`).join('');
+    return `
+      <div class="kind-group ${isOpen ? 'open' : ''}" data-kind="${escHtml(kind)}">
+        <button class="kind-header">
+          <span class="kind-icon" data-kind="${escHtml(kind)}">${kindIcon(kind)}</span>
+          <span class="kind-label">${escHtml(kind.charAt(0).toUpperCase() + kind.slice(1))}</span>
+          <span class="kind-count">${items.length}</span>
+          <span class="kind-arrow">▸</span>
+        </button>
+        <div class="kind-items">${rows}</div>
+      </div>`;
+  }).join('');
+
+  // Bind toggles
+  atomsList.querySelectorAll('.kind-header').forEach(btn => {
+    btn.addEventListener('click', () => {
+      btn.closest('.kind-group').classList.toggle('open');
+    });
+  });
 }
 
 // ── memory sparks ────────────────────────────────────────────────────────
@@ -872,6 +917,83 @@ saveSessionBtn.addEventListener('click', async () => {
   } catch {
     saveSessionBtn.textContent = 'Save session';
     saveSessionBtn.disabled = false;
+  }
+});
+
+// ── file upload ───────────────────────────────────────────────────────────
+
+fileUpload.addEventListener('change', async () => {
+  const files = Array.from(fileUpload.files);
+  if (!files.length) return;
+  fileUpload.value = '';
+
+  const label = document.querySelector('.upload-btn');
+  label.classList.add('uploading');
+  uploadProgress.classList.add('active');
+
+  const prevPlaceholder = input.getAttribute('placeholder');
+  const fileWord = files.length === 1 ? files[0].name : `${files.length} files`;
+  input.setAttribute('placeholder', `Reading ${fileWord}…`);
+  input.disabled = true;
+
+  function showToast(msg, isError = false, duration = 5000) {
+    let container = document.getElementById('toast-container');
+    if (!container) {
+      container = document.createElement('div');
+      container.id = 'toast-container';
+      document.body.appendChild(container);
+    }
+    const toast = document.createElement('div');
+    toast.className = 'upload-toast' + (isError ? ' upload-toast-error' : '');
+    toast.textContent = msg;
+    container.appendChild(toast);
+    setTimeout(() => toast.remove(), duration);
+  }
+
+  function buildMsg(fname, data) {
+    const added   = data.atoms_new || 0;
+    const updated = data.atoms_updated || 0;
+    const s = n => n !== 1 ? 's' : '';
+    if (added === 0 && updated === 0) {
+      return `${fname} — already knew all of this. Nothing new.`;
+    }
+    if (added && updated) {
+      return `${fname} — ${added} new idea${s(added)} picked up, ${updated} refreshed. Your memory grew ✓`;
+    }
+    if (added) {
+      return `${fname} — ${added} new idea${s(added)} saved to your memory ✓`;
+    }
+    return `${fname} — ${updated} thing${s(updated)} refreshed with newer info ✓`;
+  }
+
+  async function uploadOne(file) {
+    const formData = new FormData();
+    formData.append('file', file);
+    const resp = await fetch('/api/ingest-file', { method: 'POST', body: formData });
+    const data = await resp.json();
+    if (!resp.ok || !data.ok) throw new Error(data.error || 'Upload failed');
+    return { file, data };
+  }
+
+  try {
+    const results = await Promise.allSettled(files.map(uploadOne));
+    let anySuccess = false;
+    for (const r of results) {
+      if (r.status === 'fulfilled') {
+        showToast(buildMsg(r.value.file.name, r.value.data));
+        anySuccess = true;
+      } else {
+        showToast(`${r.reason?.file?.name || 'File'} — ${r.reason?.message || 'upload failed'}`, true);
+      }
+    }
+    if (anySuccess) loadRecentAtoms();
+  } catch {
+    showToast('Upload failed — daemon may be offline.', true, 4000);
+  } finally {
+    label.classList.remove('uploading');
+    uploadProgress.classList.remove('active');
+    input.disabled = false;
+    input.setAttribute('placeholder', prevPlaceholder || 'Ask anything…');
   }
 });
 

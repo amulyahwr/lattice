@@ -35,6 +35,9 @@ packages = ["lattice", "server.py"]
 dev = ["pytest>=8"]
 semantic = ["fastembed>=0.4"]
 telegram = ["python-telegram-bot>=21.0"]
+pdf = ["pypdf>=4.0"]
+docx = ["python-docx>=1.0"]
+office = ["python-pptx>=1.0", "openpyxl>=3.0", "xlrd>=2.0"]
 eval = [
     "python-dotenv>=1.0",
     "tqdm>=4.0",

@@ -30,13 +30,17 @@ class DaemonClient:
 
     def ingest(self, text: str, source_id: str = "client", metadata: dict | None = None) -> list[str]:
         """Send an ingest request; return atom_ids. Raise RuntimeError on error response."""
+        return self.ingest_full(text, source_id, metadata)["atom_ids"]
+
+    def ingest_full(self, text: str, source_id: str = "client", metadata: dict | None = None) -> dict:
+        """Send an ingest request; return full result dict with new/updated/duplicate counts."""
         msg: dict = {"op": "ingest", "text": text, "source_id": source_id}
         if metadata:
             msg["metadata"] = metadata
         resp = self._send(msg)
         if not resp.get("ok"):
             raise RuntimeError(resp.get("error", "ingest failed"))
-        return resp["atom_ids"]
+        return resp
 
     # ------------------------------------------------------------------
     # Transport
