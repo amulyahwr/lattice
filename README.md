@@ -1,8 +1,71 @@
 # Lattice
 
+**Lattice is your second brain — local, structured, private, and omnipresent.**
+
 Your personal memory OS — local, private, always running. Everything you tell it becomes a typed, timestamped fact stored as plain markdown on your own machine. Ask it anything; it answers in prose with citations.
 
-Works as an MCP server so Claude and other AI assistants can read and write your memory automatically during conversations.
+---
+
+## The pitch
+
+### For everyone
+
+**The problem**
+
+Your life generates more than you can hold. Decisions, reminders, half-formed ideas, things you learned last Tuesday — most of it disappears. What if you could offload all of it to a [second brain](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) that breaks every thought into a small, typed, timestamped *memory*, and actually organizes it so you can find it again?
+
+**The gap**
+
+The right pieces exist — LLM agents that ingest, connect, and synthesize information. But every tool built on them stores your memories as flat blobs of text, with no structure and no connections. Worse, they live on someone else's server. You can't truly delete a memory. You can't see what's stored. Your second brain isn't yours.
+
+**Lattice**
+
+Memories become powerful when they connect — a decision linked to the facts that drove it, a preference linked to the experience that shaped it. Connect enough memories and you get a *lattice*: a structured graph of everything you know, living on your own device. Send a thought from your phone while commuting, find it waiting on your laptop at work, ask for it from your car on the way home — no vendor in the middle, no lock-in, no permission needed. Any device. Any OS. Any platform. Your second brain. Your memories. Your rules.
+
+---
+
+### For engineers
+
+*This is what "local, structured, private" actually means in code. What you call a memory, Lattice calls an atom.*
+
+**Ingest**
+
+Every piece of text — a Telegram message, a file dropped in an inbox folder, a Claude conversation, a terminal one-liner — enters a pipeline that segments it by source type (chat, markdown, code), then runs an LLM extraction pass to decompose it into *atoms*: typed, timestamped Pydantic models with fields like `kind`, `subject`, `content`, `valid_from`, `valid_until`, `observed_at`, and full provenance (`source_id`, `session_id`, `segment_id`). Each atom is stored as a plain `.md` file with YAML frontmatter — human-readable, git-trackable, hand-editable.
+
+**Graph**
+
+After every write, a `LatticeGraph` (networkx `MultiDiGraph`) upserts nodes and edges into committed sidecars on disk. Node types: `atom`, `source`, `segment`, `subject`. Edge types: `supersedes`, `same_subject_as`, `same_hash`, `atom_has_subject`, `source_contains_segment`. Superseded atoms stay on disk with bidirectional links — history is never deleted, only layered. The graph is the connective tissue that makes atoms more than a flat list.
+
+**Selection**
+
+Query path is deliberately LLM-free. BM25 seeds the top candidates → zero-score seeds filtered → source-diversity probe → graph BFS expands the evidence pack along supersession, subject, and provenance edges → optional BFS rescore. The result is a ranked list of atom dicts with full provenance, ready for synthesis. Fast, deterministic, auditable.
+
+**Synthesis**
+
+A streaming LLM call takes the atom pack and generates a prose answer with numbered source citations. Tool calls handle date arithmetic and aggregation. The answer streams token-by-token to the web UI via SSE. The goal is fully on-device inference via Ollama — such as [Gemma 3](https://ollama.com/library/gemma3) and [Qwen3](https://ollama.com/library/qwen3) — your thoughts never leave your machine. For devices that can't run a capable local model, OpenRouter is the supported fallback; in that case, Lattice takes responsibility for ensuring no PII reaches the API — atom content is scrubbed before leaving the device.
+
+**Architecture**
+
+A persistent daemon owns all writes — MCP server, web UI, Telegram bot, and `lc` CLI are all read-only clients that delegate over a Unix socket. The web UI runs at `localhost:7337`. Capture channels today: MCP tools (Claude Code), web UI, Telegram bot, `lc` terminal command, inbox file drop. All channels write to the same atom store; all recall channels record to `usage.jsonl` for streak tracking and feedback collection.
+
+---
+
+## How Lattice compares
+
+> ✅ Yes &nbsp;&nbsp; ⚠️ Partial / conditions apply &nbsp;&nbsp; ❌ No
+
+| | **Lattice** | **GBrain** | **ChatGPT Memory** | **Claude Projects** | **Mem0** |
+|---|---|---|---|---|---|
+| **Stays on my device?** | ✅ Always | ⚠️ Dev yes; production needs Postgres | ❌ OpenAI servers | ❌ Anthropic servers | ❌ Cloud; local needs Docker |
+| **I control deletion?** | ✅ Delete any file | ✅ | ⚠️ Via UI; 24hr delay | ⚠️ Via UI | ⚠️ Via dashboard |
+| **Works with any AI?** | ✅ Any MCP client | ⚠️ MCP yes; built for OpenClaw | ❌ GPT-only | ❌ Claude-only | ⚠️ API or MCP |
+| **Memories link together?** | ✅ Typed graph | ✅ Entity graph | ❌ Flat notes | ❌ Flat injection | ⚠️ Vector + graph |
+| **I can read my files?** | ✅ Plain `.md` files | ✅ Plain `.md` files | ⚠️ Exportable; their servers | ⚠️ Exportable; their servers | ❌ |
+| **Runs without internet?** | ✅ Ollama-first | ❌ | ❌ | ❌ | ⚠️ Needs Docker |
+| **History never deleted?** | ✅ Always | ⚠️ Timeline kept; summary rewritten | ❌ | ❌ | ⚠️ Mostly |
+| **Free & open source?** | ✅ MIT | ✅ MIT | ❌ | ❌ | ⚠️ Partial |
+
+**The one thing no competitor matches:** Lattice is the only option where memories are plain files on your machine, history is never deleted, on-device inference is the default, and zero infrastructure is required — no database, no Docker, no account.
 
 ---
 
@@ -167,7 +230,7 @@ This gives you a stable `https://xxxx.trycloudflare.com` URL. Add it as a remote
 
 ### Recall via web UI
 
-Open `http://localhost:7337`. Ask a natural language question; Lattice streams a prose answer with numbered source citations. Markdown rendering, dark mode, thumbs-up/down feedback.
+Open `http://localhost:7337`. Ask a natural language question; Lattice streams a prose answer with numbered source citations. Markdown rendering, dark mode, thumbs-up/down feedback. Streak badge ("N days deep") in header tracks consecutive days of recall. "Save session" button captures the Q&A thread as memory at the end of a session.
 
 ### Ambient ingest via inbox
 
@@ -185,7 +248,7 @@ Send any message to your Lattice bot on Telegram — it's saved as memory instan
 - **Daemon offline** → message queued to inbox, immediate reply: `Lattice is offline right now. Your message is safe — I'll confirm once it's processed. 📥`
 - **Daemon restarts** → inbox drained automatically, follow-up sent: `Back online — processed what you sent earlier. 2 things saved. ✓`
 
-Commands: `/status` to see your memory count. Bot only responds to your user ID — silently ignores everyone else.
+Commands: `/ask <question>` to recall from memory. `/save` to capture the session Q&A thread as memory. `/status` to see your memory count. Bot only responds to your user ID — silently ignores everyone else. After a `/ask` answer, bot prompts 👍/👎 feedback when the answer has low confidence (≤1 source atom).
 
 ### Terminal capture via `lc`
 
@@ -227,6 +290,7 @@ Every fact is a plain `.md` file in `LATTICE_DIR`. Hand-editable, git-trackable.
 | Memory Sparks — spark cards, ghost queries, Telegram suggestions, lc topics  | ✅ shipped |
 | Memory Depth — "N days deep" streak, grace day, milestone cards, cross-channel | ✅ shipped |
 | Rediscovery highlight — amber glow on old citations, Telegram age note       | ✅ shipped |
+| Weekly report + topic depth — Monday card, depth notifications cross-channel | ✅ shipped |
 | VS Code / Cursor extension — capture + recall from the IDE                  | Phase 2B  |
 | Browser extension — right-click selected text → save to Lattice             | Phase 2B  |
 | Apple Shortcuts — global hotkey capture (iPhone / macOS)                    | Phase 2B  |

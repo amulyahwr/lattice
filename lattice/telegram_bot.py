@@ -109,6 +109,45 @@ def _get_streak_info() -> tuple[int, bool, int]:
         return 0, False, 0
 
 
+def _get_weekly_summary() -> dict | None:
+    """Fetch weekly report data. Returns None on failure."""
+    import json
+    import urllib.request as _ur
+    port = os.environ.get("LATTICE_WEB_PORT", "7337")
+    try:
+        with _ur.urlopen(f"http://127.0.0.1:{port}/api/usage/weekly", timeout=3) as r:
+            return json.loads(r.read())
+    except Exception:
+        return None
+
+
+def _get_topic_depth(subject: str) -> int:
+    """Return atom count for a subject. Returns 0 on failure."""
+    import json
+    import urllib.request as _ur
+    port = os.environ.get("LATTICE_WEB_PORT", "7337")
+    try:
+        url = f"http://127.0.0.1:{port}/api/topic/depth?subject={subject}"
+        with _ur.urlopen(url, timeout=3) as r:
+            return json.loads(r.read()).get("count", 0)
+    except Exception:
+        return 0
+
+
+_DEPTH_THRESHOLDS = [
+    (20, "This is one of the things you know best."),
+    (10, "You've thought about this a lot."),
+    (5,  "That's a topic you know well."),
+]
+
+
+def _topic_depth_message(subject: str, count: int) -> str | None:
+    for threshold, label in _DEPTH_THRESHOLDS:
+        if count >= threshold:
+            return f"You've saved {count} things about {subject}. {label}"
+    return None
+
+
 # --- Helpers -----------------------------------------------------------------
 
 def _allowed_ids() -> set[int]:
@@ -149,13 +188,39 @@ async def _do_capture(update, context, text: str) -> None:
     chat_id = update.effective_chat.id
     try:
         from lattice.client import DaemonClient
-        atom_ids = DaemonClient().ingest(text, source_id="telegram")
+        from lattice.db import LatticeDB
+        from lattice.config import Config
+        client = DaemonClient()
+        atom_ids = client.ingest(text, source_id="telegram")
         n = len(atom_ids)
         if n == 0:
             await update.message.reply_text("Got it — nothing new to add, looks like this is already in there.")
         else:
             _append_history(context, "user", text)
             await update.message.reply_text(f"Saved. {n} new thing{'s' if n != 1 else ''} added to your memory.")
+            # Topic depth check for newly created atoms
+            try:
+                db = LatticeDB(Config.from_env().lattice_dir)
+                subjects_checked: set[str] = set()
+                for aid in atom_ids:
+                    try:
+                        atom = db.read(aid)
+                        subject = atom.subject
+                        if not subject or subject in subjects_checked:
+                            continue
+                        subjects_checked.add(subject)
+                        depth_key = f"topic_depth_{subject.lower().strip()}"
+                        if context.bot_data.get(depth_key):
+                            continue
+                        count = _get_topic_depth(subject)
+                        msg = _topic_depth_message(subject, count)
+                        if msg:
+                            context.bot_data[depth_key] = True
+                            await update.message.reply_text(msg)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
     except (RuntimeError, OSError):
         _inbox_fallback(text, chat_id)
         await update.message.reply_text("Lattice is offline right now. Your message is safe — I'll confirm once it's processed. 📥")
@@ -275,6 +340,28 @@ async def _handle_start(update, context) -> None:
     await update.message.reply_text(body)
 
 
+async def _send_weekly_summary_if_due(update, context) -> None:
+    """Prepend weekly summary on first Monday interaction. Stored in bot_data to survive restarts."""
+    from datetime import datetime, timezone as _tz
+    now = datetime.now(_tz.utc)
+    if now.weekday() != 0:  # Monday = 0
+        return
+    week_key = f"weekly_report_{now.isocalendar()[0]}_{now.isocalendar()[1]}"
+    if context.bot_data.get(week_key):
+        return
+    data = _get_weekly_summary()
+    if not data or data.get("streak", 0) < 7:
+        return
+    context.bot_data[week_key] = True
+    parts = [f"{data['atoms_this_week']} things saved", f"{data['recalls_this_week']} questions asked", f"{data['topics_this_week']} topics"]
+    msg = "This week — " + ", ".join(parts)
+    if data.get("top_topic"):
+        msg += f". Most on your mind: {data['top_topic']}"
+    if data.get("new_topics"):
+        msg += f". Something new: {data['new_topics'][0]}"
+    await update.message.reply_text(msg)
+
+
 async def _handle_message(update, context) -> None:
     if not _is_allowed(update):
         return
@@ -282,6 +369,12 @@ async def _handle_message(update, context) -> None:
     text = (update.message.text or "").strip()
     if not text:
         return
+
+    # Weekly summary on first Monday interaction (non-critical, never blocks)
+    try:
+        await _send_weekly_summary_if_due(update, context)
+    except Exception:
+        pass
 
     # Check if we're waiting for a feedback rating reply
     pending_fb = context.chat_data.get("pending_feedback")

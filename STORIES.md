@@ -303,6 +303,8 @@ Start only after Phase 2A exit criterion is met.
 
 #### STORY-001 · `lattice setup` — builder onboarding
 
+> **Competitive urgency (from SWOT):** GBrain requires Postgres + VPS — a setup cost most users won't pay. Lattice's answer is zero-infra. `lattice setup` is what makes that real for non-builders. Ship before Jan.ai adds persistent memory — distribution speed is the moat.
+
 **As a** builder handing Lattice to a second person,
 **I want** a `lattice setup` command that writes the env file, registers the MCP, and starts the daemon,
 **so that** setup takes one command instead of reading docs and editing config files manually.
@@ -778,7 +780,7 @@ Start only after Phase 2A exit criterion is met.
 
 ---
 
-#### STORY-031 · Weekly memory report + topic depth cards
+#### STORY-031 ✅ · Weekly memory report + topic depth cards
 
 **As a** user who has been using Lattice for a week or more,
 **I want** a personal weekly summary and topic depth recognition,
@@ -858,6 +860,63 @@ Something new: Travel planning
 
 ---
 
+### Epic 13 — Privacy + trust (Phase 2B, parallel track)
+
+> **Why now:** the technical pitch explicitly commits to this — "Lattice takes responsibility for ensuring no PII reaches the API." That promise needs an implementation. Also directly addresses the privacy tailwind from the SWOT — local-first is only a durable moat if the cloud fallback path is equally trustworthy.
+
+#### STORY-033 · PII scrubbing for cloud providers
+
+**As a** user whose device can't run a local model and falls back to OpenRouter,
+**I want** Lattice to scrub PII from atom content before it leaves my machine,
+**so that** sensitive personal facts never reach a third-party API even in the fallback path.
+
+**Acceptance criteria:**
+- When `LLM_PROVIDER != ollama`, atom content passed to synthesis is scanned for PII patterns: names (NER regex), email addresses, phone numbers, physical addresses
+- Detected PII replaced with typed placeholders: `[NAME]`, `[EMAIL]`, `[PHONE]`, `[ADDRESS]`
+- Original atoms on disk are **never modified** — scrubbing applies only to the in-memory payload sent to the LLM
+- `LATTICE_PII_SCRUB=true` default when not ollama; `false` to disable explicitly
+- Web UI: subtle `🔒 PII protected` label in synthesis header when scrubbing is active
+- Applies to all synthesis paths: `POST /api/query` (web), `POST /api/answer` (Telegram), `lattice_answer` MCP tool
+- Scrubbing is skipped entirely when `LLM_PROVIDER=ollama` (on-device, no data leaves machine)
+
+**Technical notes:**
+- New `lattice/privacy.py` — `scrub_pii(text: str) -> str` using compiled regex patterns; no heavy NLP deps
+- Start with high-precision patterns (email, phone, URL) before attempting name NER
+- Called in `synthesis.py` on atom `content` field before building the LLM prompt
+- `LATTICE_PII_SCRUB` parsed in `config.py`
+- Optional future upgrade: `presidio-analyzer` (Microsoft, MIT license) for higher recall — keep as opt-in dep
+- **Independent** — no other story dependencies
+
+---
+
+### Epic 14 — Portability + sharing (Phase 2B, parallel track)
+
+> **Why now:** the non-technical pitch closes with "share your entire knowledge graph with someone you trust — as easily as sharing a file." No mechanism exists for this today. A simple export/import story delivers on the promise without requiring Phase 3 sync.
+
+#### STORY-034 · `lattice export` — portable atom archive
+
+**As a** user who wants to share my knowledge graph with a trusted person or back it up,
+**I want** to run `lattice export` and get a single portable file,
+**so that** my second brain is as easy to share as an email attachment — no vendor, no platform, no permission needed.
+
+**Acceptance criteria:**
+- `lattice export` creates a timestamped `.zip` of all non-superseded atom `.md` files: `lattice-export-{YYYY-MM-DD}.zip`
+- Written to current working directory; prints path on completion
+- `lattice export --all` includes superseded atoms (full history)
+- `lattice export --subject <subject>` exports only atoms matching that subject (partial match)
+- `lattice import <file.zip>` ingests exported atoms into a new or existing Lattice instance — runs normal ingest pipeline (dedup + supersession apply)
+- Import prints: `Imported N atoms. M already existed, skipped.`
+- Zero data transformation — atoms stay as `.md` + YAML frontmatter; recipient Lattice reads them natively
+
+**Technical notes:**
+- New `lattice/export.py` — `export(path, include_superseded, subject_filter)` using stdlib `zipfile`
+- New `lattice/import_.py` — `import_archive(path)` unzips to a temp dir, calls `LatticeDB.write()` per atom
+- New entry points: `lattice-export` and `lattice-import` in `pyproject.toml`
+- No new deps — stdlib only
+- **Independent** — no other story dependencies
+
+---
+
 ## Dependency map
 
 ```
@@ -887,7 +946,9 @@ Phase 2B ordering
 ├── STORY-032 (Rediscovery highlight) — independent; uses existing SSE atom payload
 ├── STORY-014 (PDF parser) — independent, parallel
 ├── STORY-015 (Reminders) — independent, parallel
-└── STORY-017 (Semantic dedup) — independent, parallel; requires fastembed optional dep
+├── STORY-017 (Semantic dedup) — independent, parallel; requires fastembed optional dep
+├── STORY-033 (PII scrubbing) — independent, parallel; activates only when LLM_PROVIDER != ollama
+└── STORY-034 (lattice export/import) — independent, parallel; stdlib only
 
 Phase 3 (deferred)
 └── STORY-021 (Telegram voice notes)      ← after mobile habit validated

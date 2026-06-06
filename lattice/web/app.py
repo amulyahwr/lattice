@@ -279,7 +279,69 @@ async def api_atoms_recent(limit: int = 20):
             "subject": a.subject,
             "kind": a.kind,
             "observed_at": a.observed_at.isoformat() if a.observed_at else None,
+            "ingested_at": a.ingested_at.isoformat() if a.ingested_at else None,
             "source_id": a.source_id,
         }
         for a in atoms
     ]
+
+
+@app.get("/api/topic/depth")
+async def api_topic_depth(subject: str):
+    """Return atom count for a subject (used by topic depth cards)."""
+    db = _get_db()
+    norm = subject.lower().strip()
+    count = sum(
+        1 for a in db.all()
+        if not a.is_superseded and (a.subject or "").lower().strip() == norm
+    )
+    return {"subject": subject, "count": count}
+
+
+@app.get("/api/usage/weekly")
+async def api_usage_weekly():
+    """Weekly memory report data — atoms saved, recalls, topics, new topics this week."""
+    db = _get_db()
+    records = _load_usage()
+    today = _utc_today()
+    week_ago = date.fromordinal(today.toordinal() - 6)
+    week_ago_iso = week_ago.isoformat()
+
+    # Recalls this week (from usage.jsonl)
+    recalls_this_week = sum(
+        1 for r in records
+        if r.get("ts", "")[:10] >= week_ago_iso and r.get("type") != "grace_day_used"
+    )
+
+    # Atoms: split into this week vs older
+    all_atoms = [a for a in db.all() if not a.is_superseded]
+    this_week_atoms = [
+        a for a in all_atoms
+        if a.ingested_at and a.ingested_at.date() >= week_ago
+    ]
+    older_atoms = [
+        a for a in all_atoms
+        if not a.ingested_at or a.ingested_at.date() < week_ago
+    ]
+
+    older_subjects = {(a.subject or "").lower().strip() for a in older_atoms if a.subject}
+    this_week_subjects = list(dict.fromkeys(
+        a.subject for a in this_week_atoms if a.subject
+    ))
+    new_topics = [s for s in this_week_subjects if s.lower().strip() not in older_subjects]
+
+    # Top topic: most frequent subject this week
+    from collections import Counter
+    subject_counts = Counter(a.subject for a in this_week_atoms if a.subject)
+    top_topic = subject_counts.most_common(1)[0][0] if subject_counts else None
+
+    streak, _ = _compute_streak_with_grace(records)
+
+    return {
+        "atoms_this_week": len(this_week_atoms),
+        "recalls_this_week": recalls_this_week,
+        "topics_this_week": len(set(this_week_subjects)),
+        "new_topics": new_topics[:3],
+        "top_topic": top_topic,
+        "streak": streak,
+    }

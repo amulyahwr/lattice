@@ -23,7 +23,7 @@ def lc() -> None:
 
         # Fetch streak from usage.jsonl directly (no daemon needed)
         import json as _json
-        from datetime import date as _date, datetime as _dt, timezone as _tz, timedelta as _td
+        from datetime import date as _date, datetime as _dt, timezone as _tz
         usage_path = _Path(cfg.lattice_dir) / "usage.jsonl"
         query_days: set[_date] = set()
         if usage_path.exists():
@@ -60,3 +60,35 @@ def lc() -> None:
         sys.exit(1)
 
     print(f"Saved. {len(atom_ids)} new thing{'s' if len(atom_ids) != 1 else ''} added to your memory.")
+
+    # Topic depth check — notify once per subject when threshold crossed
+    if atom_ids:
+        import json as _json
+        from pathlib import Path as _Path
+        from lattice.config import Config as _Config
+        from lattice.db import LatticeDB as _LatticeDB
+        import urllib.request as _ur
+        try:
+            cfg = _Config.from_env()
+            db = _LatticeDB(cfg.lattice_dir)
+            notified_path = _Path(cfg.lattice_dir) / "notified_depths.json"
+            notified: dict = _json.loads(notified_path.read_text()) if notified_path.exists() else {}
+            port = "7337"
+            for aid in atom_ids:
+                try:
+                    atom = db.read(aid)
+                    subject = atom.subject
+                    if not subject or subject.lower().strip() in notified:
+                        continue
+                    with _ur.urlopen(f"http://127.0.0.1:{port}/api/topic/depth?subject={subject}", timeout=3) as r:
+                        count = _json.loads(r.read()).get("count", 0)
+                    for threshold, label in [(20, "This is one of the things you know best."), (10, "You've thought about this a lot."), (5, "That's a topic you know well.")]:
+                        if count >= threshold:
+                            notified[subject.lower().strip()] = threshold
+                            notified_path.write_text(_json.dumps(notified))
+                            print(f"You've saved {count} things about {subject}. {label}")
+                            break
+                except Exception:
+                    pass
+        except Exception:
+            pass
