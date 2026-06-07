@@ -183,7 +183,9 @@ function buildCitationIndex(atoms) {
   atoms.forEach(a => {
     const key = a.atom_id || a.source_id;
     if (key && !(key in byId)) {
-      byId[key] = n++;
+      byId[key] = n;
+      if (a.src_key) byId[a.src_key] = n;
+      n++;
       ordered.push(a);
     }
   });
@@ -191,11 +193,12 @@ function buildCitationIndex(atoms) {
 }
 
 function renderCitations(html, numMap) {
-  // run after markdown — replace citation markers in rendered HTML text nodes
+  // Bare [src:id] must be tried first — otherwise adjacent [src:a][src:b] gets
+  // consumed as a single [label][src:id] match, dropping the first citation.
   return html.replace(
-    /\[([^\]]+)\]\[src:([^\]]+)\]|\[src:([^\]]+)\]/g,
-    (_, label, id1, id2) => {
-      const id  = id1 || id2;
+    /\[src:([^\]]+)\]|\[([^\]]+)\]\[src:([^\]]+)\]/g,
+    (_, bareId, label, labeledId) => {
+      const id  = bareId || labeledId;
       const num = numMap[id];
       const display = num != null ? num : (label || id);
       return `<a class="citation" data-src="${escHtml(id)}" href="#ref-${escHtml(id)}">[${display}]</a>`;
@@ -248,17 +251,19 @@ function _atomAgeDays(a) {
   return Math.floor(ms / 86400000);
 }
 
-function renderReferences(orderedAtoms) {
+function renderReferences(orderedAtoms, numMap) {
   if (!orderedAtoms.length) return '';
   const collapsed = orderedAtoms.length > 3;
   const items = orderedAtoms.map((a, i) => {
+    const refKey = a.src_key || a.atom_id || a.source_id || String(i + 1);
+    const num = (numMap && numMap[refKey]) || (i + 1);
     const days = _atomAgeDays(a);
     const old = days != null && days >= _REDISCOVERY_DAYS;
     const ageLabel = old ? `<span class="ref-age"> · from ${days} days ago</span>` : '';
     const oldClass = old ? ' rediscovery' : '';
     return `
-    <li class="ref-item${oldClass}" id="ref-${escHtml(a.atom_id || a.source_id || String(i+1))}">
-      <span class="ref-num">[${i + 1}]</span>
+    <li class="ref-item${oldClass}" id="ref-${escHtml(refKey)}">
+      <span class="ref-num">[${num}]</span>
       <span class="ref-source">${escHtml(a.source_title ? `${a.source_title} · ${a.subject || ''}` : (a.subject || a.source_id || '—'))}</span>${ageLabel}
     </li>`;
   }).join('');
@@ -658,18 +663,26 @@ async function ask(question) {
         } else if (evt.type === 'citations_applied') {
           // remove cursor, render markdown + citations
           if (cursorEl) cursorEl.remove();
-          const md = renderMarkdown(evt.answer);
-          answerEl.innerHTML = renderCitations(md, citIndex.byId);
+
+          // num_map comes from server (first-appearance order)
+          const numMap = evt.num_map || {};
+
+          const cited = renderCitations(evt.answer, numMap);
+          answerEl.innerHTML = renderMarkdown(cited);
           answerEl.classList.remove('streaming');
-          // only show sources actually cited in the answer
-          const citedIds = new Set([...evt.answer.matchAll(/\[src:([^\]]+)\]/g)].map(m => m[1]));
-          const citedAtoms = citIndex.ordered.filter(a => citedIds.has(a.atom_id || a.source_id));
-          refsEl.innerHTML = renderReferences(citedAtoms);
+
+          // Build citedAtoms in citation-number order from server num_map
+          const keysByNum = Object.entries(numMap).sort((a, b) => a[1] - b[1]).map(e => e[0]);
+          const citedAtoms = keysByNum
+            .map(k => citIndex.ordered.find(a => a.src_key === k || a.atom_id === k || a.source_id === k))
+            .filter(Boolean);
+
+          refsEl.innerHTML = renderReferences(citedAtoms, numMap);
           // Amber glow on inline citations for atoms ≥30 days old
           citedAtoms.forEach(a => {
             const days = _atomAgeDays(a);
             if (days == null || days < _REDISCOVERY_DAYS) return;
-            const src = a.atom_id || a.source_id;
+            const src = a.src_key || a.atom_id || a.source_id;
             if (!src) return;
             turn.querySelectorAll(`.citation[data-src="${CSS.escape(src)}"]`)
                 .forEach(el => el.classList.add('rediscovery'));

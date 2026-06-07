@@ -225,6 +225,8 @@ async def api_query(req: QueryRequest) -> StreamingResponse:
         t0 = time.monotonic()
         atoms = select(req.question, db=db)
         sel_ms = int((time.monotonic() - t0) * 1000)
+        for i, a in enumerate(atoms):
+            a["src_key"] = f"s{i + 1}"
 
         yield f'data: {json.dumps({"type": "atoms", "atoms": atoms})}\n\n'
         yield from stream_synthesis(req.question, atoms)
@@ -247,11 +249,23 @@ async def api_answer(req: QueryRequest):
     sel_ms = int((time.monotonic() - t0) * 1000)
     if not atoms:
         return {"ok": True, "answer": None, "atom_count": 0}
+    for i, a in enumerate(atoms):
+        a["src_key"] = f"s{i + 1}"
     t1 = time.monotonic()
     result = synthesize(req.question, atoms)
     syn_ms = int((time.monotonic() - t1) * 1000)
     _record_usage(req.question, sel_ms, syn_ms, len(atoms), channel="telegram")
-    atom_meta = [{"atom_id": a.get("atom_id"), "ingested_at": a.get("ingested_at")} for a in atoms]
+    atom_meta = [
+        {
+            "atom_id": a.get("atom_id"),
+            "src_key": a.get("src_key"),
+            "ingested_at": a.get("ingested_at"),
+            "subject": a.get("subject"),
+            "source_title": a.get("source_title"),
+            "source_id": a.get("source_id"),
+        }
+        for a in atoms
+    ]
     return {"ok": True, "answer": result.answer, "atom_count": len(atoms), "atoms": atom_meta}
 
 

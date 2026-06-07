@@ -6,7 +6,7 @@ import os
 import re
 import uuid
 
-_CITATION_RE = re.compile(r"\[([^\]]*)\]\[src:[^\]]+\]")
+_CITATION_RE = re.compile(r"\[src:([^\]]+)\]")
 
 log = logging.getLogger("lattice.telegram_bot")
 
@@ -248,11 +248,27 @@ async def _do_recall(update, context, question: str) -> None:
             await update.message.reply_text("Nothing stored about that yet.")
             return
 
-        # Collect unique source labels, strip markers from prose
+        # Build src_key/atom_id → label index from response metadata
+        atom_labels: dict[str, str] = {}
+        for am in body.get("atoms", []):
+            label = (
+                am.get("source_title")
+                or am.get("subject")
+                or am.get("source_id")
+                or (am.get("atom_id") or "?")[:8]
+            )
+            if am.get("src_key"):
+                atom_labels[am["src_key"]] = label
+            if am.get("atom_id"):
+                atom_labels[am["atom_id"]] = label
+
+        # Collect cited source labels and strip [src:id] markers from prose
         labels: list[str] = []
         seen: set[str] = set()
+
         def _collect(m: re.Match) -> str:
-            label = m.group(1).strip()
+            src_id = m.group(1)
+            label = atom_labels.get(src_id, src_id[:8] if len(src_id) > 8 else src_id)
             if label and label not in seen:
                 seen.add(label)
                 labels.append(label)
