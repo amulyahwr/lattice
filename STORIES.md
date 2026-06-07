@@ -504,23 +504,32 @@ Start only after Phase 2A exit criterion is met.
 
 ### Epic 9 — PDF ingest (Phase 2B, parallel track)
 
-#### STORY-014 ✅ · PDF parser (extended: all file types, all channels)
+#### STORY-014 ✅ · File ingest — all types, all channels
 
-**As a** user who drops a PDF into the inbox,
-**I want** Lattice to extract and atomize its text,
-**so that** documents become searchable memory.
+**As a** user who drops any document into the inbox,
+**I want** Lattice to extract and atomize its text regardless of file type,
+**so that** PDFs, slides, spreadsheets, and Word docs all become searchable memory.
 
 **Acceptance criteria:**
-- Daemon picks up `.pdf` files from inbox alongside `.md` and `.txt`
-- Extracts plain text; page breaks become segment boundaries
-- Atoms carry `source_id` derived from filename (e.g. `"pdf:report.pdf"`)
+- Daemon picks up `.pdf`, `.pptx`, `.xlsx`, `.xls`, `.docx` files from inbox alongside `.md` and `.txt`
+- **PDF**: page breaks (`\f`) become segment boundaries; atoms carry `source_id = "pdf:<filename>"`
+- **PPTX**: each `[Slide N]` marker → one segment; source_type `"pptx"`; `source_id = "<filename>.pptx"`
+- **XLSX/XLS**: each `[Sheet: name]` marker → one segment; source_type `"xlsx"`/`"xls"`; `source_id = "<filename>"`
+- **DOCX**: heading styles (`Heading 1`–`4`, `Title`, `Subtitle`) preserved as markdown prefix (`#`, `##`, …) before LLM extraction
 - Image-only PDFs: log warning and skip gracefully (no OCR, no crash)
-- Tested on a 10-page PDF: atoms created, no crash
+- File type detected from `source_id` prefix/suffix before falling back to content heuristics
+- **People facts**: when text mentions a named person with contact or identity details, each detail extracted as a separate `kind=fact` atom with `subject = full name` — covers email, phone, job title, employer, location, LinkedIn/URL
+- Source-specific LLM addendums injected per file type: PDF (page-scoped context), PPTX (one main point per slide), XLSX (row-per-item facts, `kind=count` for numeric aggregates)
+- All file types available through all ingest channels: inbox drop, `POST /api/ingest`, `lc`, Telegram, MCP `lattice_ingest`
 
 **Technical notes:**
-- New `lattice/parsers/pdf.py` using `pypdf` (pure Python, no system deps)
-- Add `.pdf` extension check in daemon watchdog before `infer_source_type()`
-- `pypdf` as optional dep: `[project.optional-dependencies] pdf = ["pypdf"]`
+- `lattice/parsers/pdf.py`: `extract_pdf_text()` → pages joined by `\f`; `parse_pdf_text()` splits on `\f`, `context="page N"`, `source_type="pdf"`
+- `lattice/parsers/pptx.py` (new): splits on `[Slide N]\n` markers; `context="Slide N"`, `source_type="pptx"`
+- `lattice/parsers/xlsx.py` (new): splits on `[Sheet: name]\n` markers; `context="Sheet: name"`, `source_type="xlsx"`
+- `lattice/parsers/__init__.py`: `infer_source_type()` checks `metadata["source_id"]` prefix/suffix first; `parse()` dispatches to new parsers
+- `lattice/util.py`: `extract_file_text()` handles `.pptx` via `python-pptx`, `.xlsx` via `openpyxl`, `.xls` via `xlrd`, `.docx` heading map
+- `lattice/ingest.py`: `_SYSTEM` extended with "People facts" rule; `_PDF_ADDENDUM`, `_PPTX_ADDENDUM`, `_XLSX_ADDENDUM` added; `_source_addendum()` dispatches to all three
+- Optional deps: `pdf = ["pypdf"]`, `office = ["python-pptx", "openpyxl", "xlrd"]`, `docx = ["python-docx"]`
 
 ---
 

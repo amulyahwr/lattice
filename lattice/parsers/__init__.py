@@ -19,6 +19,15 @@ class Segment:
 def infer_source_type(text: str, metadata: dict) -> str:
     if metadata.get("source_type"):
         return str(metadata["source_type"])
+    # File-type detection from source_id takes priority over content heuristics.
+    source_id = str(metadata.get("source_id", "")).lower()
+    if source_id.startswith("pdf:"):
+        return "pdf"
+    if source_id.endswith(".pptx"):
+        return "pptx"
+    if source_id.endswith((".xlsx", ".xls")):
+        return "xlsx"
+    # Content-based detection for plain text, markdown, chat, code.
     if re.search(r"^#{1,6}\s+\S", text, flags=re.MULTILINE):
         return "markdown"
     if re.search(r"^\s*(user|assistant|system|developer)\s*:", text, flags=re.IGNORECASE | re.MULTILINE):
@@ -40,6 +49,15 @@ def parse(text: str, source_type: str, max_chars: int | None = None) -> list[Seg
     if source_type == "code":
         from lattice.parsers.code import parse_code
         return parse_code(text, max_chars)
+    if source_type == "pdf":
+        from lattice.parsers.pdf import parse_pdf_text
+        return parse_pdf_text(text, max_chars)
+    if source_type == "pptx":
+        from lattice.parsers.pptx import parse_pptx
+        return parse_pptx(text, max_chars)
+    if source_type in ("xlsx", "xls"):
+        from lattice.parsers.xlsx import parse_xlsx
+        return parse_xlsx(text, max_chars)
     return _parse_plain(text, source_type, max_chars)
 
 
