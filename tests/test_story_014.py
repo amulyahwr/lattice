@@ -169,11 +169,11 @@ class TestParsePdf:
             segments = parse_pdf(str(pdf_path), max_chars=12000)
         assert segments == []
 
-    def test_segment_source_type_is_plain(self, tmp_path):
+    def test_segment_source_type_is_pdf(self, tmp_path):
         from lattice.parsers.pdf import parse_pdf
         with patch("lattice.parsers.pdf.extract_pdf_text", return_value="Some real content here."):
             segments = parse_pdf(str(tmp_path / "x.pdf"), max_chars=12000)
-        assert all(s.source_type == "plain" for s in segments)
+        assert all(s.source_type == "pdf" for s in segments)
 
     def test_large_page_split_into_multiple_segments(self, tmp_path):
         from lattice.parsers.pdf import parse_pdf
@@ -184,8 +184,8 @@ class TestParsePdf:
 
     def test_context_contains_page_number(self, tmp_path):
         from lattice.parsers.pdf import parse_pdf
-        # Two-page document
-        two_pages = "First page content.\n\nSecond page content."
+        # Two-page document — pages separated by \f (form feed)
+        two_pages = "First page content.\fSecond page content."
         with patch("lattice.parsers.pdf.extract_pdf_text", return_value=two_pages):
             segments = parse_pdf(str(tmp_path / "x.pdf"), max_chars=12000)
         contexts = [s.context for s in segments]

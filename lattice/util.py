@@ -60,7 +60,18 @@ def extract_file_text(path: str | Path) -> tuple[str, str]:
                 "python-docx is required for .docx files. Install with: uv sync --group docx"
             )
         doc = _docx.Document(str(p))
-        text = "\n\n".join(para.text for para in doc.paragraphs if para.text.strip())
+        _HEADING_MAP = {
+            "Heading 1": "#", "Heading 2": "##", "Heading 3": "###",
+            "Heading 4": "####", "Title": "#", "Subtitle": "##",
+        }
+        parts = []
+        for para in doc.paragraphs:
+            if not para.text.strip():
+                continue
+            style_name = para.style.name if para.style else ""
+            prefix = _HEADING_MAP.get(style_name, "")
+            parts.append(f"{prefix} {para.text}" if prefix else para.text)
+        text = "\n\n".join(parts)
         if not text.strip():
             raise ValueError("No text found in .docx file")
         return text, p.name

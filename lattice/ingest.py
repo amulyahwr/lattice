@@ -67,6 +67,12 @@ owner's own chat turns. For a resume, bio, CV, article, or any third-party docum
 "Jane Smith has 8 years of experience" not "User has 8 years of experience". If the document \
 subject's name appears anywhere in the text, carry it through every atom extracted from that document.
 
+People facts: when text mentions a specific named person alongside identity or contact details, \
+extract each detail as a separate kind=fact atom — subject = the person's full name \
+(e.g. subject="John Doe"). Details to extract: email address, phone number, job title, \
+employer/company, location, LinkedIn or website URL. This enables recall like \
+"what is John's email?" or "where does John work?". Apply this rule regardless of source type.
+
 Numeric extraction rules:
   - When text explicitly states a count ("I own 3 bikes", "attended 5 sessions", "takes 4 classes/week"), \
 extract a standalone `kind=count` atom whose content contains the numeric value: \
@@ -155,6 +161,33 @@ Source-specific rules for code:
   - Skip boilerplate, imports, and auto-generated code.
 """
 
+_PDF_ADDENDUM = """\
+
+Source-specific rules for PDF documents:
+  - Context shows the page number. Use it to scope subjects when a page covers a distinct topic.
+  - Pages may be part of a continuous document — carry forward names, subjects, and context \
+from the page content even if earlier pages are not visible.
+"""
+
+_PPTX_ADDENDUM = """\
+
+Source-specific rules for presentation slides:
+  - Context shows the slide number. Use it to understand document structure.
+  - Each slide typically makes one main point — extract that as the primary atom.
+  - Supporting bullet points are separate atoms only if they carry distinct, self-contained facts.
+"""
+
+_XLSX_ADDENDUM = """\
+
+Source-specific rules for spreadsheet data:
+  - Context shows the sheet name. Use it to scope subjects (e.g. include the sheet name in the \
+subject when it adds meaning, such as "training log" or "budget").
+  - If rows represent distinct items or events (workouts, expenses, recipes), extract each as \
+a separate atom.
+  - If the sheet contains aggregates or summaries, prefer those over repeating individual rows.
+  - Numeric values with clear meaning (totals, counts, percentages, rates) must use kind=count.
+"""
+
 
 def _source_addendum(source_type: str) -> str:
     if source_type == "chat":
@@ -163,7 +196,14 @@ def _source_addendum(source_type: str) -> str:
         return _MARKDOWN_ADDENDUM
     if source_type == "code":
         return _CODE_ADDENDUM
+    if source_type == "pdf":
+        return _PDF_ADDENDUM
+    if source_type == "pptx":
+        return _PPTX_ADDENDUM
+    if source_type in ("xlsx", "xls"):
+        return _XLSX_ADDENDUM
     return ""
+
 
 _SUPERSESSION_SYSTEM = """\
 You are deciding whether a new fact supersedes an existing fact about the same subject. \
@@ -182,49 +222,86 @@ or {"superseded_atom_id": null} if none are superseded.
 # ── date resolution ───────────────────────────────────────────────────────────
 
 _WRITTEN_NUMBERS = {
-    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
-    "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
 }
 _WRITTEN_NUMBER_PATTERN = re.compile(
-    r'\b(' + '|'.join(_WRITTEN_NUMBERS) + r')\s+(days?|weeks?|months?)\s+ago\b',
+    r"\b(" + "|".join(_WRITTEN_NUMBERS) + r")\s+(days?|weeks?|months?)\s+ago\b",
     re.IGNORECASE,
 )
 
 _RELATIVE_PATTERNS: list[tuple[re.Pattern, Any]] = [
-    (re.compile(r'\b(\d+)\s+days?\s+ago\b', re.IGNORECASE),
-     lambda m, ref: (ref - timedelta(days=int(m.group(1)))).strftime("%Y-%m-%d")),
-    (re.compile(r'\b(\d+)\s+weeks?\s+ago\b', re.IGNORECASE),
-     lambda m, ref: (ref - timedelta(weeks=int(m.group(1)))).strftime("%Y-%m-%d")),
-    (re.compile(r'\b(\d+)\s+months?\s+ago\b', re.IGNORECASE),
-     lambda m, ref: (ref - timedelta(days=int(m.group(1)) * 30)).strftime("%Y-%m-%d")),
-    (re.compile(r'\ba\s+day\s+ago\b', re.IGNORECASE),
-     lambda _, ref: (ref - timedelta(days=1)).strftime("%Y-%m-%d")),
-    (re.compile(r'\ba\s+week\s+ago\b', re.IGNORECASE),
-     lambda _, ref: (ref - timedelta(weeks=1)).strftime("%Y-%m-%d")),
-    (re.compile(r'\ba\s+month\s+ago\b', re.IGNORECASE),
-     lambda _, ref: (ref - timedelta(days=30)).strftime("%Y-%m-%d")),
-    (re.compile(r'\ba\s+year\s+ago\b', re.IGNORECASE),
-     lambda _, ref: str(ref.year - 1)),
-    (re.compile(r'\blast\s+year\b', re.IGNORECASE),
-     lambda _, ref: str(ref.year - 1)),
-    (re.compile(r'\blast\s+week\b', re.IGNORECASE),
-     lambda _, ref: (ref - timedelta(weeks=1)).strftime("%Y-%m-%d")),
-    (re.compile(r'\blast\s+month\b', re.IGNORECASE),
-     lambda _, ref: (ref - timedelta(days=30)).strftime("%Y-%m-%d")),
-    (re.compile(r'\byesterday\b', re.IGNORECASE),
-     lambda _, ref: (ref - timedelta(days=1)).strftime("%Y-%m-%d")),
-    (re.compile(r'\btoday\b', re.IGNORECASE),
-     lambda _, ref: ref.strftime("%Y-%m-%d")),
+    (
+        re.compile(r"\b(\d+)\s+days?\s+ago\b", re.IGNORECASE),
+        lambda m, ref: (ref - timedelta(days=int(m.group(1)))).strftime("%Y-%m-%d"),
+    ),
+    (
+        re.compile(r"\b(\d+)\s+weeks?\s+ago\b", re.IGNORECASE),
+        lambda m, ref: (ref - timedelta(weeks=int(m.group(1)))).strftime("%Y-%m-%d"),
+    ),
+    (
+        re.compile(r"\b(\d+)\s+months?\s+ago\b", re.IGNORECASE),
+        lambda m, ref: (ref - timedelta(days=int(m.group(1)) * 30)).strftime(
+            "%Y-%m-%d"
+        ),
+    ),
+    (
+        re.compile(r"\ba\s+day\s+ago\b", re.IGNORECASE),
+        lambda _, ref: (ref - timedelta(days=1)).strftime("%Y-%m-%d"),
+    ),
+    (
+        re.compile(r"\ba\s+week\s+ago\b", re.IGNORECASE),
+        lambda _, ref: (ref - timedelta(weeks=1)).strftime("%Y-%m-%d"),
+    ),
+    (
+        re.compile(r"\ba\s+month\s+ago\b", re.IGNORECASE),
+        lambda _, ref: (ref - timedelta(days=30)).strftime("%Y-%m-%d"),
+    ),
+    (
+        re.compile(r"\ba\s+year\s+ago\b", re.IGNORECASE),
+        lambda _, ref: str(ref.year - 1),
+    ),
+    (re.compile(r"\blast\s+year\b", re.IGNORECASE), lambda _, ref: str(ref.year - 1)),
+    (
+        re.compile(r"\blast\s+week\b", re.IGNORECASE),
+        lambda _, ref: (ref - timedelta(weeks=1)).strftime("%Y-%m-%d"),
+    ),
+    (
+        re.compile(r"\blast\s+month\b", re.IGNORECASE),
+        lambda _, ref: (ref - timedelta(days=30)).strftime("%Y-%m-%d"),
+    ),
+    (
+        re.compile(r"\byesterday\b", re.IGNORECASE),
+        lambda _, ref: (ref - timedelta(days=1)).strftime("%Y-%m-%d"),
+    ),
+    (re.compile(r"\btoday\b", re.IGNORECASE), lambda _, ref: ref.strftime("%Y-%m-%d")),
 ]
 
-_WEEKDAY_NAMES = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"]
+_WEEKDAY_NAMES = [
+    "monday",
+    "tuesday",
+    "wednesday",
+    "thursday",
+    "friday",
+    "saturday",
+    "sunday",
+]
 _WEEKDAY_PATTERN = re.compile(
-    r'\blast\s+(' + '|'.join(_WEEKDAY_NAMES) + r')\b', re.IGNORECASE
+    r"\blast\s+(" + "|".join(_WEEKDAY_NAMES) + r")\b", re.IGNORECASE
 )
 
 
 def _resolve_dates(content: str, ref: datetime) -> str:
     """Replace relative date expressions in atom content with absolute ISO dates."""
+
     def _normalize_written(m: re.Match) -> str:
         n = _WRITTEN_NUMBERS[m.group(1).lower()]
         return f"{n} {m.group(2)} ago"
@@ -247,6 +324,7 @@ def _resolve_dates(content: str, ref: datetime) -> str:
 
 
 # ── helpers ───────────────────────────────────────────────────────────────────
+
 
 def _today() -> datetime:
     return datetime.now(tz=timezone.utc)
@@ -323,7 +401,8 @@ def _extract_atoms(segment: Segment, metadata: dict, ref: datetime) -> list[dict
         atoms_data: list[dict] = json.loads(raw)["atoms"]
     except (json.JSONDecodeError, KeyError, TypeError):
         logging.getLogger("lattice.ingest").warning(
-            "segment extraction returned unparseable JSON — skipping segment (len=%d)", len(raw)
+            "segment extraction returned unparseable JSON — skipping segment (len=%d)",
+            len(raw),
         )
         return []
 
@@ -407,7 +486,9 @@ def _detect_supersession(db: LatticeDB, new_atom: Atom) -> str | None:
     return superseded_id if superseded_id in valid_ids else None
 
 
-def ingest(source: str, metadata: dict | None = None, db: LatticeDB | None = None) -> dict:
+def ingest(
+    source: str, metadata: dict | None = None, db: LatticeDB | None = None
+) -> dict:
     if db is None:
         db = LatticeDB()
     metadata = metadata or {}
@@ -423,7 +504,9 @@ def ingest(source: str, metadata: dict | None = None, db: LatticeDB | None = Non
         nested_atoms = [_extract_atoms(segment, metadata, ref) for segment in segments]
     else:
         with ThreadPoolExecutor(max_workers=workers) as pool:
-            nested_atoms = list(pool.map(lambda s: _extract_atoms(s, metadata, ref), segments))
+            nested_atoms = list(
+                pool.map(lambda s: _extract_atoms(s, metadata, ref), segments)
+            )
     atoms_data = [a for atoms in nested_atoms for a in atoms]
     created_ids: list[str] = []
     new_ids: list[str] = []
