@@ -133,8 +133,8 @@ def _is_no_answer(text: str) -> bool:
 
 
 def _atom_src_key(a: dict) -> str:
-    """Unique citation key for an atom — atom_id preferred, source_id as fallback."""
-    return str(a.get("atom_id") or a.get("source_id") or a.get("source") or "unknown")
+    """Citation key — uses pre-assigned src_key if present, else atom_id."""
+    return str(a.get("src_key") or a.get("atom_id") or a.get("source_id") or a.get("source") or "unknown")
 
 
 def replace_citations(text: str, atoms: list[dict]) -> str:
@@ -226,9 +226,7 @@ def synthesize(
         model=model, messages=messages, **( {"extra_body": extra} if extra else {}),
     )
     raw = resp.choices[0].message.content or ""
-    answer = replace_citations(raw, atoms)
-    if _is_no_answer(answer):
-        answer = _NO_ANSWER_PHRASE
+    answer = _NO_ANSWER_PHRASE if _is_no_answer(raw) else raw
     return SynthesisResult(answer=answer, raw_response=raw, tool_calls=tool_calls_log)
 
 
@@ -283,9 +281,16 @@ def stream_synthesis(
         yield f'data: {json.dumps({"type": "error", "message": f"Streaming failed: {exc}"})}\n\n'
         return
 
-    # Citation markers may span chunk boundaries, so replacement runs on full assembled text.
-    processed = replace_citations("".join(full_answer), atoms)
-    if _is_no_answer(processed):
-        processed = _NO_ANSWER_PHRASE
-    yield f'data: {json.dumps({"type": "citations_applied", "answer": processed})}\n\n'
+    # Citation markers may span chunk boundaries — assemble full text before sending.
+    assembled = "".join(full_answer)
+    if _is_no_answer(assembled):
+        assembled = _NO_ANSWER_PHRASE
+    # Build first-appearance number map server-side so client doesn't recompute.
+    num_map: dict[str, int] = {}
+    counter = 1
+    for m in re.finditer(r"\[src:([^\]]+)\]", assembled):
+        if m.group(1) not in num_map:
+            num_map[m.group(1)] = counter
+            counter += 1
+    yield f'data: {json.dumps({"type": "citations_applied", "answer": assembled, "num_map": num_map})}\n\n'
     yield 'data: {"type": "done"}\n\n'
