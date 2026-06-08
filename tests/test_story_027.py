@@ -122,7 +122,7 @@ class TestFeedbackFlow:
         update = _make_update("👍")
         with patch("lattice.telegram_bot._post_feedback") as mock_fb:
             run(_handle_message(update, ctx))
-        mock_fb.assert_called_once_with("what is X?", "X is Y.", "up")
+        mock_fb.assert_called_once_with("what is X?", "X is Y.", "up", atom_ids=None)
 
     def test_thumbs_up_clears_pending(self):
         from lattice.telegram_bot import _handle_message
@@ -138,7 +138,7 @@ class TestFeedbackFlow:
         update = _make_update("yes")
         with patch("lattice.telegram_bot._post_feedback") as mock_fb:
             run(_handle_message(update, ctx))
-        mock_fb.assert_called_with("q", "a", "up")
+        mock_fb.assert_called_with("q", "a", "up", atom_ids=None)
 
     def test_thumbs_up_replies_thanks(self):
         from lattice.telegram_bot import _handle_message
@@ -171,7 +171,7 @@ class TestFeedbackFlow:
         update = _make_update("inaccurate")
         with patch("lattice.telegram_bot._post_feedback") as mock_fb:
             run(_handle_message(update, ctx))
-        mock_fb.assert_called_once_with("q", "a", "down", "inaccurate")
+        mock_fb.assert_called_once_with("q", "a", "down", "inaccurate", atom_ids=None)
 
     def test_reason_reply_clears_pending(self):
         from lattice.telegram_bot import _handle_message
@@ -187,7 +187,7 @@ class TestFeedbackFlow:
         update = _make_update("dunno")
         with patch("lattice.telegram_bot._post_feedback") as mock_fb:
             run(_handle_message(update, ctx))
-        mock_fb.assert_called_once_with("q", "a", "down", None)
+        mock_fb.assert_called_once_with("q", "a", "down", None, atom_ids=None)
 
     # --- negative / edge ---
     def test_non_feedback_reply_drops_pending_and_processes_normally(self):
@@ -227,8 +227,8 @@ class TestFeedbackFlow:
         last_reply = update.message.reply_text.call_args_list[-1][0][0]
         assert "👍" in last_reply or "👎" in last_reply
 
-    def test_no_feedback_prompt_when_many_atoms(self):
-        """High atom_count = confident answer — skip feedback prompt."""
+    def test_feedback_prompt_when_many_atoms(self):
+        """Feedback always shown regardless of atom_count."""
         from lattice.telegram_bot import _handle_message
         update = _make_update("what do I prefer?")
         ctx = _make_context()
@@ -238,32 +238,20 @@ class TestFeedbackFlow:
         mock_resp.__exit__ = MagicMock(return_value=False)
         with patch("urllib.request.urlopen", return_value=mock_resp):
             run(_handle_message(update, ctx))
-        assert "pending_feedback" not in ctx.chat_data
-        # only one reply — the answer itself, no feedback prompt
-        assert update.message.reply_text.call_count == 1
-
-    def test_feedback_prompt_at_atom_count_1(self):
-        """Boundary: atom_count=1 should still prompt."""
-        from lattice.telegram_bot import _handle_message
-        update = _make_update("what do I prefer?")
-        ctx = _make_context()
-        mock_resp = MagicMock()
-        mock_resp.read.return_value = b'{"ok": true, "answer": "You prefer dark coffee.", "atom_count": 1}'
-        mock_resp.__enter__ = lambda s: s
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        with patch("urllib.request.urlopen", return_value=mock_resp):
-            run(_handle_message(update, ctx))
         assert "pending_feedback" in ctx.chat_data
+        # two replies — answer + feedback prompt
+        assert update.message.reply_text.call_count == 2
 
-    def test_no_feedback_prompt_at_atom_count_2(self):
-        """Boundary: atom_count=2 should NOT prompt — confident enough."""
+    def test_feedback_prompt_any_atom_count(self):
+        """Feedback always shown — atom_count is no longer a gate."""
         from lattice.telegram_bot import _handle_message
-        update = _make_update("what do I prefer?")
-        ctx = _make_context()
-        mock_resp = MagicMock()
-        mock_resp.read.return_value = b'{"ok": true, "answer": "You prefer dark coffee.", "atom_count": 2}'
-        mock_resp.__enter__ = lambda s: s
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        with patch("urllib.request.urlopen", return_value=mock_resp):
-            run(_handle_message(update, ctx))
-        assert "pending_feedback" not in ctx.chat_data
+        for count in [0, 1, 2, 5, 20]:
+            update = _make_update("what do I prefer?")
+            ctx = _make_context()
+            mock_resp = MagicMock()
+            mock_resp.read.return_value = f'{{"ok": true, "answer": "You prefer dark coffee.", "atom_count": {count}}}'.encode()
+            mock_resp.__enter__ = lambda s: s
+            mock_resp.__exit__ = MagicMock(return_value=False)
+            with patch("urllib.request.urlopen", return_value=mock_resp):
+                run(_handle_message(update, ctx))
+            assert "pending_feedback" in ctx.chat_data, f"Expected feedback for atom_count={count}"

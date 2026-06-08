@@ -523,9 +523,9 @@ header h1 {
   display: flex;
   gap: 8px;
   font-size: 0.8rem;
-  align-items: baseline;
+  align-items: flex-start;
   border-radius: var(--radius-sm);
-  padding: 2px 4px;
+  padding: 4px 4px;
   margin: 0 -4px;
   transition: background 0.15s;
   cursor: default;
@@ -549,10 +549,48 @@ header h1 {
   font-size: 0.75rem;
 }
 
-/* explicitly set for readability in both themes */
-.ref-source {
-  color: var(--text-muted);
-  font-style: italic;
+.ref-body {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.ref-preview {
+  color: var(--text);
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.ref-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.ref-kind {
+  font-size: 0.68rem;
+  color: var(--accent);
+  background: var(--accent-dim);
+  border-radius: 3px;
+  padding: 1px 5px;
+  font-weight: 500;
+  text-transform: lowercase;
+}
+
+.ref-channel {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+
+.ref-age-label {
+  font-size: 0.72rem;
+  color: var(--text-dim);
+}
+
+.ref-age-label.is-old {
+  color: #c97d3a;
 }
 
 /* ── milestone card ─────────────────────────────────────────────────────── */
@@ -615,6 +653,17 @@ header h1 {
 
 .logo-cube.milestone-burst {
   animation: cubeBurst 0.9s ease-out forwards;
+}
+
+/* ── PII protection badge ────────────────────────────────────────────────── */
+
+.pii-badge {
+  display: inline-block;
+  font-size: 0.68rem;
+  color: var(--muted);
+  background: transparent;
+  margin-bottom: 0.4rem;
+  opacity: 0.7;
 }
 
 /* ── rediscovery highlight ───────────────────────────────────────────────── */
@@ -872,8 +921,9 @@ header h1 {
 }
 
 .ref-list-wrap.open {
-  max-height: 400px;
+  max-height: 260px;
   opacity: 1;
+  overflow-y: auto;
 }
 
 /* ── timestamps ──────────────────────────────────────────────────────────── */
