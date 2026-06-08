@@ -46,7 +46,7 @@ class VariantResult:
     session_n: int | None = None
     session_hit: float | None = None
     session_recall: float | None = None
-    session_mrr: float | None = None
+    atom_mrr: float | None = None
     out_path: Path | None = None
     log_path: Path | None = None
 
@@ -334,7 +334,7 @@ def _parse_retrieval_debug(out_path: Path) -> dict | None:
         / len(values),
         "session_recall": sum(float(v.get("session_recall") or 0.0) for v in values)
         / len(values),
-        "session_mrr": sum(float(v.get("session_mrr") or 0.0) for v in values)
+        "atom_mrr": sum(float(v.get("atom_mrr") or 0.0) for v in values)
         / len(values),
     }
 
@@ -355,14 +355,14 @@ def _attach_scores(results: dict[str, VariantResult], cfg: dict) -> None:
             result.session_n = retrieval["session_n"]
             result.session_hit = retrieval["session_hit"]
             result.session_recall = retrieval["session_recall"]
-            result.session_mrr = retrieval["session_mrr"]
+            result.atom_mrr = retrieval["atom_mrr"]
 
 
 def _print_summary(results: dict[str, VariantResult]) -> None:
     print("\n" + "=" * 118)
     print(
         f"{'Variant':<10} {'Priority':<14} {'Infer':>7} {'Judge':>7} "
-        f"{'N':>5} {'Accuracy':>10} {'SessHit':>9} {'SessRec':>9} {'SessMRR':>9}  Output"
+        f"{'N':>5} {'Accuracy':>10} {'SessHit':>9} {'SessRec':>9} {'AtomMRR':>9}  Output"
     )
     print("-" * 118)
     for variant in _VARIANTS:
@@ -375,10 +375,10 @@ def _print_summary(results: dict[str, VariantResult]) -> None:
         acc = f"{r.accuracy:.1%}" if r.accuracy is not None else "-"
         sess_hit = f"{r.session_hit:.1%}" if r.session_hit is not None else "-"
         sess_rec = f"{r.session_recall:.3f}" if r.session_recall is not None else "-"
-        sess_mrr = f"{r.session_mrr:.3f}" if r.session_mrr is not None else "-"
+        atom_mrr = f"{r.atom_mrr:.3f}" if r.atom_mrr is not None else "-"
         print(
             f"{variant:<10} {r.priority:<14} {infer:>7} {judge:>7} {n:>5} "
-            f"{acc:>10} {sess_hit:>9} {sess_rec:>9} {sess_mrr:>9}  {r.out_path}"
+            f"{acc:>10} {sess_hit:>9} {sess_rec:>9} {atom_mrr:>9}  {r.out_path}"
         )
     print("=" * 118)
 

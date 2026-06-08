@@ -18,7 +18,39 @@ p27b results (clean baseline at 68%): single-session-user 78.6%, single-session-
 
 **M11 shipped** (time decay per kind, `selection.py`). LongMemEval-oracle cannot measure it — all questions use `as_of` anchor → atom age ≈ 0 → decay ≈ 1.0. Validated on **LongMemEval-S knowledge-update subset** (34 questions, 550-640 atoms each, 90-304 day date spreads — cap binding): baseline 61.8% → M11 **73.5% (+11.8pp)**. Env: `LATTICE_TIME_DECAY=0` to disable.
 
-Next: M12 (reinforcement counting) → M5 (dense seed augmentation) → multi-session gap investigation.
+**p31 (BFS decay sort) — reverted.** Sorted BFS-expanded atoms by decay factor after `bfs_expand()`. Retrieval metrics unchanged (precision −0.7pp, atom_mrr 0.985→0.571). Accuracy gain (+5.9pp) was synthesis noise at n=34 — atom ordering identical for all 3 flipped questions. Reverted.
+
+**p32 — S-version stratified baseline (30/category, n=176 after 4 ingest errors removed).** First cross-category measurement. Ingest errors: 4 large-haystack questions (44–53 sessions) hit LLM output limits — accepted, 2.2% loss. Retrieval: BM25 hit=94.4% recall=0.913 atom_precision=0.307; Selected barely changes (BFS adds almost nothing at this scale). **Category accuracy:**
+
+| Category | Accuracy | n | SE |
+|---|---|---|---|
+| single-session-preference | **33.3%** | 30 | ±9.1% |
+| temporal-reasoning | **51.7%** | 29 | ±9.3% |
+| multi-session | 63.0% | 27 | ±9.6% |
+| knowledge-update | 70.0% | 30 | ±9.1% |
+| single-session-user | 76.7% | 30 | ±9.1% |
+| single-session-assistant | **83.3%** | 30 | ±9.1% |
+| **Overall** | **63.1%** | 176 | ±3.6% |
+
+Failure mass concentrated in preference (33%) and temporal (52%). Together = 53% of failures. Multi-session (63%) is better than expected — BFS helps here. Oracle dataset (68%) overstated performance on preference/temporal; S-version is the correct benchmark going forward.
+
+**p33 (synthesis prompt, n=176, reverted).** Clarified `valid_from` vs `observed_at` semantics, added ordering instruction, strengthened preference grounding. All deltas within SE (±9.1% per category, ±3.8% overall). No signal — reverted.
+
+**p34 — M5 dense seed augmentation (n=180, `LATTICE_DENSE_SEEDS=1`).** Reused p32 lattice dirs. On first `preload()`, embed index built from all atoms via `_rebuild_embed_index()` (BAAI/bge-small-en-v1.5, 384-dim). Dense top-10 hits merged with BM25 seeds before BFS. **Category accuracy:**
+
+| Category | p32 (baseline) | p34 (dense) | delta | retrieval hit Δ |
+|---|---|---|---|---|
+| single-session-preference | 33.3% | **50.0%** | **+16.7pp** | +16.6pp |
+| temporal-reasoning | 51.7% | 46.7% | −5.0pp (noise) | +3.6pp |
+| multi-session | 63.0% | 66.7% | +3.7pp | 0pp |
+| knowledge-update | 70.0% | 70.0% | 0.0pp | 0pp |
+| single-session-user | 76.7% | **83.3%** | **+6.6pp** | +3.7pp |
+| single-session-assistant | 83.3% | **90.0%** | **+6.7pp** | 0pp |
+| **Overall** | **63.1%** (n=176) | **67.8%** (n=180) | **+4.7pp** | |
+
+Preference +16.7pp is 1.8×SE — driven directly by retrieval (Hit 76.7%→93.3%). Vocab-mismatch atoms ("gym"↔"workout") now found. Temporal −5.0pp is noise (n difference: 4 ingest-error questions now scored 0 in p34). **Shipped.** `LATTICE_DENSE_SEEDS=1`, optional dep `fastembed` (semantic group). Sidecar: `LATTICE_DIR/graph/embed_matrix.npy` + `embed_ids.json`.
+
+Next: temporal reasoning gap (46.7%) — retrieval now fine (100% hit), failures are synthesis. M12 (reinforcement counting) or temporal date anchoring at ingest.
 
 | Priority | File(s) | Product Change | Why It Matters |
 | --- | --- | --- | --- |
@@ -27,9 +59,9 @@ Next: M12 (reinforcement counting) → M5 (dense seed augmentation) → multi-se
 | ~~M9~~ ✅ | `ingest.py`, `synthesis.py` | **Numeric extraction precision**: `kind=count` atom type for aggregate numeric facts ("owns 3 bikes", "attended 5 sessions"). Synthesis prefers `kind=count` atoms over re-enumerating instances. Fresh ingest → 3192 atoms (~31.9/session). **Result: 76% (+4pp vs p26c)**. preference +33pp, knowledge-update +13pp, temporal +4pp. multi-session -4pp, single-session-assistant -9pp. | Counting was 15/28 failures in p26c. `kind=count` is a proper data contract — ingest produces it, synthesis trusts it structurally. |
 | ~~P26e~~ ⏭️ | `synthesis.py` | **Temporal duration fix**: attempted prompt patch — explicit event-date endpoints + week/month unit conversion. **p28: 70% (-6pp)**. temporal -12pp, knowledge-update -13pp. Overcorrected: forcing event-date endpoints breaks queries where today is the correct reference. **Reverted.** Root cause is synthesis picking wrong event atom, not a prompt-fixable pattern. | Closed as won't fix via synthesis prompt. Temporal failures are atom selection quality issues. |
 | ~~M11~~ ✅ | `selection.py` | **Time decay per kind**: pre-BFS seed weight multiplier — exponential decay by `observed_at` age, half-life per kind (reminder: 3d, event: 60d, decision: 180d, preference/belief: 365d, fact/count: 730d). Decay reference = `as_of` when provided (historical queries), else wall clock. `LATTICE_TIME_DECAY=0` to disable. **Validated on LongMemEval-S KU-wide: +11.8pp (61.8%→73.5%)** on 34 knowledge-update questions with 90-304 day date spreads and 550-640 atoms (cap-binding). Not measurable on oracle subset — `as_of` anchor collapses decay to ≈1.0. | Stale atoms ranked identically to recent ones in BM25 seeding. Decay reorders seeds so fresh atoms fill BFS cap first, pushing stale old-version atoms out. |
+| ~~M5~~ ✅ | `embed.py`, `db.py`, `selection.py` | **Dense seed augmentation** (seed stage only): augment BM25 seeds with dense NN hits before BFS. `dense_search()` in `embed.py`. Index built at `write()` time; `_rebuild_embed_index()` bootstraps from existing atoms on `preload()`. `LATTICE_DENSE_SEEDS=1` to enable; `LATTICE_DENSE_TOP_K` (default 10). Optional dep `fastembed` (semantic group). **p34: preference +16.7pp (33.3%→50.0%), overall +4.7pp (63.1%→67.8%).** | Vocab mismatch ("gym" ≠ "workout", "own" ≠ "bikes"). Preference Hit 76.7%→93.3% — 7 previously invisible atoms now surfaced. Only seed augmentation is safe — output reranking confirmed harmful (p16b-replay -23pp temporal). |
 | M12 | `db.py`, `ingest.py` | **Reinforcement counting**: bump `recurrence_count` field instead of supersede/dedup when same fact re-ingested. Frequently-confirmed atoms score higher in seed weighting. | Same fact recurring across ingests currently lost to dedup. Recurrence = confidence signal at zero LLM cost. |
 | M13 | `ingest.py`, `models.py`, `selection.py` | **Confidence scoring at extraction**: LLM assigns `confidence ∈ [0,1]` per atom at ingest. Stored as atom field. Selection: threshold-based filter at query time. | Moves relevance judgment from query time to ingest time. Zero LLM at query. |
-| M5 / P16 | `embed.py`, `db.py`, `selection.py` | **Dense seed augmentation** (seed stage only): augment BM25 seeds with dense NN hits before BFS. Portable embedding sidecars via `embed.py`. Optional dep, gated like `embed.py`. | Vocab mismatch ("gym" ≠ "workout", "own" ≠ "bikes"). Only seed augmentation is safe — output reranking confirmed harmful (p16b-replay -23pp temporal). |
 | M6 / P13 | `graph.py`, `db.py`, `ingest.py` | **Semantic relation enrichment** (optional): `updates`, `contradicts`, `supports`, `elaborates`, `temporally_before` edges after graph indexing. Off by default for Ollama. | Deeper BFS paths for multi-session aggregation without blocking local ingest/query. Prerequisite for M7 topic hubs. |
 | M7 / P21 | `graph.py`, `selection.py` | **Topic hubs**: hub nodes from connected components; store aliases, member atoms, latest `observed_at`, centroid text. Broad queries → concept cluster → member atoms. Depends on M6. | Multi-session queries land on topic hub before drilling atoms. P21-broad-subjects attempt (-6pp) used wrong edge type (same_subject_as across sessions). Hub nodes are the product-native fix. |
 | M16 | `graph.py`, `privacy.py`, `ingest.py` | **Named entity graph nodes** (optional, post-M7): NER at ingest adds `entity:PERSON` and `entity:ORG` nodes to graph; BFS expands from them. NER infrastructure shared with STORY-033 (`EntityRedactor` in `privacy.py`) — build once, reuse here. **Depends on M7** — entity nodes must follow hub design to avoid p21-style over-connection flood. Off by default; `LATTICE_NER_ENRICH=1` to enable. | Selection vocab mismatch for person/org queries ("Shivika's skills" scores 0 on BM25 if atoms say only subjects). Entity nodes enable BFS expansion without touching BM25. Not for ingest attribution — that is handled by the ingest.py `_SYSTEM` named person prompt rule. |
@@ -47,7 +79,7 @@ Cross-reference with active roadmap above. Pull into active roadmap as core loop
 | M2 | Multi-session aggregation fix | — | "How many times?" misses cross-session atoms; fine filter cuts needed atoms for counting. Partially addressed by AGGREGATION bypass + M9 numeric extraction. |
 | M3 | Source citations | — | ✅ shipped — numbered superscript citations, pulsing highlight linkage, collapsible sources section. |
 | M4 | Memory debug mode | P18 | BM25 scores, BFS paths, fallback triggers visible in web UI. See active roadmap. |
-| M5 | Dense seed augmentation | P16 | BM25 vocabulary mismatch. See active roadmap. |
+| M5 ✅ | Dense seed augmentation | P16 | Shipped. BAAI/bge-small-en-v1.5 sidecar. `LATTICE_DENSE_SEEDS=1`. Preference +16.7pp (p34). |
 | M6 | Semantic relation enrichment | P13 | `updates`, `contradicts`, `supports` edges for richer multi-hop. See active roadmap. |
 | M7 | Topic hubs | P21 | Broad queries land on concept clusters before atoms. See active roadmap. |
 | M8 | Ingest job status | P12 | Visibility into what's indexed, pending, failed. See active roadmap. |
@@ -127,23 +159,25 @@ Evaluation method:
 | p29 | M11: time decay per kind (`LATTICE_TIME_DECAY=1`). Reused p27 lattice dirs. | **68%** | Identical to p27b on oracle subset — `as_of` anchor collapses decay to ≈1.0 for all atoms. 11/12 score changes due to synthesis stochasticity, not selection. Oracle cannot measure M11. |
 | p30-baseline | **LongMemEval-S KU-wide** (34 KU questions, 90-304d spread, 550-640 atoms each). `LATTICE_TIME_DECAY=0`. Fresh ingest from longmemeval_s_cleaned.json. | **61.8% (KU only)** | Proper M11 testbed: cap-binding atom counts (>60), multi-session with wide date spreads, meaningful decay ratios (0.75-0.90 old vs 0.99 new). |
 | p30-m11 | Same as p30-baseline with `LATTICE_TIME_DECAY=1`. | **73.5% (KU only)** | **+11.8pp vs baseline**. M11 confirmed: time decay reorders seeds → fresh atoms fill 60-atom BFS cap first → stale old-version facts pushed out. Validated and shipped. |
+| p32 | **LongMemEval-S stratified baseline** (30/category, n=176 after 4 ingest errors). Fresh S-version ingest. `LATTICE_TIME_DECAY=1`. | **63.1%** | First cross-category S-version measurement. Preference 33.3%, temporal 51.7% — dominant failure mass. Retrieval: BM25 hit=94.4%, selected barely changes BFS. 4 large-haystack questions (44–53 sessions) hit LLM output limits, removed. |
+| p33 | Synthesis prompt: clarified `valid_from`/`observed_at`, added ordering + preference grounding. Reused p32 lattice dirs. **Reverted.** | **63.6%** | +0.5pp overall, all deltas within SE (±3.8%). No statistically significant change. Reverted to p32 prompt. |
+| p34 | **M5 dense seed augmentation** (`LATTICE_DENSE_SEEDS=1`, BAAI/bge-small-en-v1.5). Reused p32 lattice dirs. | **67.8%** | **+4.7pp overall**. Preference +16.7pp (33.3%→50.0%), single-session-user +6.6pp, single-session-assistant +6.7pp. Preference Hit 76.7%→93.3% — vocab-mismatch atoms now retrieved. Temporal −5.0pp is noise (n=30 vs 29 + 4 extra zero-scored questions). Shipped. |
 
 ## Category Tracker (last 10 runs)
 
 Note: phi4-mini-judge throughout. p19+ use qwen3-8b-ingest. p25 uses gpt-4o-mini ingest.
 
-| Category | p26c | p27 | p28 | p27b (baseline) | p29 (M11-oracle) | p30-base (S) | **p30-m11 (S)** |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| overall | 72.0% | **76.0%** | 70.0% | 68.0% | 68.0% | 61.8%† | **73.5%†** |
-| single-session-user | 85.7% | **92.9%** | 85.7% | 78.6% | 78.6% | — | — |
-| single-session-preference | 50.0% | **83.3%** | **83.3%** | 50.0% | 50.0% | — | — |
-| single-session-assistant | **100%** | 90.9% | 90.9% | 90.9% | 90.9% | — | — |
-| multi-session | **66.7%** | 62.9% | 62.9% | 51.9% | 55.6% | — | — |
-| temporal-reasoning | 65.4% | 69.2% | 57.7% | 69.2% | **73.1%** | — | — |
-| knowledge-update | 68.75% | **81.3%** | 68.8% | 75.0% | 62.5% | 61.8% | **73.5%** |
+| Category | p27b (oracle) | p30-m11 (S-KU) | p32 (S-baseline) | p33 (S-prompt) | **p34 (S-dense)** |
+| --- | --- | --- | --- | --- | --- |
+| overall | 68.0% | 73.5%† | 63.1% | 63.6% | **67.8%** |
+| single-session-preference | 50.0% | — | 33.3% | 33.3% | **50.0%** |
+| temporal-reasoning | 69.2% | — | 51.7% | 48.3% | 46.7% |
+| multi-session | 51.9% | — | 63.0% | 70.4% | 66.7% |
+| knowledge-update | 75.0% | **73.5%** | 70.0% | 66.7% | 70.0% |
+| single-session-user | 78.6% | — | 76.7% | 80.0% | **83.3%** |
+| single-session-assistant | 90.9% | — | 83.3% | 83.3% | **90.0%** |
 
-†p30 scores are knowledge-update only (34-question LongMemEval-S subset, not comparable to oracle overall).
-| abstention | — | — | — | — | — | — | **100%** |
+†p30-m11 is knowledge-update only (34-question LongMemEval-S subset). S-version runs use stratified 30/category.
 
 ## Archived: Completed P1–P17
 

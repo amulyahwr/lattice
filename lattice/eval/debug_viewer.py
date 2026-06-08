@@ -258,7 +258,7 @@ for qid, d in debug.items():
             "sessions": d.get("sessions_ingested", 0),
             "sess_hit": selected_oracle.get("session_hit"),
             "sess_rec": selected_oracle.get("session_recall"),
-            "sess_mrr": selected_oracle.get("session_mrr"),
+            "atom_mrr": selected_oracle.get("atom_mrr"),
             "mode": d.get("retrieval_mode", "select"),
             "kept": "yes" if d.get("lattice_dir_kept") else "",
             "question": ds.get("question", "")[:70],
@@ -478,8 +478,8 @@ with tab_summary:
                     "mode": mode,
                     "hit": metrics.get("session_hit"),
                     "recall": metrics.get("session_recall"),
-                    "precision": metrics.get("session_precision"),
-                    "mrr": metrics.get("session_mrr"),
+                    "atom_precision": metrics.get("atom_precision"),
+                    "atom_mrr": metrics.get("atom_mrr"),
                     "gold_reached": ", ".join(
                         metrics.get("retrieved_gold_session_ids") or []
                     ),

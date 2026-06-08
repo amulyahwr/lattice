@@ -26,8 +26,8 @@ def _metrics_for(rows: list[dict], mode: str) -> dict:
         "n": len(values),
         "hit": _mean([1.0 if v.get("session_hit") else 0.0 for v in values]),
         "recall": _mean([float(v.get("session_recall") or 0.0) for v in values]),
-        "precision": _mean([float(v.get("session_precision") or 0.0) for v in values]),
-        "mrr": _mean([float(v.get("session_mrr") or 0.0) for v in values]),
+        "precision": _mean([float(v.get("atom_precision") or 0.0) for v in values]),
+        "mrr": _mean([float(v.get("atom_mrr") or 0.0) for v in values]),
     }
 
 
@@ -35,16 +35,16 @@ def _print_table(title: str, groups: dict[str, list[dict]]) -> None:
     print(title)
     print(
         f"{'Group':<28} {'Mode':<9} {'N':>5} {'Hit':>8} {'Recall':>8} "
-        f"{'Prec':>8} {'MRR':>8}"
+        f"{'AtomPrec':>10} {'AtomMRR':>9}"
     )
-    print("-" * 82)
+    print("-" * 84)
     for group, rows in groups.items():
         for mode in ("bm25", "selected"):
             metrics = _metrics_for(rows, mode)
             print(
                 f"{group:<28} {mode:<9} {metrics['n']:>5} "
                 f"{_fmt(metrics['hit']):>8} {_fmt(metrics['recall']):>8} "
-                f"{_fmt(metrics['precision']):>8} {_fmt(metrics['mrr']):>8}"
+                f"{_fmt(metrics['precision']):>10} {_fmt(metrics['mrr']):>9}"
             )
     print()
 

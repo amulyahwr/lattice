@@ -129,6 +129,7 @@ def _load_config(args: argparse.Namespace) -> dict:
         "log": args.log or os.environ.get("LOG", _default_log(model, judge, dataset, phase, priority, retrieval_mode, ingest_model)),
         "priority": priority,
         "stratify": args.stratify or int(os.environ.get("STRATIFY", "100")),
+        "max_per_category": args.max_per_category or int(os.environ.get("MAX_PER_CATEGORY", "0")),
         "seed": args.seed or int(os.environ.get("SEED", "42")),
         "retrieval_mode": retrieval_mode,
         "top_k": args.top_k or int(os.environ.get("TOP_K", "20")),
@@ -148,14 +149,24 @@ def _load_config(args: argparse.Namespace) -> dict:
 # ── stratified sampling ───────────────────────────────────────────────────────
 
 
-def _stratify(data: list[dict], n: int, seed: int) -> list[dict]:
+def _stratify(data: list[dict], n: int, seed: int, max_per_category: int = 0) -> list[dict]:
     rng = random.Random(seed)
     by_type: dict[str, list[dict]] = {}
     for item in data:
         by_type.setdefault(item["question_type"], []).append(item)
 
+    if max_per_category > 0:
+        # Equal cap per category: each type gets min(max_per_category, len(type)) questions.
+        # Ignores --stratify n; total = sum of per-category caps.
+        sample: list[dict] = []
+        for items in by_type.values():
+            shuffled = rng.sample(items, len(items))
+            sample.extend(shuffled[:max_per_category])
+        rng.shuffle(sample)
+        return sample
+
     total = len(data)
-    sample: list[dict] = []
+    sample = []
     remainder: list[dict] = []
 
     for qtype, items in by_type.items():
@@ -243,8 +254,8 @@ def _session_retrieval_metrics(item: dict, atoms: list[dict]) -> dict:
         "missing_gold_session_ids": sorted(gold - retrieved_set),
         "session_hit": None,
         "session_recall": None,
-        "session_precision": None,
-        "session_mrr": None,
+        "atom_precision": None,
+        "atom_mrr": None,
     }
     if not gold:
         return metrics
@@ -256,8 +267,8 @@ def _session_retrieval_metrics(item: dict, atoms: list[dict]) -> dict:
     metrics.update({
         "session_hit": bool(gold & retrieved_set),
         "session_recall": len(gold & retrieved_set) / len(gold),
-        "session_precision": len(gold_hits) / len(retrieved) if retrieved else 0.0,
-        "session_mrr": 1 / first_rank if first_rank else 0.0,
+        "atom_precision": len(gold_hits) / len(retrieved) if retrieved else 0.0,
+        "atom_mrr": 1 / first_rank if first_rank else 0.0,
     })
     return metrics
 
@@ -316,8 +327,8 @@ def _add_retrieval_totals(totals: dict[str, float], metrics: dict) -> None:
     totals["n"] += 1
     totals["hit"] += 1 if metrics["session_hit"] else 0
     totals["recall"] += float(metrics.get("session_recall") or 0.0)
-    totals["precision"] += float(metrics.get("session_precision") or 0.0)
-    totals["mrr"] += float(metrics.get("session_mrr") or 0.0)
+    totals["precision"] += float(metrics.get("atom_precision") or 0.0)
+    totals["mrr"] += float(metrics.get("atom_mrr") or 0.0)
 
 
 def _format_retrieval_totals(name: str, totals: dict[str, float]) -> str:
@@ -327,7 +338,7 @@ def _format_retrieval_totals(name: str, totals: dict[str, float]) -> str:
     return (
         f"  {name:<8}: n={n} hit={totals['hit'] / n:.1%} "
         f"recall={totals['recall'] / n:.3f} "
-        f"precision={totals['precision'] / n:.3f} mrr={totals['mrr'] / n:.3f}"
+        f"atom_precision={totals['precision'] / n:.3f} atom_mrr={totals['mrr'] / n:.3f}"
     )
 
 
@@ -387,7 +398,7 @@ def _run_ingest(cfg: dict) -> None:
     with open(cfg["dataset"]) as f:
         data = json.load(f)
 
-    sample = _stratify(data, cfg["stratify"], cfg["seed"])
+    sample = _stratify(data, cfg["stratify"], cfg["seed"], cfg.get("max_per_category", 0))
     type_counts = Counter(q["question_type"] for q in sample)
     print(f"Stratified sample: {len(sample)} questions")
     for qtype, count in sorted(type_counts.items()):
@@ -477,7 +488,7 @@ def _run_inference(cfg: dict) -> None:
     with open(cfg["dataset"]) as f:
         data = json.load(f)
 
-    sample = _stratify(data, cfg["stratify"], cfg["seed"])
+    sample = _stratify(data, cfg["stratify"], cfg["seed"], cfg.get("max_per_category", 0))
     done_ids = _load_done_ids(out_path)
 
     type_counts = Counter(q["question_type"] for q in sample)
@@ -826,6 +837,8 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--out", default="", help="Override inference results file path")
     p.add_argument("--log", default="", help="Override log file path")
     p.add_argument("--stratify", type=int, default=0)
+    p.add_argument("--max-per-category", type=int, default=0,
+                   help="Equal cap per question_type (overrides --stratify). E.g. 30 → 30 per type.")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--retrieval-mode", choices=["select", "bm25", "bm25_bfs", "all"], default="",
                    help="select=BM25+graph+LLM filter (default), bm25_bfs=BM25+graph only, bm25=BM25 only, all=no retrieval")

@@ -80,3 +80,17 @@ def rerank_atom_dicts(query: str, atoms: list[dict]) -> list[dict]:
         reverse=True,
     )
     return [a for a, _ in scored]
+
+
+def dense_search(query: str, matrix: "np.ndarray", ids: list[str], top_k: int = 10) -> list[str]:
+    """Return up to top_k atom_ids ranked by cosine similarity to query.
+
+    Falls back to empty list if fastembed unavailable or index empty.
+    """
+    if not _EMBED_AVAILABLE or matrix is None or not ids:
+        return []
+    q_vec = embed_texts([query])[0]
+    norms = np.linalg.norm(matrix, axis=1) * np.linalg.norm(q_vec)
+    scores = np.dot(matrix, q_vec) / np.where(norms > 0, norms, 1.0)
+    top_idx = np.argsort(scores)[::-1][:top_k]
+    return [ids[int(i)] for i in top_idx]

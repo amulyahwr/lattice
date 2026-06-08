@@ -17,6 +17,10 @@ _RECOMMENDATION_CAP = int(os.environ.get("LATTICE_RECOMMENDATION_CAP", "5"))
 # Drop BM25 seeds scoring exactly 0 (matched no query tokens) before BFS.
 # Zero-score seeds expand the graph from unrelated atoms, injecting noise.
 _SEED_MIN_SCORE = float(os.environ.get("LATTICE_SEED_MIN_SCORE", "0.0"))
+# Augment BM25 seeds with dense NN hits before BFS. Fixes vocab-mismatch misses
+# (e.g. "gym" query → "workout" atom). Requires fastembed + embed index.
+_DENSE_SEEDS = os.environ.get("LATTICE_DENSE_SEEDS", "").lower() in ("1", "true")
+_DENSE_TOP_K = int(os.environ.get("LATTICE_DENSE_TOP_K", "10"))
 # After BFS expansion, re-sort result by BM25 score so highest-signal atoms surface first.
 _BFS_RESCORE = os.environ.get("LATTICE_BFS_RESCORE", "").lower() in ("1", "true")
 # Pre-BFS seed weight multiplier: decay BM25 score by atom age + kind.
@@ -143,6 +147,20 @@ def _retrieve(
     seeds = [a for _, a in scored_seeds]
     if not seeds:
         return []
+
+    if _DENSE_SEEDS and db._embed_matrix is not None and db._embed_ids:
+        from lattice.embed import dense_search
+        dense_ids = dense_search(query, db._embed_matrix, db._embed_ids, top_k=_DENSE_TOP_K)
+        seed_id_set = {a.atom_id for a in seeds}
+        for atom_id in dense_ids:
+            if atom_id not in seed_id_set:
+                try:
+                    atom = db.read(atom_id)
+                    if not atom.is_superseded:
+                        seeds.append(atom)
+                        seed_id_set.add(atom_id)
+                except Exception:
+                    pass
 
     # Source-diversity probe: top _PROBE_K seeds tell us whether the answer
     # lives in one source (pointed) or spans multiple sources (expansion).
