@@ -336,6 +336,9 @@ async def _do_recall(update, context, question: str) -> None:
             oldest = max(old_days)
             clean = f"{clean}\n\n_One of these memories is from {oldest} days ago._"
 
+        if body.get("pii_protected"):
+            clean = f"{clean}\n\n🔒 _PII protected_"
+
         _append_history(context, "user", question)
         _append_history(context, "assistant", clean)
 

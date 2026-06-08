@@ -48,6 +48,11 @@ def lc() -> None:
             depth = "day deep" if streak == 1 else "days deep"
             parts.append(f"{streak} {depth}")
         print(" · ".join(parts))
+
+        _MILESTONES = {1: "First day. Good start.", 7: "A week in. Lattice is starting to know you.", 30: "30 days. You've built something here."}
+        msg = (f"Two weeks of asking and remembering. You have {count} things stored — this is becoming real." if streak == 14 else _MILESTONES.get(streak))
+        if msg:
+            print(msg)
         return
 
     arg = " ".join(sys.argv[1:])

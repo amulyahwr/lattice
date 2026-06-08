@@ -16,6 +16,7 @@ class SynthesisResult:
     answer: str
     raw_response: str
     tool_calls: list[dict] = field(default_factory=list)
+    pii_protected: bool = False
 
 
 _SYSTEM = """\
@@ -254,7 +255,7 @@ def synthesize(
     if entity_map:
         raw = EntityRedactor().restore(raw, entity_map)
     answer = _NO_ANSWER_PHRASE if _is_no_answer(raw) else raw
-    return SynthesisResult(answer=answer, raw_response=raw, tool_calls=tool_calls_log)
+    return SynthesisResult(answer=answer, raw_response=raw, tool_calls=tool_calls_log, pii_protected=bool(entity_map))
 
 
 def stream_synthesis(
