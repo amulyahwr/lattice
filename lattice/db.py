@@ -42,6 +42,8 @@ class LatticeDB:
         self._graph: LatticeGraph = LatticeGraph()
         self._bm25_cache: tuple[frozenset, object, list] | None = None
         self._lock = threading.RLock()
+        self._embed_matrix = None  # np.ndarray | None, shape (n, dim)
+        self._embed_ids: list[str] = []  # parallel to _embed_matrix rows
 
     @property
     def lock(self) -> threading.RLock:
@@ -50,6 +52,76 @@ class LatticeDB:
     @property
     def _subjects_file(self) -> Path:
         return self.dir / "subjects.json"
+
+    @property
+    def _embed_matrix_file(self) -> Path:
+        return self.dir / "graph" / "embed_matrix.npy"
+
+    @property
+    def _embed_ids_file(self) -> Path:
+        return self.dir / "graph" / "embed_ids.json"
+
+    def _load_embed_index(self) -> None:
+        """Load embedding sidecar into memory. No-op if fastembed unavailable or sidecar missing."""
+        try:
+            import lattice.embed as _embed
+            import numpy as np
+            if not _embed.is_available():
+                return
+            if not self._embed_matrix_file.exists() or not self._embed_ids_file.exists():
+                return
+            ids = json.loads(self._embed_ids_file.read_text(encoding="utf-8"))
+            matrix = np.load(str(self._embed_matrix_file))
+            if matrix.ndim == 2 and len(ids) == matrix.shape[0]:
+                self._embed_ids = ids
+                self._embed_matrix = matrix
+        except Exception:
+            pass
+
+    def _rebuild_embed_index(self) -> None:
+        """Build embed index from all atoms in cache. Called when sidecar is missing."""
+        try:
+            import lattice.embed as _embed
+            if not _embed.is_available() or not self._atom_cache:
+                return
+            atom_ids = list(self._atom_cache.keys())
+            texts = [
+                f"{a.subject} {a.content[:300]}"
+                for a in (self._atom_cache[aid] for aid in atom_ids)
+            ]
+            import numpy as np
+            vecs = _embed.embed_texts(texts)
+            matrix = np.vstack([v.astype(np.float32).reshape(1, -1) for v in vecs])
+            self._embed_ids = atom_ids
+            self._embed_matrix = matrix
+            self._embed_matrix_file.parent.mkdir(parents=True, exist_ok=True)
+            np.save(str(self._embed_matrix_file), matrix)
+            _write_json_atomic(self._embed_ids_file, atom_ids)
+        except Exception:
+            pass
+
+    def _append_embed(self, atom_id: str, text: str) -> None:
+        """Embed text and append/update the row for atom_id. Saves sidecar atomically."""
+        try:
+            import lattice.embed as _embed
+            import numpy as np
+            if not _embed.is_available():
+                return
+            vec = _embed.embed_texts([text])[0].astype(np.float32)
+            if atom_id in self._embed_ids:
+                idx = self._embed_ids.index(atom_id)
+                self._embed_matrix[idx] = vec
+            else:
+                self._embed_ids.append(atom_id)
+                self._embed_matrix = (
+                    vec.reshape(1, -1) if self._embed_matrix is None
+                    else np.vstack([self._embed_matrix, vec])
+                )
+            self._embed_matrix_file.parent.mkdir(parents=True, exist_ok=True)
+            np.save(str(self._embed_matrix_file), self._embed_matrix)
+            _write_json_atomic(self._embed_ids_file, self._embed_ids)
+        except Exception:
+            pass
 
     # ── subject registry ──────────────────────────────────────────────────
 
@@ -110,6 +182,7 @@ class LatticeDB:
             if self._graph is not None:
                 self._graph.add_atom(atom)
                 self._graph.save(self.dir)
+            self._append_embed(atom.atom_id, f"{atom.subject} {atom.content[:300]}")
 
     def _write_no_graph_save(self, atom: Atom) -> None:
         with self._lock:
@@ -172,6 +245,9 @@ class LatticeDB:
             self._graph = LatticeGraph()
             self._graph.rebuild(list(self._atom_cache.values()))
             self._graph.save(self.dir)
+        self._load_embed_index()
+        if self._embed_matrix is None:
+            self._rebuild_embed_index()
 
     # ── list ──────────────────────────────────────────────────────────────
 

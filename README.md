@@ -93,6 +93,11 @@ export LLM_API_KEY=sk-or-...       # from openrouter.ai/keys
 # PII protection (on by default for cloud providers)
 export LATTICE_PII_SCRUB=true      # set false to disable
 export LATTICE_NER_MODEL=          # optional: local Ollama model for NER (e.g. gemma4:4b)
+
+# Dense retrieval (optional — fixes vocab-mismatch misses like "gym" ↔ "workout")
+# uv sync --group semantic   ← install fastembed first
+export LATTICE_DENSE_SEEDS=1       # enable dense seed augmentation
+export LATTICE_DENSE_TOP_K=10      # top-K dense hits merged with BM25 seeds
 ```
 
 Using Ollama instead? Drop `LLM_BASE_URL` and `LLM_API_KEY`, set `LLM_PROVIDER=ollama` and `LLM_MODEL=gemma4:4b`.
