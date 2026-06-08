@@ -289,19 +289,21 @@ Every fact is a plain `.md` file in `LATTICE_DIR`. Hand-editable, git-trackable.
 | Web UI "Save session" button — capture Q&A thread as memory                    | ✅ shipped |
 | `lattice_status` MCP tool — memory count for Claude Code                       | ✅ shipped |
 | Usage telemetry + streak — `usage.jsonl`, streak badge, cross-channel          | ✅ shipped |
-| Telegram recall feedback — 👍/👎 on uncertain answers (≤1 atom)                | ✅ shipped |
+| Telegram recall feedback — 👍/👎 on every answer; reason collection            | ✅ shipped |
 | Synthesis cleanup — verbose non-answers replaced with warm short phrase        | ✅ shipped |
 | Memory Sparks — spark cards, ghost queries, Telegram suggestions, lc topics    | ✅ shipped |
 | Memory Depth — "N days deep" streak, grace day, milestone cards, cross-channel | ✅ shipped |
 | Rediscovery highlight — amber glow on old citations, Telegram age note         | ✅ shipped |
 | Weekly report + topic depth — Monday card, depth notifications cross-channel   | ✅ shipped |
+| File ingest — PDF, docx, pptx, xlsx, all channels (inbox, web, lc, Telegram)  | ✅ shipped |
+| PII round-trip redaction — `privacy.py` EntityRedactor; restore after LLM     | ✅ shipped |
+| Sources UX — content preview + kind + age; Telegram `/sources` command        | ✅ shipped |
 | VS Code / Cursor extension — capture + recall from the IDE                     | Phase 2B   |
 | Browser extension — right-click selected text → save to Lattice                | Phase 2B   |
 | Apple Shortcuts — global hotkey capture (iPhone / macOS)                       | Phase 2B   |
 | Menu bar app — macOS status icon + quick capture hotkey                        | Phase 2B   |
 | Cloudflare Tunnel — bridge to Claude mobile, ChatGPT mobile, any cloud AI      | Phase 2B   |
 | `lattice setup` wizard — one-command onboarding                                | Phase 2B   |
-| PDF ingest                                                                     | Phase 2B   |
 | Prospective reminders (`trigger_at` atoms surfaced by daemon)                  | Phase 2B   |
 | Multi-device sync (mDNS discovery + Ed25519 pairing)                           | Phase 3    |
 | Native mobile app (iOS / Android, on-device inference)                         | Phase 3    |
