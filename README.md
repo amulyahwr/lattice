@@ -12,7 +12,7 @@ Your personal memory OS — local, private, always running. Everything you tell 
 
 **The problem**
 
-Your life generates more than you can hold. Decisions, reminders, half-formed ideas, things you learned last Tuesday — most of it disappears. What if you could offload all of it to a [second brain](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) that breaks every thought into a small, typed, timestamped *memory*, and actually organizes it so you can find it again?
+Your life generates more than you can hold. Decisions, reminders, half-formed ideas, things you learned last Tuesday — most of it disappears. What if you could offload all of it to a [second brain](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) that breaks every thought into a small, typed, timestamped _memory_, and actually organizes it so you can find it again?
 
 **The gap**
 
@@ -20,17 +20,17 @@ The right pieces exist — LLM agents that ingest, connect, and synthesize infor
 
 **Lattice**
 
-Memories become powerful when they connect — a decision linked to the facts that drove it, a preference linked to the experience that shaped it. Connect enough memories and you get a *lattice*: a structured graph of everything you know, living on your own device. Send a thought from your phone while commuting, find it waiting on your laptop at work, ask for it from your car on the way home — no vendor in the middle, no lock-in, no permission needed. Any device. Any OS. Any platform. Your second brain. Your memories. Your rules.
+Memories become powerful when they connect — a decision linked to the facts that drove it, a preference linked to the experience that shaped it. Connect enough memories and you get a _lattice_: a structured graph of everything you know, living on your own device. Send a thought from your phone while commuting, find it waiting on your laptop at work, ask for it from your car on the way home — no vendor in the middle, no lock-in, no permission needed. Any device. Any OS. Any platform. Your second brain. Your memories. Your rules.
 
 ---
 
 ### For engineers
 
-*This is what "local, structured, private" actually means in code. What you call a memory, Lattice calls an atom.*
+_This is what "local, structured, private" actually means in code. What you call a memory, Lattice calls an atom._
 
 **Ingest**
 
-Every piece of text — a Telegram message, a file dropped in an inbox folder, a Claude conversation, a terminal one-liner — enters a pipeline that segments it by source type (chat, markdown, code), then runs an LLM extraction pass to decompose it into *atoms*: typed, timestamped Pydantic models with fields like `kind`, `subject`, `content`, `valid_from`, `valid_until`, `observed_at`, and full provenance (`source_id`, `session_id`, `segment_id`). Each atom is stored as a plain `.md` file with YAML frontmatter — human-readable, git-trackable, hand-editable.
+Every piece of text — a Telegram message, a file dropped in an inbox folder, a Claude conversation, a terminal one-liner — enters a pipeline that segments it by source type (chat, markdown, code), then runs an LLM extraction pass to decompose it into _atoms_: typed, timestamped Pydantic models with fields like `kind`, `subject`, `content`, `valid_from`, `valid_until`, `observed_at`, and full provenance (`source_id`, `session_id`, `segment_id`). Each atom is stored as a plain `.md` file with YAML frontmatter — human-readable, git-trackable, hand-editable.
 
 **Graph**
 
@@ -42,7 +42,7 @@ Query path is deliberately LLM-free. BM25 seeds the top candidates → zero-scor
 
 **Synthesis**
 
-A streaming LLM call takes the atom pack and generates a prose answer with numbered source citations. Tool calls handle date arithmetic and aggregation. The answer streams token-by-token to the web UI via SSE. The goal is fully on-device inference via Ollama — such as [Gemma 3](https://ollama.com/library/gemma3) and [Qwen3](https://ollama.com/library/qwen3) — your thoughts never leave your machine. For devices that can't run a capable local model, OpenRouter is the supported fallback; in that case, Lattice takes responsibility for ensuring no PII reaches the API — atom content is scrubbed before leaving the device.
+A streaming LLM call takes the atom pack and generates a prose answer with numbered source citations. Tool calls handle date arithmetic and aggregation. The answer streams token-by-token to the web UI via SSE. The goal is fully on-device inference via Ollama — such as [Gemma 4](https://ollama.com/library/gemma4) — your thoughts never leave your machine. For devices that can't run a capable local model, OpenRouter is the supported fallback; Lattice implements round-trip PII redaction so sensitive names never reach the API. `EntityRedactor` (`lattice/privacy.py`) maps persons, orgs, emails, and phones to numbered tags (`PER_0`, `ORG_0`, …) before any cloud LLM call and restores real values afterward — atoms on disk always contain real names. Optional local NER via `LATTICE_NER_MODEL`; regex-only fallback when unset. The web UI shows a `🔒 PII protected` badge when active.
 
 **Architecture**
 
@@ -54,16 +54,16 @@ A persistent daemon owns all writes — MCP server, web UI, Telegram bot, and `l
 
 > ✅ Yes &nbsp;&nbsp; ⚠️ Partial / conditions apply &nbsp;&nbsp; ❌ No
 
-| | **Lattice** | **GBrain** | **ChatGPT Memory** | **Claude Projects** | **Mem0** |
-|---|---|---|---|---|---|
-| **Stays on my device?** | ✅ Always | ⚠️ Dev yes; production needs Postgres | ❌ OpenAI servers | ❌ Anthropic servers | ❌ Cloud; local needs Docker |
-| **I control deletion?** | ✅ Delete any file | ✅ | ⚠️ Via UI; 24hr delay | ⚠️ Via UI | ⚠️ Via dashboard |
-| **Works with any AI?** | ✅ Any MCP client | ⚠️ MCP yes; built for OpenClaw | ❌ GPT-only | ❌ Claude-only | ⚠️ API or MCP |
-| **Memories link together?** | ✅ Typed graph | ✅ Entity graph | ❌ Flat notes | ❌ Flat injection | ⚠️ Vector + graph |
-| **I can read my files?** | ✅ Plain `.md` files | ✅ Plain `.md` files | ⚠️ Exportable; their servers | ⚠️ Exportable; their servers | ❌ |
-| **Runs without internet?** | ✅ Ollama-first | ❌ | ❌ | ❌ | ⚠️ Needs Docker |
-| **History never deleted?** | ✅ Always | ⚠️ Timeline kept; summary rewritten | ❌ | ❌ | ⚠️ Mostly |
-| **Free & open source?** | ✅ MIT | ✅ MIT | ❌ | ❌ | ⚠️ Partial |
+|                             | **Lattice**          | **GBrain**                            | **ChatGPT Memory**           | **Claude Projects**          | **Mem0**                     |
+| --------------------------- | -------------------- | ------------------------------------- | ---------------------------- | ---------------------------- | ---------------------------- |
+| **Stays on my device?**     | ✅ Always            | ⚠️ Dev yes; production needs Postgres | ❌ OpenAI servers            | ❌ Anthropic servers         | ❌ Cloud; local needs Docker |
+| **I control deletion?**     | ✅ Delete any file   | ✅                                    | ⚠️ Via UI; 24hr delay        | ⚠️ Via UI                    | ⚠️ Via dashboard             |
+| **Works with any AI?**      | ✅ Any MCP client    | ⚠️ MCP yes; built for OpenClaw        | ❌ GPT-only                  | ❌ Claude-only               | ⚠️ API or MCP                |
+| **Memories link together?** | ✅ Typed graph       | ✅ Entity graph                       | ❌ Flat notes                | ❌ Flat injection            | ⚠️ Vector + graph            |
+| **I can read my files?**    | ✅ Plain `.md` files | ✅ Plain `.md` files                  | ⚠️ Exportable; their servers | ⚠️ Exportable; their servers | ❌                           |
+| **Runs without internet?**  | ✅ Ollama-first      | ❌                                    | ❌                           | ❌                           | ⚠️ Needs Docker              |
+| **History never deleted?**  | ✅ Always            | ⚠️ Timeline kept; summary rewritten   | ❌                           | ❌                           | ⚠️ Mostly                    |
+| **Free & open source?**     | ✅ MIT               | ✅ MIT                                | ❌                           | ❌                           | ⚠️ Partial                   |
 
 **The one thing no competitor matches:** Lattice is the only option where memories are plain files on your machine, history is never deleted, on-device inference is the default, and zero infrastructure is required — no database, no Docker, no account.
 
@@ -89,9 +89,13 @@ export LLM_PROVIDER=openai
 export LLM_BASE_URL=https://openrouter.ai/api/v1
 export LLM_MODEL=openai/gpt-4o-mini
 export LLM_API_KEY=sk-or-...       # from openrouter.ai/keys
+
+# PII protection (on by default for cloud providers)
+export LATTICE_PII_SCRUB=true      # set false to disable
+export LATTICE_NER_MODEL=          # optional: local Ollama model for NER (e.g. gemma4:4b)
 ```
 
-Using Ollama instead? Drop `LLM_BASE_URL` and `LLM_API_KEY`, set `LLM_PROVIDER=ollama` and `LLM_MODEL=qwen3:4b`.
+Using Ollama instead? Drop `LLM_BASE_URL` and `LLM_API_KEY`, set `LLM_PROVIDER=ollama` and `LLM_MODEL=gemma4:4b`.
 
 ### 3. Wire into Claude Code
 
@@ -261,13 +265,13 @@ lc "decided to use Postgres over SQLite for the new service"
 
 Five tools exposed to Claude and any MCP-compatible client:
 
-| Tool               | What it does                                                               |
-| ------------------ | -------------------------------------------------------------------------- |
-| `lattice_ingest`   | Decompose text into memory atoms and store them. Mode A: single fact — set `metadata.source='user'`. Mode B: conversation chunk — format as `user: ...\nassistant: ...` and omit `metadata.source`. |
-| `lattice_capture`  | Persist a session summary at conversation end. Treats injected atoms as authoritative — do not re-verify with `lattice_select`. |
-| `lattice_select`   | Return the most relevant atoms for a query (BM25 + graph BFS, 0 LLM calls) |
-| `lattice_answer`   | Synthesize a prose answer from the atom store                              |
-| `lattice_status`   | Return the number of memories currently stored                             |
+| Tool              | What it does                                                                                                                                                                                        |
+| ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `lattice_ingest`  | Decompose text into memory atoms and store them. Mode A: single fact — set `metadata.source='user'`. Mode B: conversation chunk — format as `user: ...\nassistant: ...` and omit `metadata.source`. |
+| `lattice_capture` | Persist a session summary at conversation end. Treats injected atoms as authoritative — do not re-verify with `lattice_select`.                                                                     |
+| `lattice_select`  | Return the most relevant atoms for a query (BM25 + graph BFS, 0 LLM calls)                                                                                                                          |
+| `lattice_answer`  | Synthesize a prose answer from the atom store                                                                                                                                                       |
+| `lattice_status`  | Return the number of memories currently stored                                                                                                                                                      |
 
 ### Human-readable atom store
 
@@ -277,28 +281,28 @@ Every fact is a plain `.md` file in `LATTICE_DIR`. Hand-editable, git-trackable.
 
 ## Roadmap
 
-| What                                                                        | Status    |
-| --------------------------------------------------------------------------- | --------- |
-| `lattice_capture` MCP tool — explicit session-end capture                   | ✅ shipped |
-| `lc` terminal command — capture + `lc status` memory count                  | ✅ shipped |
-| Telegram bot — capture, `/ask` recall, `/save` session, auto-intent detect  | ✅ shipped |
-| Web UI "Save session" button — capture Q&A thread as memory                 | ✅ shipped |
-| `lattice_status` MCP tool — memory count for Claude Code                    | ✅ shipped |
-| Usage telemetry + streak — `usage.jsonl`, streak badge, cross-channel       | ✅ shipped |
-| Telegram recall feedback — 👍/👎 on uncertain answers (≤1 atom)             | ✅ shipped |
-| Synthesis cleanup — verbose non-answers replaced with warm short phrase      | ✅ shipped |
-| Memory Sparks — spark cards, ghost queries, Telegram suggestions, lc topics  | ✅ shipped |
+| What                                                                           | Status     |
+| ------------------------------------------------------------------------------ | ---------- |
+| `lattice_capture` MCP tool — explicit session-end capture                      | ✅ shipped |
+| `lc` terminal command — capture + `lc status` memory count                     | ✅ shipped |
+| Telegram bot — capture, `/ask` recall, `/save` session, auto-intent detect     | ✅ shipped |
+| Web UI "Save session" button — capture Q&A thread as memory                    | ✅ shipped |
+| `lattice_status` MCP tool — memory count for Claude Code                       | ✅ shipped |
+| Usage telemetry + streak — `usage.jsonl`, streak badge, cross-channel          | ✅ shipped |
+| Telegram recall feedback — 👍/👎 on uncertain answers (≤1 atom)                | ✅ shipped |
+| Synthesis cleanup — verbose non-answers replaced with warm short phrase        | ✅ shipped |
+| Memory Sparks — spark cards, ghost queries, Telegram suggestions, lc topics    | ✅ shipped |
 | Memory Depth — "N days deep" streak, grace day, milestone cards, cross-channel | ✅ shipped |
-| Rediscovery highlight — amber glow on old citations, Telegram age note       | ✅ shipped |
-| Weekly report + topic depth — Monday card, depth notifications cross-channel | ✅ shipped |
-| VS Code / Cursor extension — capture + recall from the IDE                  | Phase 2B  |
-| Browser extension — right-click selected text → save to Lattice             | Phase 2B  |
-| Apple Shortcuts — global hotkey capture (iPhone / macOS)                    | Phase 2B  |
-| Menu bar app — macOS status icon + quick capture hotkey                     | Phase 2B  |
-| Cloudflare Tunnel — bridge to Claude mobile, ChatGPT mobile, any cloud AI  | Phase 2B  |
-| `lattice setup` wizard — one-command onboarding                             | Phase 2B  |
-| PDF ingest                                                                  | Phase 2B  |
-| Prospective reminders (`trigger_at` atoms surfaced by daemon)               | Phase 2B  |
-| Multi-device sync (mDNS discovery + Ed25519 pairing)                        | Phase 3   |
-| Native mobile app (iOS / Android, on-device inference)                      | Phase 3   |
-| Screenpipe integration — passive ambient capture                            | Phase 3   |
+| Rediscovery highlight — amber glow on old citations, Telegram age note         | ✅ shipped |
+| Weekly report + topic depth — Monday card, depth notifications cross-channel   | ✅ shipped |
+| VS Code / Cursor extension — capture + recall from the IDE                     | Phase 2B   |
+| Browser extension — right-click selected text → save to Lattice                | Phase 2B   |
+| Apple Shortcuts — global hotkey capture (iPhone / macOS)                       | Phase 2B   |
+| Menu bar app — macOS status icon + quick capture hotkey                        | Phase 2B   |
+| Cloudflare Tunnel — bridge to Claude mobile, ChatGPT mobile, any cloud AI      | Phase 2B   |
+| `lattice setup` wizard — one-command onboarding                                | Phase 2B   |
+| PDF ingest                                                                     | Phase 2B   |
+| Prospective reminders (`trigger_at` atoms surfaced by daemon)                  | Phase 2B   |
+| Multi-device sync (mDNS discovery + Ed25519 pairing)                           | Phase 3    |
+| Native mobile app (iOS / Android, on-device inference)                         | Phase 3    |
+| Screenpipe integration — passive ambient capture                               | Phase 3    |

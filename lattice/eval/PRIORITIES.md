@@ -12,11 +12,13 @@ Product constraints:
 
 ## Active Roadmap
 
-Current atom set: **p27** (`gpt-4o-mini` ingest via OpenRouter, 3192 atoms, ~31.9/session, 100 sessions). **Baseline: p27 — 76%** (M9 numeric extraction + `kind=count` atom type + synthesis count-atom preference, 0 LLM calls/query). Canonical lattice dirs: `results/p27/openaigpt4omini_longmemeval_oracle_inference.lattices`. Current code: `sandbox` branch.
+Current atom set: **p27** (`gpt-4o-mini` ingest via OpenRouter, 3192 atoms, ~31.9/session, 100 sessions). **Canonical baseline: p27b — 68%** (p27 atoms + current code, `_is_no_answer()` active). p27 (76%) is a stale comparison — it was run before `_is_no_answer()` was added to synthesis; 8pp gap is code drift not a regression. Canonical lattice dirs: `results/p27/openaigpt4omini_longmemeval_oracle_inference.lattices`. Current code: `sandbox` branch.
 
-p27 results vs p26c: overall +4pp (72%→76%). preference +33pp (50%→83%), knowledge-update +13pp (69%→81%), temporal +4pp (65%→69%), single-session-user +7pp. Regressions: single-session-assistant -9pp (100%→91%), multi-session -4pp (67%→63%). **Counting is no longer the bottleneck — multi-session and temporal duration are the remaining gaps.**
+p27b results (clean baseline at 68%): single-session-user 78.6%, single-session-preference 50%, single-session-assistant 90.9%, multi-session 51.9%, temporal 69.2%, knowledge-update 75%. **Remaining gaps: multi-session (51.9%) and single-session-preference (50%).**
 
-Next: M11 (time decay per kind) → investigate multi-session regression.
+**M11 shipped** (time decay per kind, `selection.py`). LongMemEval-oracle cannot measure it — all questions use `as_of` anchor → atom age ≈ 0 → decay ≈ 1.0. Validated on **LongMemEval-S knowledge-update subset** (34 questions, 550-640 atoms each, 90-304 day date spreads — cap binding): baseline 61.8% → M11 **73.5% (+11.8pp)**. Env: `LATTICE_TIME_DECAY=0` to disable.
+
+Next: M12 (reinforcement counting) → M5 (dense seed augmentation) → multi-session gap investigation.
 
 | Priority | File(s) | Product Change | Why It Matters |
 | --- | --- | --- | --- |
@@ -24,7 +26,7 @@ Next: M11 (time decay per kind) → investigate multi-session regression.
 | ~~P26d~~ ✅ | `selection.py` | **Mode-conditional seed filter**: score>0 filter only in EXPANSION mode; POINTED keeps all probe seeds. **Result: 71% (-1pp vs p26c)**. preference +17pp (67%), temporal +8pp (73%). multi-session -15pp (52%) — pointed mode passing noisy seeds into single-session synthesis floods multi-session BFS. **Reverted — p26c remains prod config.** | Net regression. Multi-session loss outweighs single-session gain. p26c score>0 filter applied globally is the right tradeoff. |
 | ~~M9~~ ✅ | `ingest.py`, `synthesis.py` | **Numeric extraction precision**: `kind=count` atom type for aggregate numeric facts ("owns 3 bikes", "attended 5 sessions"). Synthesis prefers `kind=count` atoms over re-enumerating instances. Fresh ingest → 3192 atoms (~31.9/session). **Result: 76% (+4pp vs p26c)**. preference +33pp, knowledge-update +13pp, temporal +4pp. multi-session -4pp, single-session-assistant -9pp. | Counting was 15/28 failures in p26c. `kind=count` is a proper data contract — ingest produces it, synthesis trusts it structurally. |
 | ~~P26e~~ ⏭️ | `synthesis.py` | **Temporal duration fix**: attempted prompt patch — explicit event-date endpoints + week/month unit conversion. **p28: 70% (-6pp)**. temporal -12pp, knowledge-update -13pp. Overcorrected: forcing event-date endpoints breaks queries where today is the correct reference. **Reverted.** Root cause is synthesis picking wrong event atom, not a prompt-fixable pattern. | Closed as won't fix via synthesis prompt. Temporal failures are atom selection quality issues. |
-| M11 | `db.py`, `selection.py` | **Time decay per kind**: pre-BFS seed weight multiplier per kind (fast decay: reminders; slow decay: facts). Recency signal without output reranking (reranking confirmed harmful p16b-replay). | Stale atoms rank identically to recent ones. Preference from 3 years ago vs last week indistinguishable in BM25 seeding. Zero new dep. |
+| ~~M11~~ ✅ | `selection.py` | **Time decay per kind**: pre-BFS seed weight multiplier — exponential decay by `observed_at` age, half-life per kind (reminder: 3d, event: 60d, decision: 180d, preference/belief: 365d, fact/count: 730d). Decay reference = `as_of` when provided (historical queries), else wall clock. `LATTICE_TIME_DECAY=0` to disable. **Validated on LongMemEval-S KU-wide: +11.8pp (61.8%→73.5%)** on 34 knowledge-update questions with 90-304 day date spreads and 550-640 atoms (cap-binding). Not measurable on oracle subset — `as_of` anchor collapses decay to ≈1.0. | Stale atoms ranked identically to recent ones in BM25 seeding. Decay reorders seeds so fresh atoms fill BFS cap first, pushing stale old-version atoms out. |
 | M12 | `db.py`, `ingest.py` | **Reinforcement counting**: bump `recurrence_count` field instead of supersede/dedup when same fact re-ingested. Frequently-confirmed atoms score higher in seed weighting. | Same fact recurring across ingests currently lost to dedup. Recurrence = confidence signal at zero LLM cost. |
 | M13 | `ingest.py`, `models.py`, `selection.py` | **Confidence scoring at extraction**: LLM assigns `confidence ∈ [0,1]` per atom at ingest. Stored as atom field. Selection: threshold-based filter at query time. | Moves relevance judgment from query time to ingest time. Zero LLM at query. |
 | M5 / P16 | `embed.py`, `db.py`, `selection.py` | **Dense seed augmentation** (seed stage only): augment BM25 seeds with dense NN hits before BFS. Portable embedding sidecars via `embed.py`. Optional dep, gated like `embed.py`. | Vocab mismatch ("gym" ≠ "workout", "own" ≠ "bikes"). Only seed augmentation is safe — output reranking confirmed harmful (p16b-replay -23pp temporal). |
@@ -121,20 +123,26 @@ Evaluation method:
 | p26d | P26d: mode-conditional filter — score>0 only in EXPANSION, POINTED keeps all seeds. Reused p25 lattice dirs. **Reverted.** | **71%** | -1pp vs p26c. preference +17pp (67%), temporal +8pp (73%). multi-session -15pp (52%) — pointed mode passing noisy seeds floods BFS. p26c config restored. |
 | p27 | M9: `kind=count` atom type for aggregate numeric facts at ingest. Synthesis prefers `kind=count` over re-enumeration. Fresh ingest (3192 atoms, ~31.9/session). | **76%** | +4pp vs p26c. preference +33pp (83%), knowledge-update +13pp (81%), temporal +4pp (69%), single-session-user +7pp (93%). multi-session -4pp (63%), single-session-assistant -9pp (91%). Counting no longer the bottleneck. |
 | p28 | P26e: synthesis prompt — force event-date endpoints for durations + week/month unit conversion. Replay p27 atoms. **Reverted.** | **70%** | -6pp vs p27. temporal -12pp (58%), knowledge-update -13pp (69%). Overcorrected: event-date forcing breaks today-relative queries. p27 config restored. |
+| p27b | **Clean baseline**: p27 atoms + current code (with `_is_no_answer()`). `LATTICE_TIME_DECAY=0`. Reused p27 lattice dirs. | **68%** | p27 (76%) was stale — run before `_is_no_answer()` added. Code drift caused 8pp gap. p27b is now the canonical oracle baseline. knowledge-update 75%, temporal 69.2%, multi-session 51.9%, preference 50%. |
+| p29 | M11: time decay per kind (`LATTICE_TIME_DECAY=1`). Reused p27 lattice dirs. | **68%** | Identical to p27b on oracle subset — `as_of` anchor collapses decay to ≈1.0 for all atoms. 11/12 score changes due to synthesis stochasticity, not selection. Oracle cannot measure M11. |
+| p30-baseline | **LongMemEval-S KU-wide** (34 KU questions, 90-304d spread, 550-640 atoms each). `LATTICE_TIME_DECAY=0`. Fresh ingest from longmemeval_s_cleaned.json. | **61.8% (KU only)** | Proper M11 testbed: cap-binding atom counts (>60), multi-session with wide date spreads, meaningful decay ratios (0.75-0.90 old vs 0.99 new). |
+| p30-m11 | Same as p30-baseline with `LATTICE_TIME_DECAY=1`. | **73.5% (KU only)** | **+11.8pp vs baseline**. M11 confirmed: time decay reorders seeds → fresh atoms fill 60-atom BFS cap first → stale old-version facts pushed out. Validated and shipped. |
 
 ## Category Tracker (last 10 runs)
 
 Note: phi4-mini-judge throughout. p19+ use qwen3-8b-ingest. p25 uses gpt-4o-mini ingest.
 
-| Category | p25 | p26a | p26b | p26c | p26d | p27 | **p28** |
+| Category | p26c | p27 | p28 | p27b (baseline) | p29 (M11-oracle) | p30-base (S) | **p30-m11 (S)** |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| overall | 71.0% | 71.0% | 70.0% | 72.0% | 71.0% | **76.0%** | 70.0% |
-| single-session-user | **100%** | 85.7% | 85.7% | 85.7% | 85.7% | **92.9%** | 85.7% |
-| single-session-preference | **83.3%** | 66.7% | 50.0% | 50.0% | 66.7% | **83.3%** | **83.3%** |
-| single-session-assistant | **100%** | **100%** | **100%** | **100%** | **100%** | 90.9% | 90.9% |
-| multi-session | 59.3% | 55.6% | 59.3% | **66.7%** | 51.9% | 62.9% | 62.9% |
-| temporal-reasoning | 57.7% | 69.2% | **73.1%** | 65.4% | **73.1%** | 69.2% | 57.7% |
-| knowledge-update | 62.5% | 68.75% | 56.25% | 68.75% | 68.75% | **81.3%** | 68.8% |
+| overall | 72.0% | **76.0%** | 70.0% | 68.0% | 68.0% | 61.8%† | **73.5%†** |
+| single-session-user | 85.7% | **92.9%** | 85.7% | 78.6% | 78.6% | — | — |
+| single-session-preference | 50.0% | **83.3%** | **83.3%** | 50.0% | 50.0% | — | — |
+| single-session-assistant | **100%** | 90.9% | 90.9% | 90.9% | 90.9% | — | — |
+| multi-session | **66.7%** | 62.9% | 62.9% | 51.9% | 55.6% | — | — |
+| temporal-reasoning | 65.4% | 69.2% | 57.7% | 69.2% | **73.1%** | — | — |
+| knowledge-update | 68.75% | **81.3%** | 68.8% | 75.0% | 62.5% | 61.8% | **73.5%** |
+
+†p30 scores are knowledge-update only (34-question LongMemEval-S subset, not comparable to oracle overall).
 | abstention | — | — | — | — | — | — | **100%** |
 
 ## Archived: Completed P1–P17

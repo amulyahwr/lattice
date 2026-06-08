@@ -8,6 +8,7 @@ from datetime import date, datetime, timezone
 from typing import Generator
 
 from lattice.llm import make_llm_client, resolve_model
+from lattice.privacy import EntityRedactor, is_active as _pii_active
 
 
 @dataclass
@@ -160,6 +161,29 @@ def replace_citations(text: str, atoms: list[dict]) -> str:
     return _CITATION_RE.sub(_replace, text)
 
 
+def _redact_atoms(atoms: list[dict]) -> tuple[list[dict], dict[str, str]]:
+    """Redact PII from atom content + subject before sending to cloud LLM.
+
+    Returns (redacted_atoms, entity_map). Caller must restore entity_map in the response.
+    Pass original atoms (not redacted) to replace_citations() so citation labels keep real names.
+    """
+    from lattice.privacy import _apply_replacements
+    redactor = EntityRedactor()
+    texts = [a.get("content", "") for a in atoms]
+    redacted_texts, entity_map = redactor.redact_batch(texts)
+    if not entity_map:
+        return atoms, {}
+    orig_to_tag = {v: k for k, v in entity_map.items()}
+    redacted: list[dict] = []
+    for a, rt in zip(atoms, redacted_texts):
+        ra = dict(a)
+        ra["content"] = rt
+        if ra.get("subject"):
+            ra["subject"] = _apply_replacements(ra["subject"], orig_to_tag)
+        redacted.append(ra)
+    return redacted, entity_map
+
+
 def _build_messages(query: str, atoms: list[dict], query_date: date | None) -> list[dict]:
     today = (query_date or datetime.now(tz=timezone.utc).date()).isoformat()
     atoms_text = "\n\n".join(
@@ -218,7 +242,8 @@ def synthesize(
 
     model = resolve_model(os.environ.get("SYNTHESIS_MODEL") or None)
     client = make_llm_client()
-    messages = _build_messages(query, atoms, query_date)
+    redacted_atoms, entity_map = _redact_atoms(atoms)
+    messages = _build_messages(query, redacted_atoms, query_date)
     messages, tool_calls_log = _run_tool_loop(client, model, messages)
 
     extra = _ollama_extra()
@@ -226,6 +251,8 @@ def synthesize(
         model=model, messages=messages, **( {"extra_body": extra} if extra else {}),
     )
     raw = resp.choices[0].message.content or ""
+    if entity_map:
+        raw = EntityRedactor().restore(raw, entity_map)
     answer = _NO_ANSWER_PHRASE if _is_no_answer(raw) else raw
     return SynthesisResult(answer=answer, raw_response=raw, tool_calls=tool_calls_log)
 
@@ -259,7 +286,9 @@ def stream_synthesis(
         yield f'data: {json.dumps({"type": "error", "message": str(exc)})}\n\n'
         return
 
-    messages = _build_messages(query, atoms, query_date)
+    redacted_atoms, entity_map = _redact_atoms(atoms)
+    _redactor = EntityRedactor()
+    messages = _build_messages(query, redacted_atoms, query_date)
     try:
         messages, tool_calls_log = _run_tool_loop(client, model, messages)
     except Exception as exc:
@@ -283,6 +312,8 @@ def stream_synthesis(
 
     # Citation markers may span chunk boundaries — assemble full text before sending.
     assembled = "".join(full_answer)
+    if entity_map:
+        assembled = _redactor.restore(assembled, entity_map)
     if _is_no_answer(assembled):
         assembled = _NO_ANSWER_PHRASE
     # Build first-appearance number map server-side so client doesn't recompute.
@@ -292,5 +323,5 @@ def stream_synthesis(
         if m.group(1) not in num_map:
             num_map[m.group(1)] = counter
             counter += 1
-    yield f'data: {json.dumps({"type": "citations_applied", "answer": assembled, "num_map": num_map})}\n\n'
+    yield f'data: {json.dumps({"type": "citations_applied", "answer": assembled, "num_map": num_map, "pii_protected": bool(entity_map)})}\n\n'
     yield 'data: {"type": "done"}\n\n'

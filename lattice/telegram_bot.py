@@ -61,12 +61,12 @@ _REASON_MAP  = {
 }
 
 
-def _post_feedback(question: str, answer: str, rating: str, reason: str | None = None) -> None:
+def _post_feedback(question: str, answer: str, rating: str, reason: str | None = None, atom_ids: list | None = None) -> None:
     import json
     import urllib.request
     port = os.environ.get("LATTICE_WEB_PORT", "7337")
     url = f"http://127.0.0.1:{port}/api/feedback"
-    payload = json.dumps({"question": question, "answer": answer, "rating": rating, "reason": reason}).encode()
+    payload = json.dumps({"question": question, "answer": answer, "rating": rating, "reason": reason, "atom_ids": atom_ids or []}).encode()
     req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
     try:
         urllib.request.urlopen(req, timeout=5)
@@ -248,36 +248,74 @@ async def _do_recall(update, context, question: str) -> None:
             await update.message.reply_text("Nothing stored about that yet.")
             return
 
-        # Build src_key/atom_id → label index from response metadata
-        atom_labels: dict[str, str] = {}
+        # Build src_key → atom metadata index
+        atom_index: dict[str, dict] = {}
         for am in body.get("atoms", []):
-            label = (
-                am.get("source_title")
-                or am.get("subject")
-                or am.get("source_id")
-                or (am.get("atom_id") or "?")[:8]
-            )
             if am.get("src_key"):
-                atom_labels[am["src_key"]] = label
+                atom_index[am["src_key"]] = am
             if am.get("atom_id"):
-                atom_labels[am["atom_id"]] = label
+                atom_index[am["atom_id"]] = am
 
-        # Collect cited source labels and strip [src:id] markers from prose
-        labels: list[str] = []
-        seen: set[str] = set()
+        def _channel(source_id: str) -> str:
+            if not source_id:
+                return ""
+            return re.sub(r"^(pdf|pptx|xlsx|xls|docx):", "", source_id)
+
+        def _age(ingested_at: str) -> str:
+            if not ingested_at:
+                return ""
+            try:
+                from datetime import datetime, timezone as _tzl
+                ts = datetime.fromisoformat(ingested_at.replace("Z", "+00:00"))
+                days = (datetime.now(_tzl.utc) - ts).days
+                if days < 1: return "today"
+                if days == 1: return "yesterday"
+                if days < 14: return f"{days}d ago"
+                if days < 60: return f"{round(days/7)}w ago"
+                return f"{round(days/30)}mo ago"
+            except Exception:
+                return ""
+
+        # Replace [src:N] with [citation_number] and build numbered sources list
+        citation_order: list[str] = []
+        seen_ids: set[str] = set()
 
         def _collect(m: re.Match) -> str:
             src_id = m.group(1)
-            label = atom_labels.get(src_id, src_id[:8] if len(src_id) > 8 else src_id)
-            if label and label not in seen:
-                seen.add(label)
-                labels.append(label)
-            return ""
+            if src_id not in atom_index:
+                return ""
+            if src_id not in seen_ids:
+                seen_ids.add(src_id)
+                citation_order.append(src_id)
+            num = citation_order.index(src_id) + 1
+            return f"[{num}]"
 
         clean = _CITATION_RE.sub(_collect, answer).strip()
-        if labels:
-            sources = "\n".join(f"· {l}" for l in labels)
-            clean = f"{clean}\n\nSources:\n{sources}"
+        if citation_order:
+            # Store full source detail for /sources on-demand
+            stored = []
+            for src_id in citation_order:
+                am = atom_index[src_id]
+                num = citation_order.index(src_id) + 1
+                preview = (am.get("content_preview") or am.get("subject") or "").strip()
+                if len(preview) == 80:
+                    preview += "…"
+                ch = _channel(am.get("source_id", ""))
+                age = _age(am.get("ingested_at", ""))
+                stored.append({"num": num, "preview": preview, "channel": ch, "age": age})
+            context.chat_data["last_sources"] = stored
+
+            # Compact footer: deduplicated channel names + count
+            seen_ch: list[str] = []
+            for src_id in citation_order:
+                ch = _channel(atom_index[src_id].get("source_id", ""))
+                if ch and ch not in seen_ch:
+                    seen_ch.append(ch)
+            n = len(citation_order)
+            footer_channels = " · ".join(seen_ch[:3])
+            if len(seen_ch) > 3:
+                footer_channels += f" · +{len(seen_ch) - 3} more"
+            clean = f"{clean}\n\n📚 {n} source{'s' if n != 1 else ''} · {footer_channels}\n/sources for details"
 
         # Rediscovery: note if any cited atom is ≥30 days old
         from datetime import datetime, timezone as _tz
@@ -312,10 +350,9 @@ async def _do_recall(update, context, question: str) -> None:
 
         for i in range(0, len(clean), 4096):
             await update.message.reply_text(clean[i:i + 4096])
-        # Only ask for feedback on uncertain answers (≤1 atom = low confidence)
-        if body.get("atom_count", 0) <= 1:
-            context.chat_data["pending_feedback"] = {"question": question, "answer": clean}
-            await update.message.reply_text("Was this helpful? Reply 👍 or 👎")
+        cited_ids = [a.get("atom_id") for a in body.get("atoms", []) if a.get("atom_id")]
+        context.chat_data["pending_feedback"] = {"question": question, "answer": clean, "atom_ids": cited_ids}
+        await update.message.reply_text("Was this helpful? Reply 👍 or 👎")
     except Exception:
         log.exception("recall error")
         await update.message.reply_text("Lattice is offline right now. Try again in a moment.")
@@ -403,7 +440,7 @@ async def _handle_message(update, context) -> None:
         reply = text.lower().strip()
         if reply in _THUMBS_UP:
             del context.chat_data["pending_feedback"]
-            _post_feedback(pending_fb["question"], pending_fb["answer"], "up")
+            _post_feedback(pending_fb["question"], pending_fb["answer"], "up", atom_ids=pending_fb.get("atom_ids"))
             await update.message.reply_text("Thanks! 👍")
             return
         elif reply in _THUMBS_DOWN:
@@ -416,7 +453,7 @@ async def _handle_message(update, context) -> None:
         elif "rating" in pending_fb:
             # waiting for reason after 👎
             reason = _match_reason(reply)
-            _post_feedback(pending_fb["question"], pending_fb["answer"], "down", reason)
+            _post_feedback(pending_fb["question"], pending_fb["answer"], "down", reason, atom_ids=pending_fb.get("atom_ids"))
             del context.chat_data["pending_feedback"]
             await update.message.reply_text("Got it, thanks.")
             return
@@ -522,6 +559,23 @@ async def _handle_status(update, context) -> None:
         await update.message.reply_text("Couldn't reach your Lattice store. Try again in a moment.")
 
 
+async def _handle_sources(update, context) -> None:
+    if not _is_allowed(update):
+        return
+    sources = context.chat_data.get("last_sources")
+    if not sources:
+        await update.message.reply_text("No recent sources — ask a question first.")
+        return
+    lines = []
+    for s in sources:
+        line = f"[{s['num']}] {s['preview']}"
+        meta = " · ".join(p for p in [s["channel"], s["age"]] if p)
+        if meta:
+            line += f"\n     {meta}"
+        lines.append(line)
+    await update.message.reply_text("Sources:\n" + "\n".join(lines))
+
+
 async def _handle_document(update, context) -> None:
     """Handle PDF (and .txt/.md) document uploads."""
     if not _is_allowed(update):
@@ -603,6 +657,7 @@ def run(token: str) -> None:
     app.add_handler(CommandHandler("status", _handle_status))
     app.add_handler(CommandHandler("ask", _handle_ask))
     app.add_handler(CommandHandler("save", _handle_save))
+    app.add_handler(CommandHandler("sources", _handle_sources))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_message))
     app.add_handler(MessageHandler(filters.Document.ALL, _handle_document))
     app.add_handler(MessageHandler(~filters.TEXT & ~filters.Document.ALL, _handle_non_text))

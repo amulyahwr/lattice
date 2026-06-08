@@ -152,6 +152,7 @@ class FeedbackRequest(BaseModel):
     answer: str
     rating: str
     reason: str | None = None
+    atom_ids: list[str] | None = None
 
 
 # ── routes ────────────────────────────────────────────────────────────────────
@@ -226,7 +227,7 @@ async def api_query(req: QueryRequest) -> StreamingResponse:
         atoms = select(req.question, db=db)
         sel_ms = int((time.monotonic() - t0) * 1000)
         for i, a in enumerate(atoms):
-            a["src_key"] = f"s{i + 1}"
+            a["src_key"] = f"{i + 1}"
 
         yield f'data: {json.dumps({"type": "atoms", "atoms": atoms})}\n\n'
         yield from stream_synthesis(req.question, atoms)
@@ -250,7 +251,7 @@ async def api_answer(req: QueryRequest):
     if not atoms:
         return {"ok": True, "answer": None, "atom_count": 0}
     for i, a in enumerate(atoms):
-        a["src_key"] = f"s{i + 1}"
+        a["src_key"] = f"{i + 1}"
     t1 = time.monotonic()
     result = synthesize(req.question, atoms)
     syn_ms = int((time.monotonic() - t1) * 1000)
@@ -263,6 +264,7 @@ async def api_answer(req: QueryRequest):
             "subject": a.get("subject"),
             "source_title": a.get("source_title"),
             "source_id": a.get("source_id"),
+            "content_preview": (a.get("content") or "")[:80],
         }
         for a in atoms
     ]
@@ -310,6 +312,7 @@ async def api_feedback(req: FeedbackRequest):
         "answer": req.answer,
         "rating": req.rating,
         "reason": req.reason,
+        "atom_ids": req.atom_ids or [],
     }
     with feedback_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record) + "\n")

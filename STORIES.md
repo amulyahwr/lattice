@@ -873,7 +873,7 @@ Something new: Travel planning
 
 > **Why now:** the technical pitch explicitly commits to this — "Lattice takes responsibility for ensuring no PII reaches the API." That promise needs an implementation. Also directly addresses the privacy tailwind from the SWOT — local-first is only a durable moat if the cloud fallback path is equally trustworthy.
 
-#### STORY-033 · PII round-trip redaction for cloud providers
+#### STORY-033 · PII round-trip redaction for cloud providers ✅
 
 **As a** user whose device can't run a local model and falls back to OpenRouter,
 **I want** Lattice to redact PII before text leaves my machine and restore it after,

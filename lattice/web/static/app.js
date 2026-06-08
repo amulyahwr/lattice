@@ -251,6 +251,26 @@ function _atomAgeDays(a) {
   return Math.floor(ms / 86400000);
 }
 
+function _channelLabel(sourceId) {
+  if (!sourceId) return '';
+  // Strip file-type parser prefix (pdf:file.pdf → file.pdf)
+  return sourceId.replace(/^(pdf|pptx|xlsx|xls|docx):/, '');
+}
+
+function _refAgeLabel(a) {
+  const iso = a.ingested_at || a.observed_at;
+  if (!iso) return '';
+  const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86400000);
+  if (days < 1) return 'today';
+  if (days === 1) return 'yesterday';
+  if (days < 14) return `${days} days ago`;
+  if (days < 60) return `${Math.round(days / 7)} weeks ago`;
+  if (days < 365) return `${Math.round(days / 30)} months ago`;
+  return `${Math.round(days / 365)}y ago`;
+}
+
+const _SKIP_KINDS = new Set(['document', 'conversation', 'chat', 'plain']);
+
 function renderReferences(orderedAtoms, numMap) {
   if (!orderedAtoms.length) return '';
   const collapsed = orderedAtoms.length > 3;
@@ -259,12 +279,25 @@ function renderReferences(orderedAtoms, numMap) {
     const num = (numMap && numMap[refKey]) || (i + 1);
     const days = _atomAgeDays(a);
     const old = days != null && days >= _REDISCOVERY_DAYS;
-    const ageLabel = old ? `<span class="ref-age"> · from ${days} days ago</span>` : '';
     const oldClass = old ? ' rediscovery' : '';
+
+    const raw = a.content || a.source_title || a.subject || '—';
+    const preview = escHtml(raw.length > 90 ? raw.slice(0, 90) + '…' : raw);
+
+    const kindBadge = a.kind && !_SKIP_KINDS.has(a.kind)
+      ? `<span class="ref-kind">${escHtml(a.kind)}</span>` : '';
+    const channel = _channelLabel(a.source_id);
+    const channelBadge = channel ? `<span class="ref-channel">${escHtml(channel)}</span>` : '';
+    const age = _refAgeLabel(a);
+    const ageSpan = age ? `<span class="ref-age-label${old ? ' is-old' : ''}">${escHtml(age)}</span>` : '';
+
     return `
     <li class="ref-item${oldClass}" id="ref-${escHtml(refKey)}">
       <span class="ref-num">[${num}]</span>
-      <span class="ref-source">${escHtml(a.source_title ? `${a.source_title} · ${a.subject || ''}` : (a.subject || a.source_id || '—'))}</span>${ageLabel}
+      <div class="ref-body">
+        <span class="ref-preview">${preview}</span>
+        <span class="ref-meta">${kindBadge}${channelBadge}${ageSpan}</span>
+      </div>
     </li>`;
   }).join('');
 
@@ -546,7 +579,7 @@ function appendTurn(question) {
 
 // ── feedback ──────────────────────────────────────────────────────────────
 
-function bindFeedback(turn, question, answer) {
+function bindFeedback(turn, question, answer, atomIds) {
   const reasonsEl = turn.querySelector('.feedback-reasons');
 
   turn.querySelectorAll('.feedback-btn').forEach(btn => {
@@ -559,7 +592,7 @@ function bindFeedback(turn, question, answer) {
       } else {
         reasonsEl.style.display = 'none';
         turn.querySelector('.feedback-row .feedback-label').textContent = 'Thanks!';
-        await postFeedback(question, answer, 'up', null);
+        await postFeedback(question, answer, 'up', null, atomIds);
       }
     });
   });
@@ -570,17 +603,17 @@ function bindFeedback(turn, question, answer) {
       chip.classList.add('active');
       turn.querySelector('.feedback-row .feedback-label').textContent = 'Thanks for the feedback!';
       reasonsEl.style.display = 'none';
-      await postFeedback(question, answer, 'down', chip.dataset.reason);
+      await postFeedback(question, answer, 'down', chip.dataset.reason, atomIds);
     });
   });
 }
 
-async function postFeedback(question, answer, rating, reason) {
+async function postFeedback(question, answer, rating, reason, atomIds) {
   try {
     await fetch('/api/feedback', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question, answer, rating, reason }),
+      body: JSON.stringify({ question, answer, rating, reason, atom_ids: atomIds || [] }),
     });
   } catch (_) {}
 }
@@ -678,6 +711,12 @@ async function ask(question) {
             .filter(Boolean);
 
           refsEl.innerHTML = renderReferences(citedAtoms, numMap);
+          if (evt.pii_protected) {
+            const badge = document.createElement('span');
+            badge.className = 'pii-badge';
+            badge.textContent = '🔒 PII protected';
+            answerEl.prepend(badge);
+          }
           // Amber glow on inline citations for atoms ≥30 days old
           citedAtoms.forEach(a => {
             const days = _atomAgeDays(a);
@@ -687,9 +726,9 @@ async function ask(question) {
             turn.querySelectorAll(`.citation[data-src="${CSS.escape(src)}"]`)
                 .forEach(el => el.classList.add('rediscovery'));
           });
-          // Only show feedback for uncertain answers (≤1 atom = low confidence)
-          if ((turn._atomCount || 0) <= 1) feedbackEl.style.display = 'flex';
-          bindFeedback(turn, question, evt.answer);
+          feedbackEl.style.display = 'flex';
+          const citedAtomIds = citedAtoms.map(a => a.atom_id).filter(Boolean);
+          bindFeedback(turn, question, evt.answer, citedAtomIds);
           bindCitationLinks(turn);
           bindSourcesToggle(turn);
           bindCopyBtn(turn, evt.answer);

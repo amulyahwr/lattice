@@ -16,6 +16,7 @@ from lattice.db import LatticeDB
 from lattice.llm import complete
 from lattice.models import Atom
 from lattice.parsers import Segment, infer_source_type, parse
+from lattice.privacy import EntityRedactor
 
 
 class _ExtractedAtom(BaseModel):
@@ -499,6 +500,24 @@ def ingest(
     ref = observed_at or _today()
 
     segments = _segments_for_source(source, metadata)
+
+    # PII redaction: batch all segment texts → one shared entity_map → restore after extraction
+    _redactor = EntityRedactor()
+    _seg_texts, _entity_map = _redactor.redact_batch([s.text for s in segments])
+    if _entity_map:
+        segments = [
+            Segment(
+                segment_id=s.segment_id,
+                text=rt,
+                source_type=s.source_type,
+                start=s.start,
+                end=s.end,
+                role=s.role,
+                context=s.context,
+            )
+            for s, rt in zip(segments, _seg_texts)
+        ]
+
     workers = max(1, int(os.environ.get("LATTICE_INGEST_WORKERS", "1")))
     if workers == 1 or len(segments) == 1:
         nested_atoms = [_extract_atoms(segment, metadata, ref) for segment in segments]
@@ -508,6 +527,14 @@ def ingest(
                 pool.map(lambda s: _extract_atoms(s, metadata, ref), segments)
             )
     atoms_data = [a for atoms in nested_atoms for a in atoms]
+
+    # Restore real names after LLM extraction (PII was redacted before extraction)
+    if _entity_map:
+        for a in atoms_data:
+            a["content"] = _redactor.restore(a["content"], _entity_map)
+            if a.get("subject"):
+                a["subject"] = _redactor.restore(a["subject"], _entity_map)
+
     created_ids: list[str] = []
     new_ids: list[str] = []
     updated_ids: list[str] = []

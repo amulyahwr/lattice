@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import math
 import os
-from datetime import date
+from datetime import date, datetime, timezone
 
 from lattice.db import LatticeDB
 from lattice.models import Atom
@@ -18,6 +19,42 @@ _RECOMMENDATION_CAP = int(os.environ.get("LATTICE_RECOMMENDATION_CAP", "5"))
 _SEED_MIN_SCORE = float(os.environ.get("LATTICE_SEED_MIN_SCORE", "0.0"))
 # After BFS expansion, re-sort result by BM25 score so highest-signal atoms surface first.
 _BFS_RESCORE = os.environ.get("LATTICE_BFS_RESCORE", "").lower() in ("1", "true")
+# Pre-BFS seed weight multiplier: decay BM25 score by atom age + kind.
+# Set LATTICE_TIME_DECAY=0 to disable.
+_TIME_DECAY = os.environ.get("LATTICE_TIME_DECAY", "1").lower() not in ("0", "false")
+
+# Half-life in days per kind. Atoms older than 2× half-life are heavily discounted.
+# Durable kinds (fact, count) decay very slowly; transient kinds (reminder) decay fast.
+_HALF_LIFE: dict[str, float] = {
+    "reminder":       3.0,
+    "event":         60.0,
+    "recommendation": 90.0,
+    "decision":      180.0,
+    "preference":    365.0,
+    "belief":        365.0,
+    "fact":          730.0,
+    "count":         730.0,
+}
+_DEFAULT_HALF_LIFE = 180.0
+_DECAY_FLOOR = 0.1  # never fully silence an atom via decay alone
+
+
+def _decay_factor(kind: str | None, ref_dt: datetime | None, now: datetime | None = None) -> float:
+    """Exponential decay multiplier: 1.0 when fresh, approaching _DECAY_FLOOR when old.
+
+    `now` defaults to wall clock. Pass `as_of` converted to datetime for historical queries
+    so atoms are decayed relative to the query date, not today.
+    """
+    if not _TIME_DECAY or ref_dt is None:
+        return 1.0
+    half_life = _HALF_LIFE.get(kind or "", _DEFAULT_HALF_LIFE)
+    if ref_dt.tzinfo is None:
+        ref_dt = ref_dt.replace(tzinfo=timezone.utc)
+    _now = now or datetime.now(tz=timezone.utc)
+    age_days = (_now - ref_dt).total_seconds() / 86400
+    if age_days <= 0:
+        return 1.0
+    return max(math.exp(-age_days * math.log(2) / half_life), _DECAY_FLOOR)
 
 
 def _apply_recommendation_cap(atoms: list[dict]) -> list[dict]:
@@ -90,6 +127,19 @@ def _retrieve(
     scored_seeds = db.search_scored(query, as_of=as_of, top_k=top_k)
     if _SEED_MIN_SCORE > 0.0:
         scored_seeds = [(s, a) for s, a in scored_seeds if s > _SEED_MIN_SCORE]
+
+    if _TIME_DECAY:
+        # Decay relative to as_of when provided (historical queries); else wall clock.
+        now_dt = (
+            datetime.combine(as_of, datetime.min.time()).replace(tzinfo=timezone.utc)
+            if as_of else datetime.now(tz=timezone.utc)
+        )
+        scored_seeds = [
+            (s * _decay_factor(a.kind, a.observed_at or a.ingested_at, now=now_dt), a)
+            for s, a in scored_seeds
+        ]
+        scored_seeds.sort(key=lambda x: x[0], reverse=True)
+
     seeds = [a for _, a in scored_seeds]
     if not seeds:
         return []
