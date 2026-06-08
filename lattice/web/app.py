@@ -268,7 +268,7 @@ async def api_answer(req: QueryRequest):
         }
         for a in atoms
     ]
-    return {"ok": True, "answer": result.answer, "atom_count": len(atoms), "atoms": atom_meta}
+    return {"ok": True, "answer": result.answer, "atom_count": len(atoms), "atoms": atom_meta, "pii_protected": result.pii_protected}
 
 
 @app.get("/api/usage/summary")

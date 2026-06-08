@@ -93,11 +93,17 @@ Lattice has multiple capture/recall channels: MCP tools (Claude Code), web UI, `
 | Capability | MCP | Web UI | `lc` CLI | Telegram | VS Code* | Browser ext* |
 |---|---|---|---|---|---|---|
 | Capture (ingest) | ✅ | ✅ | ✅ | ✅ | planned | planned |
+| File ingest | ✅ `file_path` | ✅ drag-drop | ✅ `lc path/to/file` | ✅ document attach | planned | — |
 | Recall (synthesized answer) | ✅ | ✅ | — (out of scope) | ✅ auto-detect + `/ask` | planned | — |
 | Session-end capture | ✅ | ✅ Save session btn | — (atomic by design) | ✅ `/save` | — | — |
 | Memory count / status | ✅ `lattice_status` | ✅ (recent atoms) | ✅ `lc status` | ✅ `/status` | — | — |
 | Recall feedback | ❌ redundant (Claude Code has own UI) | ✅ thumbs + reason (all answers) | — (no recall) | ✅ 👍/👎 (all answers) | — | — |
-| Usage streak | — | ✅ "N days deep" badge | ✅ `lc status` shows streak | ✅ `/status` shows streak | — | — |
+| Usage streak | ✅ `lattice_status` | ✅ "N days deep" badge | ✅ `lc status` shows streak | ✅ `/status` shows streak | — | — |
+| Milestone moments | — | ✅ cards Day 1/7/14/30 | ✅ `lc status` prints msg | ✅ prepended on recall | — | — |
+| PII indicator | — (no UI) | ✅ `🔒` badge | — (no recall) | ✅ `🔒 PII protected` footer | — | — |
+| Rediscovery highlight | — (no UI) | ✅ amber glow | — (no recall) | ✅ age note in answer | — | — |
+| Weekly report | — | ✅ Monday card | — | ✅ Monday prepend | — | — |
+| Topic depth | — | ✅ depth cards | ✅ note on capture | ✅ note on capture | — | — |
 
 *not yet built. Update this table whenever a channel ships or gains a capability.
 
