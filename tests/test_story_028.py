@@ -6,6 +6,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from lattice.config import Config
 from lattice.synthesis import (
     _NO_ANSWER_PHRASE,
     _NO_ANSWER_SENTINEL,
@@ -13,6 +14,8 @@ from lattice.synthesis import (
     synthesize,
     stream_synthesis,
 )
+
+_CFG = Config(llm_provider="ollama", llm_model="test-model")
 
 
 _ATOMS = [{"atom_id": "a1", "subject": "coffee", "kind": "preference", "content": "Prefers dark roast.", "observed_at": "2025-01-01"}]
@@ -132,7 +135,7 @@ class TestSynthesizeNoAnswer:
             "I cannot determine your skiing preference from the provided atoms."
         )):
             with patch("lattice.synthesis.resolve_model", return_value="test-model"):
-                result = synthesize("what's my skiing preference?", _ATOMS)
+                result = synthesize("what's my skiing preference?", _ATOMS, _CFG)
         assert result.answer == _NO_ANSWER_PHRASE
 
     def test_genuine_answer_preserved(self):
@@ -140,11 +143,11 @@ class TestSynthesizeNoAnswer:
             "You prefer dark roast coffee."
         )):
             with patch("lattice.synthesis.resolve_model", return_value="test-model"):
-                result = synthesize("what coffee do I like?", _ATOMS)
+                result = synthesize("what coffee do I like?", _ATOMS, _CFG)
         assert result.answer == "You prefer dark roast coffee."
 
     def test_no_atoms_returns_not_found(self):
-        result = synthesize("anything", [])
+        result = synthesize("anything", [], _CFG)
         assert "No relevant information" in result.answer
 
     def test_raw_response_preserved_even_when_replaced(self):
@@ -152,7 +155,7 @@ class TestSynthesizeNoAnswer:
         llm_text = "I cannot determine this from the atoms."
         with patch("lattice.synthesis.make_llm_client", return_value=self._mock_client(llm_text)):
             with patch("lattice.synthesis.resolve_model", return_value="test-model"):
-                result = synthesize("q", _ATOMS)
+                result = synthesize("q", _ATOMS, _CFG)
         assert result.answer == _NO_ANSWER_PHRASE
         assert result.raw_response == llm_text
 
@@ -162,7 +165,7 @@ class TestSynthesizeNoAnswer:
             "You prefer dark coffee, but your tea preference is not recorded."
         )):
             with patch("lattice.synthesis.resolve_model", return_value="test-model"):
-                result = synthesize("what do I drink?", _ATOMS)
+                result = synthesize("what do I drink?", _ATOMS, _CFG)
         assert "dark coffee" in result.answer
 
 
@@ -202,7 +205,7 @@ class TestStreamSynthesisNoAnswer:
             ["I cannot determine", " your skiing preference."]
         )):
             with patch("lattice.synthesis.resolve_model", return_value="test-model"):
-                events = self._collect_events(stream_synthesis("q", _ATOMS))
+                events = self._collect_events(stream_synthesis("q", _ATOMS, _CFG))
         ca = next(e for e in events if e["type"] == "citations_applied")
         assert ca["answer"] == _NO_ANSWER_PHRASE
 
@@ -211,12 +214,12 @@ class TestStreamSynthesisNoAnswer:
             ["You prefer ", "dark roast coffee."]
         )):
             with patch("lattice.synthesis.resolve_model", return_value="test-model"):
-                events = self._collect_events(stream_synthesis("q", _ATOMS))
+                events = self._collect_events(stream_synthesis("q", _ATOMS, _CFG))
         ca = next(e for e in events if e["type"] == "citations_applied")
         assert "dark roast" in ca["answer"]
 
     def test_stream_no_atoms_yields_not_found(self):
-        events = self._collect_events(stream_synthesis("anything", []))
+        events = self._collect_events(stream_synthesis("anything", [], _CFG))
         token_texts = [e["text"] for e in events if e["type"] == "token"]
         assert any("No relevant" in t for t in token_texts)
 
@@ -225,7 +228,7 @@ class TestStreamSynthesisNoAnswer:
             ["I cannot determine this."]
         )):
             with patch("lattice.synthesis.resolve_model", return_value="test-model"):
-                events = self._collect_events(stream_synthesis("q", _ATOMS))
+                events = self._collect_events(stream_synthesis("q", _ATOMS, _CFG))
         assert any(e["type"] == "done" for e in events)
 
     def test_token_events_still_emitted_before_replacement(self):
@@ -234,6 +237,6 @@ class TestStreamSynthesisNoAnswer:
             ["I cannot determine this."]
         )):
             with patch("lattice.synthesis.resolve_model", return_value="test-model"):
-                events = self._collect_events(stream_synthesis("q", _ATOMS))
+                events = self._collect_events(stream_synthesis("q", _ATOMS, _CFG))
         assert any(e["type"] == "token" for e in events)
         assert any(e["type"] == "citations_applied" for e in events)

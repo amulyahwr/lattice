@@ -22,13 +22,26 @@ app = FastAPI(title="Lattice")
 app.mount("/static", StaticFiles(directory=_STATIC), name="static")
 
 _db: LatticeDB | None = None
+_cfg: Config | None = None
+
+
+def set_config(cfg: Config) -> None:
+    """Called by the daemon at startup to inject a pre-built Config."""
+    global _cfg, _db
+    _cfg = cfg
+    _db = LatticeDB(cfg.lattice_dir)
+
+
+def _get_cfg() -> Config:
+    if _cfg is not None:
+        return _cfg
+    return Config.from_env()  # not cached — picks up env changes (test isolation)
 
 
 def _get_db() -> LatticeDB:
-    global _db
-    if _db is None:
-        _db = LatticeDB(Config.from_env().lattice_dir)
-    return _db
+    if _db is not None:
+        return _db
+    return LatticeDB(_get_cfg().lattice_dir)  # not cached — new DB per test call
 
 
 # ── usage telemetry ───────────────────────────────────────────────────────────
@@ -40,7 +53,7 @@ def _record_usage(
     atom_count: int,
     channel: str = "web",
 ) -> None:
-    cfg = Config.from_env()
+    cfg = _get_cfg()
     record = {
         "ts": datetime.now(timezone.utc).isoformat(),
         "query_hash": sha1(question.encode()).hexdigest(),
@@ -54,7 +67,7 @@ def _record_usage(
 
 
 def _load_usage() -> list[dict]:
-    path = Config.from_env().lattice_dir / "usage.jsonl"
+    path = _get_cfg().lattice_dir / "usage.jsonl"
     if not path.exists():
         return []
     records = []
@@ -129,7 +142,7 @@ def _compute_streak_with_grace(records: list[dict]) -> tuple[int, bool]:
 
 def _record_grace_day() -> None:
     """Write a grace_day_used sentinel to usage.jsonl."""
-    path = Config.from_env().lattice_dir / "usage.jsonl"
+    path = _get_cfg().lattice_dir / "usage.jsonl"
     entry = json.dumps({"type": "grace_day_used", "ts": datetime.now(timezone.utc).isoformat()})
     with path.open("a", encoding="utf-8") as f:
         f.write(entry + "\n")
@@ -227,15 +240,17 @@ async def api_ingest_file(file: UploadFile = File(...)):
 async def api_query(req: QueryRequest) -> StreamingResponse:
     db = _get_db()
 
+    cfg = _get_cfg()
+
     def _generate():
         t0 = time.monotonic()
-        atoms = select(req.question, db=db)
+        atoms = select(req.question, db=db, cfg=cfg)
         sel_ms = int((time.monotonic() - t0) * 1000)
         for i, a in enumerate(atoms):
             a["src_key"] = f"{i + 1}"
 
         yield f'data: {json.dumps({"type": "atoms", "atoms": atoms})}\n\n'
-        yield from stream_synthesis(req.question, atoms)
+        yield from stream_synthesis(req.question, atoms, cfg)
 
         # synthesis_ms is 0 for streaming — generator is lazy, timing not meaningful here
         _record_usage(req.question, sel_ms, 0, len(atoms), channel="web")
@@ -250,15 +265,16 @@ async def api_query(req: QueryRequest) -> StreamingResponse:
 @app.post("/api/answer")
 async def api_answer(req: QueryRequest):
     db = _get_db()
+    cfg = _get_cfg()
     t0 = time.monotonic()
-    atoms = select(req.question, db=db)
+    atoms = select(req.question, db=db, cfg=cfg)
     sel_ms = int((time.monotonic() - t0) * 1000)
     if not atoms:
         return {"ok": True, "answer": None, "atom_count": 0}
     for i, a in enumerate(atoms):
         a["src_key"] = f"{i + 1}"
     t1 = time.monotonic()
-    result = synthesize(req.question, atoms)
+    result = synthesize(req.question, atoms, cfg)
     syn_ms = int((time.monotonic() - t1) * 1000)
     _record_usage(req.question, sel_ms, syn_ms, len(atoms), channel="telegram")
     atom_meta = [
@@ -309,7 +325,7 @@ async def api_usage_summary():
 
 @app.post("/api/feedback")
 async def api_feedback(req: FeedbackRequest):
-    cfg = Config.from_env()
+    cfg = _get_cfg()
     feedback_path = cfg.lattice_dir / "feedback.jsonl"
     record = {
         "ts": datetime.now(timezone.utc).isoformat(),

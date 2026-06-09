@@ -229,7 +229,7 @@ class TestDaemonPdfHandling:
         pdf = tmp_path / "doc.pdf"
         pdf.write_bytes(_raw_pdf(["content"]))
         captured = []
-        def capture_ingest(text, metadata, db):
+        def capture_ingest(text, metadata, db, cfg=None):
             captured.append(metadata)
             return {"atoms_created": 1}
         with patch("lattice.parsers.pdf.extract_pdf_text", return_value="content"):

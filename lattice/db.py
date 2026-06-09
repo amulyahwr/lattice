@@ -33,9 +33,8 @@ class AtomNotFound(Exception):
 
 
 class LatticeDB:
-    def __init__(self, lattice_dir: str | Path | None = None) -> None:
-        path = lattice_dir or os.environ.get("LATTICE_DIR", Path.home() / ".lattice")
-        self.dir = Path(path)
+    def __init__(self, lattice_dir: str | Path) -> None:
+        self.dir = Path(lattice_dir)
         self.dir.mkdir(parents=True, exist_ok=True)
         self._atom_cache: dict[str, Atom] = {}
         self._subjects_cache: dict[str, str] | None = None

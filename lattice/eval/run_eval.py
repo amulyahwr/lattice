@@ -47,6 +47,7 @@ import requests
 from dotenv import load_dotenv
 from tqdm import tqdm
 
+from lattice.config import Config
 from lattice.db import LatticeDB
 from lattice.embed import rerank_atom_dicts
 from lattice.eval.session_formatter import format_session
@@ -393,6 +394,7 @@ def _run_ingest(cfg: dict) -> None:
 
     os.environ["LLM_PROVIDER"] = cfg["llm_provider"]
     os.environ["LLM_MODEL"] = cfg["llm_model"]
+    lattice_cfg = Config.from_env()
 
     print(f"Loading dataset: {cfg['dataset']}")
     with open(cfg["dataset"]) as f:
@@ -435,6 +437,7 @@ def _run_ingest(cfg: dict) -> None:
                     text,
                     metadata={"source": "conversation", "date": ts, "session_id": sid},
                     db=db,
+                    cfg=lattice_cfg,
                 )
                 atoms_created += result["atoms_created"]
             return qid, atoms_created, None
@@ -483,6 +486,7 @@ def _run_inference(cfg: dict) -> None:
 
     os.environ["LLM_PROVIDER"] = cfg["llm_provider"]
     os.environ["LLM_MODEL"] = cfg["llm_model"]
+    lattice_cfg = Config.from_env()
 
     print(f"Loading dataset: {cfg['dataset']}")
     with open(cfg["dataset"]) as f:
@@ -532,9 +536,9 @@ def _run_inference(cfg: dict) -> None:
             bm25_candidates = [_atom_debug_dict(atom, preview_chars=400) for atom in bm25_atoms]
 
             if cfg["retrieval_mode"] == "select":
-                selected = select(item["question"], as_of=as_of, db=db, top_k=cfg["top_k"])
+                selected = select(item["question"], db=db, cfg=lattice_cfg, as_of=as_of, top_k=cfg["top_k"])
             elif cfg["retrieval_mode"] == "bm25_bfs":
-                selected = _retrieve(item["question"], as_of=as_of, db=db, top_k=cfg["top_k"])
+                selected = _retrieve(item["question"], db=db, cfg=lattice_cfg, as_of=as_of, top_k=cfg["top_k"])
             elif cfg["retrieval_mode"] == "bm25":
                 selected = [_atom_debug_dict(atom) for atom in bm25_atoms]
             else:
@@ -545,7 +549,7 @@ def _run_inference(cfg: dict) -> None:
                 "selected": _session_retrieval_metrics(item, selected),
             }
             answer_token_recall = _answer_token_recall(item.get("answer", ""), selected)
-            synthesis = synthesize(item["question"], selected, query_date=as_of)
+            synthesis = synthesize(item["question"], selected, lattice_cfg, query_date=as_of)
 
             all_atoms = [_atom_debug_dict(a) for a in db.all()]  # full content for debug
             ingest_summary = _ingest_summary(db)
@@ -680,6 +684,7 @@ def _run_replay_inference(cfg: dict) -> None:
 
     os.environ["LLM_PROVIDER"] = cfg["llm_provider"]
     os.environ["LLM_MODEL"] = cfg["llm_model"]
+    lattice_cfg = Config.from_env()
 
     done_ids = _load_done_ids(out_path)
     rerank = cfg["replay_rerank"]
@@ -718,7 +723,7 @@ def _run_replay_inference(cfg: dict) -> None:
 
                 gold_answer = replay.get("gold_answer") or item.get("answer", "")
                 answer_token_recall = _answer_token_recall(gold_answer, atoms)
-                synthesis = synthesize(question, atoms, query_date=as_of)
+                synthesis = synthesize(question, atoms, lattice_cfg, query_date=as_of)
 
                 out_f.write(json.dumps({"question_id": qid, "hypothesis": synthesis.answer}) + "\n")
                 out_f.flush()

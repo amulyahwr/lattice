@@ -26,11 +26,12 @@ The current pipeline is: **ingest → select → synthesize**. Ingest and synthe
 ```
 server.py          MCP stdio entrypoint. Owns one shared LatticeDB instance.
 lattice/
-  config.py        Centralised env-var parsing → Config dataclass. All path/port vars here;
-                   LLM vars stay in llm.py pending refactor.
-  llm.py           openai.OpenAI wrapper. make_llm_client() builds client from env; resolve_model()
-                   returns model name or raises EnvironmentError if LLM_MODEL unset; complete() calls
-                   chat.completions.create. Ollama gets extra_body={num_ctx, think:false}; others don't.
+  config.py        Centralised env-var parsing → Config dataclass. All 21 env vars here:
+                   paths, LLM, selection tuning, ingest tuning, PII, embed. __post_init__
+                   derives path fields from lattice_dir. Tests use Config(lattice_dir=tmp_path).
+  llm.py           openai.OpenAI wrapper. make_llm_client(cfg), resolve_model(cfg, override),
+                   complete(messages, cfg). All read from Config, not os.environ.
+                   Ollama gets extra_body={num_ctx, think:false}; others don't.
   models.py        Atom pydantic model + markdown serialization (python-frontmatter).
   db.py            File-based store: one .md file per atom in LATTICE_DIR. BM25 search.
                    subjects.json is a subject→atom_id index for O(1) supersession lookups.
@@ -121,7 +122,7 @@ Lattice has multiple capture/recall channels: MCP tools (Claude Code), web UI, `
 
 **Supersession** (in `ingest.py`): when a new atom has the same subject as an existing one, an LLM call decides if it supersedes. Fast path uses `subjects.json`; slow path scans files (handles hand-edited atoms). Superseded atoms stay on disk with `is_superseded=true` and bidirectional links (`superseded_by` / `supersedes`).
 
-**LLM calls**: ingest/supersession go through `lattice.llm.complete(messages)`. Tests mock at `lattice.ingest.complete` — patch the module-level name, not `lattice.llm.complete`. Synthesis is different: patch `lattice.synthesis.make_llm_client` (returns a mock OpenAI client). Selection has no LLM calls.
+**LLM calls**: ingest/supersession go through `lattice.llm.complete(messages, cfg)`. Tests mock at `lattice.ingest.complete` — patch the module-level name, not `lattice.llm.complete`. Synthesis is different: patch `lattice.synthesis.make_llm_client` (returns a mock OpenAI client). Selection has no LLM calls.
 
 **Atom storage**: every atom is a `.md` file with YAML frontmatter. `LatticeDB` has an in-memory cache (`_atom_cache`). Cache is per-instance; `server.py` reuses one instance per process.
 
@@ -133,7 +134,7 @@ This is current MVP behavior, not the target product shape.
 
 ### Test conventions
 
-All tests mock LLM via `unittest.mock.patch`. Ingest responses mock two calls per atom: first the extraction JSON, then the supersession reply (`"null"` or an atom_id string). Use `tmp_path` fixture for isolated `LatticeDB` instances.
+All tests mock LLM via `unittest.mock.patch`. Ingest responses mock two calls per atom: first the extraction JSON, then the supersession reply (`"null"` or an atom_id string). Use `tmp_path` fixture for isolated `LatticeDB` instances. Function-level tests construct `Config(lattice_dir=tmp_path, llm_provider="ollama", llm_model="test-model")` directly — no `monkeypatch.setenv` needed for behavior control.
 
 ### Memory: Lattice is the sole memory system
 

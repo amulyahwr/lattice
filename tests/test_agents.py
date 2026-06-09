@@ -9,10 +9,13 @@ from unittest.mock import MagicMock, patch, PropertyMock
 
 import pytest
 
+from lattice.config import Config
 from lattice.db import LatticeDB
 from lattice.ingest import ingest
 from lattice.selection import select
 from lattice.synthesis import synthesize
+
+_CFG = Config(llm_provider="ollama", llm_model="test-model")
 
 
 @pytest.fixture()
@@ -40,7 +43,7 @@ class TestIngest:
         ]
         # extract_atoms (no supersession: first atom for this subject)
         with patch("lattice.ingest.complete", side_effect=[_ingest_response(llm_atoms)]):
-            result = ingest("lattice is a local MCP server.", db=db)
+            result = ingest("lattice is a local MCP server.", db=db, cfg=_CFG)
 
         assert result["atoms_created"] == 1
         assert len(result["atom_ids"]) == 1
@@ -54,7 +57,7 @@ class TestIngest:
              "content": "Project readme.", "valid_from": None, "valid_until": None},
         ]
         with patch("lattice.ingest.complete", side_effect=[_ingest_response(llm_atoms)]):
-            result = ingest("Project readme.", metadata={"title": "README"}, db=db)
+            result = ingest("Project readme.", metadata={"title": "README"}, db=db, cfg=_CFG)
 
         atom = db.read(result["atom_ids"][0])
         assert atom.metadata.get("title") == "README"
@@ -71,7 +74,7 @@ class TestIngest:
         ]
         # no supersession calls: first atoms on each subject → db.by_subject() returns []
         with patch("lattice.ingest.complete", side_effect=[_ingest_response(llm_atoms)]):
-            result = ingest("A is true. B is false.", db=db)
+            result = ingest("A is true. B is false.", db=db, cfg=_CFG)
 
         assert result["atoms_created"] == 2
         all_ids = {a.atom_id for a in db.all()}
@@ -85,7 +88,7 @@ class TestIngest:
              "content": "The API uses REST.", "valid_from": None, "valid_until": None},
         ]
         with patch("lattice.ingest.complete", side_effect=[_ingest_response(old_atoms)]):
-            old_result = ingest("The API uses REST.", db=db)
+            old_result = ingest("The API uses REST.", db=db, cfg=_CFG)
 
         old_id = old_result["atom_ids"][0]
 
@@ -98,7 +101,7 @@ class TestIngest:
             _ingest_response(new_atoms),
             _supersession_response(old_id),
         ]):
-            new_result = ingest("The API now uses GraphQL.", db=db)
+            new_result = ingest("The API now uses GraphQL.", db=db, cfg=_CFG)
 
         new_id = new_result["atom_ids"][0]
         old_atom = db.read(old_id)
@@ -114,7 +117,7 @@ class TestIngest:
              "content": "Special offer.", "valid_from": "2024-06-01", "valid_until": "2024-06-30"},
         ]
         with patch("lattice.ingest.complete", side_effect=[_ingest_response(llm_atoms)]):
-            result = ingest("Special offer valid June 2024.", db=db)
+            result = ingest("Special offer valid June 2024.", db=db, cfg=_CFG)
 
         atom = db.read(result["atom_ids"][0])
         assert atom.valid_from == date(2024, 6, 1)
@@ -126,9 +129,9 @@ class TestIngest:
              "content": "Project uses Python.", "valid_from": None, "valid_until": None},
         ]
         with patch("lattice.ingest.complete", side_effect=[_ingest_response(llm_atoms)]):
-            first = ingest("Project uses Python.", db=db)
+            first = ingest("Project uses Python.", db=db, cfg=_CFG)
         with patch("lattice.ingest.complete", side_effect=[_ingest_response(llm_atoms)]):
-            second = ingest("Project uses Python.", db=db)
+            second = ingest("Project uses Python.", db=db, cfg=_CFG)
 
         assert first["atoms_created"] == 1
         assert second["atoms_created"] == 0
@@ -149,6 +152,7 @@ class TestIngest:
                     "observed_at": "2024-06-01T00:00:00+00:00",
                 },
                 db=db,
+                cfg=_CFG,
             )
 
         atom = db.read(result["atom_ids"][0])
@@ -167,6 +171,7 @@ class TestIngest:
                 "Festival details were discussed.",
                 metadata={"source": "conversation", "date": "2023/05/25 (Thu) 06:05"},
                 db=db,
+                cfg=_CFG,
             )
 
         atom = db.read(result["atom_ids"][0])
@@ -193,23 +198,23 @@ class TestSelect:
     def test_returns_relevant_atoms(self, db):
         atoms = self._seed(db)
         python_id = atoms[0].atom_id
-        result = select("tell me about Python", db=db)
+        result = select("tell me about Python", db=db, cfg=_CFG)
         assert result[0]["atom_id"] == python_id
 
     def test_result_has_required_fields(self, db):
         atoms = self._seed(db)
-        result = select("Python", db=db)
+        result = select("Python", db=db, cfg=_CFG)
         keys = set(result[0].keys())
         assert {"atom_id", "subject", "content", "kind", "source"}.issubset(keys)
         assert {"source_id", "source_title", "segment_id", "observed_at"}.issubset(keys)
 
     def test_empty_db_returns_empty(self, db):
-        result = select("anything", db=db)
+        result = select("anything", db=db, cfg=_CFG)
         assert result == []
 
     def test_uses_bm25_without_llm_selector(self, db):
         self._seed(db)
-        result = select("programming language", db=db)
+        result = select("programming language", db=db, cfg=_CFG)
         assert isinstance(result, list)
         assert result
 
@@ -220,7 +225,7 @@ class TestSelect:
             content="Price is $10.", valid_until=date(2023, 12, 31),
         )
         db.write(expired)
-        result = select("price", as_of=date(2024, 6, 1), db=db)
+        result = select("price", as_of=date(2024, 6, 1), db=db, cfg=_CFG)
         assert all(r["atom_id"] != expired.atom_id for r in result)
 
     def test_expands_via_semantic_and_segment_edges(self, db):
@@ -261,7 +266,7 @@ class TestSelect:
         db.write(same_subject)
         db.write(unrelated)
 
-        result = select("xyzdecorators", db=db, top_k=1)
+        result = select("xyzdecorators", db=db, cfg=_CFG, top_k=1)
         ids = [row["atom_id"] for row in result]
         assert seed.atom_id in ids
         assert same_segment.atom_id in ids    # co-located in same segment — included
@@ -278,7 +283,7 @@ class TestSelect:
                 content=f"Widget {i} is a component.",
                 source_id="src-single",
             ))
-        result = select("widget component", db=db)
+        result = select("widget component", db=db, cfg=_CFG)
         assert len(result) <= _POINTED_MAX
 
     def test_multi_source_triggers_expansion_path(self, db):
@@ -295,7 +300,7 @@ class TestSelect:
                      content=f"Gadget {i} alt is a device.", source_id="src-B")
             db.write(b)
             ids_b.append(b.atom_id)
-        result = select("gadget device", db=db)
+        result = select("gadget device", db=db, cfg=_CFG)
         result_ids = {r["atom_id"] for r in result}
         assert any(aid in result_ids for aid in ids_a)
         assert any(aid in result_ids for aid in ids_b)
@@ -324,29 +329,29 @@ class TestSynthesize:
     def test_returns_string(self):
         atoms = [{"subject": "Python", "kind": "fact", "content": "Python is dynamically typed."}]
         with patch("lattice.synthesis.make_llm_client", return_value=self._mock_client("Python is dynamically typed.")):
-            result = synthesize("What is Python?", atoms)
+            result = synthesize("What is Python?", atoms, _CFG)
         assert isinstance(result.answer, str)
         assert len(result.answer) > 0
 
     def test_empty_atoms_returns_no_info_message(self):
-        result = synthesize("What is Python?", [])
+        result = synthesize("What is Python?", [], _CFG)
         assert "no relevant" in result.answer.lower() or "not found" in result.answer.lower() or "no" in result.answer.lower()
 
     def test_empty_atoms_has_empty_raw_response(self):
-        result = synthesize("What is Python?", [])
+        result = synthesize("What is Python?", [], _CFG)
         assert result.raw_response == ""
 
     def test_raw_response_captured(self):
         atoms = [{"subject": "Python", "kind": "fact", "content": "Python is dynamically typed."}]
         with patch("lattice.synthesis.make_llm_client", return_value=self._mock_client("Python is dynamically typed.")):
-            result = synthesize("What is Python?", atoms)
+            result = synthesize("What is Python?", atoms, _CFG)
         assert result.raw_response == result.answer
 
     def test_passes_query_and_atoms_to_llm(self):
         atoms = [{"subject": "X", "kind": "fact", "content": "X is true."}]
         mock_client = self._mock_client("X is true.")
         with patch("lattice.synthesis.make_llm_client", return_value=mock_client):
-            synthesize("Tell me about X.", atoms)
+            synthesize("Tell me about X.", atoms, _CFG)
         create_call = mock_client.chat.completions.create.call_args
         messages = create_call.kwargs.get("messages") or create_call.args[0]
         combined = " ".join(m["content"] for m in messages if isinstance(m.get("content"), str))

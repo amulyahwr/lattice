@@ -321,4 +321,5 @@ Every fact is a plain `.md` file in `LATTICE_DIR`. Hand-editable, git-trackable.
 | Prospective reminders (`trigger_at` atoms surfaced by daemon)                  | Phase 2B   |
 | Multi-device sync (mDNS discovery + Ed25519 pairing)                           | Phase 3    |
 | Native mobile app (iOS / Android, on-device inference)                         | Phase 3    |
+| Messages / iMessage integration — macOS passive ingest via chat.db; iOS/Android via native app Share Sheet | Phase 3    |
 | Screenpipe integration — passive ambient capture                               | Phase 3    |

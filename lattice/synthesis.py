@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import json
-import os
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
-from typing import Generator
+from typing import TYPE_CHECKING, Generator
 
 from lattice.llm import make_llm_client, resolve_model
 from lattice.privacy import EntityRedactor, is_active as _pii_active
+
+if TYPE_CHECKING:
+    from lattice.config import Config
 
 
 @dataclass
@@ -90,9 +92,9 @@ _TOOLS = [
 ]
 
 
-def _ollama_extra() -> dict:
-    if os.environ.get("LLM_PROVIDER", "ollama") == "ollama":
-        return {"num_ctx": 4096, "think": False}
+def _ollama_extra(cfg: "Config") -> dict:
+    if cfg.llm_provider == "ollama":
+        return {"num_ctx": cfg.llm_num_ctx, "think": False}
     return {}
 
 
@@ -162,7 +164,7 @@ def replace_citations(text: str, atoms: list[dict]) -> str:
     return _CITATION_RE.sub(_replace, text)
 
 
-def _redact_atoms(atoms: list[dict]) -> tuple[list[dict], dict[str, str]]:
+def _redact_atoms(atoms: list[dict], cfg: "Config") -> tuple[list[dict], dict[str, str]]:
     """Redact PII from atom content + subject before sending to cloud LLM.
 
     Returns (redacted_atoms, entity_map). Caller must restore entity_map in the response.
@@ -171,7 +173,7 @@ def _redact_atoms(atoms: list[dict]) -> tuple[list[dict], dict[str, str]]:
     from lattice.privacy import _apply_replacements
     redactor = EntityRedactor()
     texts = [a.get("content", "") for a in atoms]
-    redacted_texts, entity_map = redactor.redact_batch(texts)
+    redacted_texts, entity_map = redactor.redact_batch(texts, cfg)
     if not entity_map:
         return atoms, {}
     orig_to_tag = {v: k for k, v in entity_map.items()}
@@ -204,9 +206,10 @@ def _build_messages(query: str, atoms: list[dict], query_date: date | None) -> l
 
 
 def _run_tool_loop(
-    client: OpenAI,
+    client: "OpenAI",
     model: str,
     messages: list[dict],
+    cfg: "Config",
 ) -> tuple[list[dict], list[dict]]:
     """Run the tool-calling agent loop until the model stops calling tools or hits 5 rounds.
 
@@ -215,7 +218,7 @@ def _run_tool_loop(
     for generating the final text response (streaming or non-streaming).
     """
     tool_calls_log: list[dict] = []
-    extra = _ollama_extra()
+    extra = _ollama_extra(cfg)
     for _ in range(5):
         resp = client.chat.completions.create(
             model=model, messages=messages, tools=_TOOLS, tool_choice="auto",
@@ -236,18 +239,19 @@ def _run_tool_loop(
 def synthesize(
     query: str,
     atoms: list[dict],
+    cfg: "Config",
     query_date: date | None = None,
 ) -> SynthesisResult:
     if not atoms:
         return SynthesisResult(answer="No relevant information found in the lattice.", raw_response="")
 
-    model = resolve_model(os.environ.get("SYNTHESIS_MODEL") or None)
-    client = make_llm_client()
-    redacted_atoms, entity_map = _redact_atoms(atoms)
+    model = resolve_model(cfg, cfg.synthesis_model)
+    client = make_llm_client(cfg)
+    redacted_atoms, entity_map = _redact_atoms(atoms, cfg)
     messages = _build_messages(query, redacted_atoms, query_date)
-    messages, tool_calls_log = _run_tool_loop(client, model, messages)
+    messages, tool_calls_log = _run_tool_loop(client, model, messages, cfg)
 
-    extra = _ollama_extra()
+    extra = _ollama_extra(cfg)
     resp = client.chat.completions.create(
         model=model, messages=messages, **( {"extra_body": extra} if extra else {}),
     )
@@ -261,6 +265,7 @@ def synthesize(
 def stream_synthesis(
     query: str,
     atoms: list[dict],
+    cfg: "Config",
     query_date: date | None = None,
 ) -> "Generator[str, None, None]":
     """Stream the final synthesis answer as SSE-formatted strings.
@@ -280,24 +285,24 @@ def stream_synthesis(
         return
 
     try:
-        model = resolve_model(os.environ.get("SYNTHESIS_MODEL") or None)
-        client = make_llm_client()
+        model = resolve_model(cfg, cfg.synthesis_model)
+        client = make_llm_client(cfg)
     except EnvironmentError as exc:
         # Rule 6: make degradation visible — signal provider gap to the caller
         yield f'data: {json.dumps({"type": "error", "message": str(exc)})}\n\n'
         return
 
-    redacted_atoms, entity_map = _redact_atoms(atoms)
+    redacted_atoms, entity_map = _redact_atoms(atoms, cfg)
     _redactor = EntityRedactor()
     messages = _build_messages(query, redacted_atoms, query_date)
     try:
-        messages, tool_calls_log = _run_tool_loop(client, model, messages)
+        messages, tool_calls_log = _run_tool_loop(client, model, messages, cfg)
     except Exception as exc:
         yield f'data: {json.dumps({"type": "error", "message": f"Tool loop failed: {exc}"})}\n\n'
         return
 
     full_answer: list[str] = []
-    extra = _ollama_extra()
+    extra = _ollama_extra(cfg)
     try:
         stream = client.chat.completions.create(
             model=model, messages=messages, stream=True, **( {"extra_body": extra} if extra else {}),

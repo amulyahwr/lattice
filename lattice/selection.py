@@ -1,31 +1,19 @@
 from __future__ import annotations
 
 import math
-import os
 from datetime import date, datetime, timezone
+from typing import TYPE_CHECKING
 
 from lattice.db import LatticeDB
 from lattice.models import Atom
 from lattice.query import parse_query
 
+if TYPE_CHECKING:
+    from lattice.config import Config
+
 _PROBE_K = 7
 _POINTED_MAX = 14
 _BFS_MAX_ATOMS = 60
-
-
-_RECOMMENDATION_CAP = int(os.environ.get("LATTICE_RECOMMENDATION_CAP", "5"))
-# Drop BM25 seeds scoring exactly 0 (matched no query tokens) before BFS.
-# Zero-score seeds expand the graph from unrelated atoms, injecting noise.
-_SEED_MIN_SCORE = float(os.environ.get("LATTICE_SEED_MIN_SCORE", "0.0"))
-# Augment BM25 seeds with dense NN hits before BFS. Fixes vocab-mismatch misses
-# (e.g. "gym" query → "workout" atom). Requires fastembed + embed index.
-_DENSE_SEEDS = os.environ.get("LATTICE_DENSE_SEEDS", "").lower() in ("1", "true")
-_DENSE_TOP_K = int(os.environ.get("LATTICE_DENSE_TOP_K", "10"))
-# After BFS expansion, re-sort result by BM25 score so highest-signal atoms surface first.
-_BFS_RESCORE = os.environ.get("LATTICE_BFS_RESCORE", "").lower() in ("1", "true")
-# Pre-BFS seed weight multiplier: decay BM25 score by atom age + kind.
-# Set LATTICE_TIME_DECAY=0 to disable.
-_TIME_DECAY = os.environ.get("LATTICE_TIME_DECAY", "1").lower() not in ("0", "false")
 
 # Half-life in days per kind. Atoms older than 2× half-life are heavily discounted.
 # Durable kinds (fact, count) decay very slowly; transient kinds (reminder) decay fast.
@@ -43,13 +31,13 @@ _DEFAULT_HALF_LIFE = 180.0
 _DECAY_FLOOR = 0.1  # never fully silence an atom via decay alone
 
 
-def _decay_factor(kind: str | None, ref_dt: datetime | None, now: datetime | None = None) -> float:
+def _decay_factor(kind: str | None, ref_dt: datetime | None, cfg: "Config", now: datetime | None = None) -> float:
     """Exponential decay multiplier: 1.0 when fresh, approaching _DECAY_FLOOR when old.
 
     `now` defaults to wall clock. Pass `as_of` converted to datetime for historical queries
     so atoms are decayed relative to the query date, not today.
     """
-    if not _TIME_DECAY or ref_dt is None:
+    if not cfg.time_decay or ref_dt is None:
         return 1.0
     half_life = _HALF_LIFE.get(kind or "", _DEFAULT_HALF_LIFE)
     if ref_dt.tzinfo is None:
@@ -61,12 +49,12 @@ def _decay_factor(kind: str | None, ref_dt: datetime | None, now: datetime | Non
     return max(math.exp(-age_days * math.log(2) / half_life), _DECAY_FLOOR)
 
 
-def _apply_recommendation_cap(atoms: list[dict]) -> list[dict]:
+def _apply_recommendation_cap(atoms: list[dict], cfg: "Config") -> list[dict]:
     rec_seen = 0
     result = []
     for atom in atoms:
         if atom.get("kind") == "recommendation":
-            if rec_seen < _RECOMMENDATION_CAP:
+            if rec_seen < cfg.recommendation_cap:
                 result.append(atom)
                 rec_seen += 1
         else:
@@ -120,26 +108,24 @@ def _source_diversity(seeds: list[Atom]) -> int:
 
 def _retrieve(
     query: str,
+    db: LatticeDB,
+    cfg: "Config",
     as_of: date | None = None,
-    db: LatticeDB | None = None,
     top_k: int = 20,
 ) -> list[dict]:
-    if db is None:
-        db = LatticeDB()
-
     intent = parse_query(query)
     scored_seeds = db.search_scored(query, as_of=as_of, top_k=top_k)
-    if _SEED_MIN_SCORE > 0.0:
-        scored_seeds = [(s, a) for s, a in scored_seeds if s > _SEED_MIN_SCORE]
+    if cfg.seed_min_score > 0.0:
+        scored_seeds = [(s, a) for s, a in scored_seeds if s > cfg.seed_min_score]
 
-    if _TIME_DECAY:
+    if cfg.time_decay:
         # Decay relative to as_of when provided (historical queries); else wall clock.
         now_dt = (
             datetime.combine(as_of, datetime.min.time()).replace(tzinfo=timezone.utc)
             if as_of else datetime.now(tz=timezone.utc)
         )
         scored_seeds = [
-            (s * _decay_factor(a.kind, a.observed_at or a.ingested_at, now=now_dt), a)
+            (s * _decay_factor(a.kind, a.observed_at or a.ingested_at, cfg, now=now_dt), a)
             for s, a in scored_seeds
         ]
         scored_seeds.sort(key=lambda x: x[0], reverse=True)
@@ -148,9 +134,9 @@ def _retrieve(
     if not seeds:
         return []
 
-    if _DENSE_SEEDS and db._embed_matrix is not None and db._embed_ids:
+    if cfg.dense_seeds and db._embed_matrix is not None and db._embed_ids:
         from lattice.embed import dense_search
-        dense_ids = dense_search(query, db._embed_matrix, db._embed_ids, top_k=_DENSE_TOP_K)
+        dense_ids = dense_search(query, db._embed_matrix, db._embed_ids, top_k=cfg.dense_top_k)
         seed_id_set = {a.atom_id for a in seeds}
         for atom_id in dense_ids:
             if atom_id not in seed_id_set:
@@ -162,8 +148,6 @@ def _retrieve(
                 except Exception:
                     pass
 
-    # Source-diversity probe: top _PROBE_K seeds tell us whether the answer
-    # lives in one source (pointed) or spans multiple sources (expansion).
     probe = seeds[:_PROBE_K]
     if _source_diversity(probe) <= 1:
         active_seeds, max_atoms = probe, _POINTED_MAX
@@ -177,12 +161,11 @@ def _retrieve(
     else:
         result = _fallback_select(active_seeds, db, as_of, max_atoms)
 
-    if _BFS_RESCORE and result:
+    if cfg.bfs_rescore and result:
         scored = db.search_scored(query, as_of=as_of, top_k=len(result) + top_k)
         score_map = {a.atom_id: s for s, a in scored}
         result.sort(key=lambda d: score_map.get(d["atom_id"], 0.0), reverse=True)
 
-    # Kind fallback: if query has a primary kind and BFS found none, scan all.
     if intent.primary_kind is not None:
         present_kinds = {a["kind"] for a in result}
         if intent.primary_kind not in present_kinds:
@@ -191,7 +174,7 @@ def _retrieve(
                 if fa.atom_id not in seen_ids:
                     result.append(_atom_to_dict(fa))
 
-    return _apply_recommendation_cap(result)
+    return _apply_recommendation_cap(result, cfg)
 
 
 def _graph_select(
@@ -259,8 +242,9 @@ def _fallback_select(
 
 def select(
     query: str,
+    db: LatticeDB,
+    cfg: "Config",
     as_of: date | None = None,
-    db: LatticeDB | None = None,
     top_k: int = 20,
 ) -> list[dict]:
-    return _retrieve(query, as_of=as_of, db=db, top_k=top_k)
+    return _retrieve(query, db=db, cfg=cfg, as_of=as_of, top_k=top_k)

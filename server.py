@@ -88,12 +88,13 @@ class _CaptureArgs(BaseModel):
 # ── app + db ──────────────────────────────────────────────────────────────────
 
 app = Server("lattice")
-_db = LatticeDB()
+_cfg = Config.from_env()
+_db = LatticeDB(_cfg.lattice_dir)
 _db.preload()
 
 
 def _lattice_dir() -> Path:
-    return Config.from_env().lattice_dir
+    return _cfg.lattice_dir
 
 
 @app.list_tools()
@@ -285,7 +286,7 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         _db.preload_if_stale()
         as_of_str: str | None = arguments.get("as_of")
         as_of = date.fromisoformat(as_of_str) if as_of_str else None
-        atoms = select(query=arguments["query"], as_of=as_of, db=_db)
+        atoms = select(query=arguments["query"], db=_db, cfg=_cfg, as_of=as_of)
         return [TextContent(type="text", text=json.dumps(atoms, indent=2))]
 
     if name == "lattice_answer":
@@ -303,11 +304,11 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
                 except AtomNotFound:
                     pass
         else:
-            atoms = select(query=arguments["query"], as_of=as_of, db=_db)
+            atoms = select(query=arguments["query"], db=_db, cfg=_cfg, as_of=as_of)
         sel_ms = int((time.monotonic() - t0) * 1000)
 
         t1 = time.monotonic()
-        result = synthesize(query=arguments["query"], atoms=atoms)
+        result = synthesize(query=arguments["query"], atoms=atoms, cfg=_cfg)
         syn_ms = int((time.monotonic() - t1) * 1000)
 
         try:

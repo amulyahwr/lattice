@@ -1,34 +1,33 @@
 from __future__ import annotations
 
-import os
+from typing import TYPE_CHECKING
 
 from openai import OpenAI
 
+if TYPE_CHECKING:
+    from lattice.config import Config
 
-def make_llm_client(base_url: str | None = None, api_key: str | None = None) -> OpenAI:
-    provider = os.environ.get("LLM_PROVIDER", "ollama")
-    resolved_url = base_url or (
-        "http://localhost:11434/v1" if provider == "ollama"
-        else os.environ.get("LLM_BASE_URL")
+
+def make_llm_client(cfg: "Config") -> OpenAI:
+    resolved_url = (
+        "http://localhost:11434/v1" if cfg.llm_provider == "ollama"
+        else cfg.llm_base_url
     )
-    resolved_key = api_key or (
-        "ollama" if provider == "ollama"
-        else os.environ.get("LLM_API_KEY")
-    )
+    resolved_key = "ollama" if cfg.llm_provider == "ollama" else cfg.llm_api_key
     kwargs: dict = {"api_key": resolved_key}
     if resolved_url:
         kwargs["base_url"] = resolved_url
-    if provider == "ollama":
+    if cfg.llm_provider == "ollama":
         kwargs["timeout"] = 90.0
     return OpenAI(**kwargs)
 
 
-def resolve_model(override: str | None = None) -> str:
-    """Return the model name to use, preferring *override* then LLM_MODEL env var.
+def resolve_model(cfg: "Config", override: str | None = None) -> str:
+    """Return model name, preferring *override* then cfg.llm_model.
 
     Raises EnvironmentError with a clear message if neither is set.
     """
-    m = override or os.environ.get("LLM_MODEL")
+    m = override or cfg.llm_model
     if not m:
         raise EnvironmentError(
             "LLM_MODEL is required but not set. "
@@ -40,23 +39,22 @@ def resolve_model(override: str | None = None) -> str:
 
 def complete(
     messages: list[dict],
+    cfg: "Config",
     text_format: type | None = None,
     model: str | None = None,
     num_ctx: int | None = None,
 ) -> str:
-    provider = os.environ.get("LLM_PROVIDER", "ollama")
-    api_key = os.environ.get("LLM_API_KEY")
-    if provider != "ollama" and not api_key:
-        raise EnvironmentError(f"LLM_API_KEY is required for provider '{provider}'")
+    if cfg.llm_provider != "ollama" and not cfg.llm_api_key:
+        raise EnvironmentError(f"LLM_API_KEY is required for provider '{cfg.llm_provider}'")
 
-    client = make_llm_client()
-    m = resolve_model(model)
+    client = make_llm_client(cfg)
+    m = resolve_model(cfg, model)
 
     kwargs: dict = {"model": m, "messages": messages}
     if text_format is not None:
         kwargs["response_format"] = {"type": "json_object"}
-    if provider == "ollama":
-        ctx = num_ctx or int(os.environ.get("LLM_NUM_CTX", "4096"))
+    if cfg.llm_provider == "ollama":
+        ctx = num_ctx or cfg.llm_num_ctx
         kwargs["extra_body"] = {"num_ctx": ctx, "think": False}
 
     resp = client.chat.completions.create(**kwargs)

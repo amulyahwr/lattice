@@ -1,7 +1,9 @@
 from __future__ import annotations
 
-import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from lattice.config import Config
 
 import numpy as np
 
@@ -22,10 +24,10 @@ def is_available() -> bool:
     return _EMBED_AVAILABLE
 
 
-def _get_model() -> Any:
+def _get_model(cfg: "Config | None" = None) -> Any:
     global _embed_model
     if _embed_model is None:
-        model_name = os.environ.get("LATTICE_EMBED_MODEL", "BAAI/bge-small-en-v1.5")
+        model_name = cfg.embed_model if cfg else "BAAI/bge-small-en-v1.5"
         _embed_model = _TextEmbedding(model_name)
     return _embed_model
 

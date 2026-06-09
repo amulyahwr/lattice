@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timedelta, timezone
 from hashlib import sha256
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from pydantic import BaseModel
 
@@ -17,6 +16,9 @@ from lattice.llm import complete
 from lattice.models import Atom
 from lattice.parsers import Segment, infer_source_type, parse
 from lattice.privacy import EntityRedactor
+
+if TYPE_CHECKING:
+    from lattice.config import Config
 
 
 class _ExtractedAtom(BaseModel):
@@ -412,7 +414,7 @@ def _segments_for_source(source: str, metadata: dict) -> list[Segment]:
     return parse(source, source_type)
 
 
-def _extract_atoms(segment: Segment, metadata: dict, ref: datetime) -> list[dict]:
+def _extract_atoms(segment: Segment, metadata: dict, ref: datetime, cfg: "Config") -> list[dict]:
     text = segment.text
     if segment.context:
         text = f"Context: {segment.context}\n\n{text}"
@@ -424,8 +426,7 @@ def _extract_atoms(segment: Segment, metadata: dict, ref: datetime) -> list[dict
             "content": f"Today's date: {ref.date().isoformat()}\n\n---\n\n{text}",
         },
     ]
-    ingest_model = os.environ.get("INGEST_MODEL") or None
-    raw = complete(messages, text_format=_AtomList, model=ingest_model)
+    raw = complete(messages, cfg, text_format=_AtomList, model=cfg.ingest_model)
     try:
         atoms_data: list[dict] = json.loads(raw)["atoms"]
     except (json.JSONDecodeError, KeyError, TypeError):
@@ -449,7 +450,7 @@ def _extract_atoms(segment: Segment, metadata: dict, ref: datetime) -> list[dict
     return atoms_data
 
 
-def _detect_supersession(db: LatticeDB, new_atom: Atom) -> str | None:
+def _detect_supersession(db: LatticeDB, new_atom: Atom, cfg: "Config") -> str | None:
     # Fast path: subject registry
     existing_id = db.lookup_subject(new_atom.subject)
     if existing_id:
@@ -470,8 +471,7 @@ def _detect_supersession(db: LatticeDB, new_atom: Atom) -> str | None:
                 ),
             },
         ]
-        ingest_model = os.environ.get("INGEST_MODEL") or None
-        raw = complete(messages, text_format=_SupersessionResult, model=ingest_model)
+        raw = complete(messages, cfg, text_format=_SupersessionResult, model=cfg.ingest_model)
         superseded_id = json.loads(raw).get("superseded_atom_id")
         if not superseded_id:
             return None
@@ -481,8 +481,7 @@ def _detect_supersession(db: LatticeDB, new_atom: Atom) -> str | None:
     existing = [a for a in db.by_subject(new_atom.subject) if not a.is_superseded]
     if not existing:
         # Fuzzy path: find semantically similar subjects via token overlap
-        threshold = int(os.environ.get("LATTICE_SUBJECT_FUZZY_THRESHOLD", "80"))
-        fuzzy_ids = db.fuzzy_subject_candidates(new_atom.subject, threshold)
+        fuzzy_ids = db.fuzzy_subject_candidates(new_atom.subject, cfg.subject_fuzzy_threshold)
         fuzzy_candidates = []
         for aid in fuzzy_ids:
             try:
@@ -506,8 +505,7 @@ def _detect_supersession(db: LatticeDB, new_atom: Atom) -> str | None:
             ),
         },
     ]
-    ingest_model = os.environ.get("INGEST_MODEL") or None
-    raw = complete(messages, text_format=_SupersessionResult, model=ingest_model)
+    raw = complete(messages, cfg, text_format=_SupersessionResult, model=cfg.ingest_model)
     superseded_id = json.loads(raw).get("superseded_atom_id")
     if not superseded_id:
         return None
@@ -516,10 +514,16 @@ def _detect_supersession(db: LatticeDB, new_atom: Atom) -> str | None:
 
 
 def ingest(
-    source: str, metadata: dict | None = None, db: LatticeDB | None = None
+    source: str,
+    metadata: dict | None = None,
+    db: LatticeDB | None = None,
+    cfg: "Config | None" = None,
 ) -> dict:
+    if cfg is None:
+        from lattice.config import Config
+        cfg = Config.from_env()
     if db is None:
-        db = LatticeDB()
+        db = LatticeDB(cfg.lattice_dir)
     metadata = metadata or {}
     source_id = str(metadata.get("source_id") or uuid.uuid4())
     observed_at = _parse_datetime(
@@ -531,7 +535,7 @@ def ingest(
 
     # PII redaction: batch all segment texts → one shared entity_map → restore after extraction
     _redactor = EntityRedactor()
-    _seg_texts, _entity_map = _redactor.redact_batch([s.text for s in segments])
+    _seg_texts, _entity_map = _redactor.redact_batch([s.text for s in segments], cfg)
     if _entity_map:
         segments = [
             Segment(
@@ -546,13 +550,13 @@ def ingest(
             for s, rt in zip(segments, _seg_texts)
         ]
 
-    workers = max(1, int(os.environ.get("LATTICE_INGEST_WORKERS", "1")))
+    workers = cfg.ingest_workers
     if workers == 1 or len(segments) == 1:
-        nested_atoms = [_extract_atoms(segment, metadata, ref) for segment in segments]
+        nested_atoms = [_extract_atoms(segment, metadata, ref, cfg) for segment in segments]
     else:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             nested_atoms = list(
-                pool.map(lambda s: _extract_atoms(s, metadata, ref), segments)
+                pool.map(lambda s: _extract_atoms(s, metadata, ref, cfg), segments)
             )
     atoms_data = [a for atoms in nested_atoms for a in atoms]
 
@@ -599,7 +603,7 @@ def ingest(
                 metadata=data.get("metadata", {}),
             )
 
-            old_id = _detect_supersession(db, atom)
+            old_id = _detect_supersession(db, atom, cfg)
             if old_id:
                 db.supersede(old_id, atom)
                 updated_ids.append(atom.atom_id)

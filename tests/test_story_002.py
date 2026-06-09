@@ -268,48 +268,52 @@ class TestChatFormatDetection:
 
     def test_metadata_source_override_applies_to_plain_atoms(self):
         """Mode A: metadata.source overrides every atom for plain segments."""
+        from lattice.config import Config
         from lattice.ingest import _extract_atoms
         from lattice.parsers import Segment
         from datetime import datetime, timezone
 
         segment = Segment("s0", "Amulya dislikes mountains.", "plain", 0, 26)
         ref = datetime(2026, 6, 3, tzinfo=timezone.utc)
+        cfg = Config(llm_provider="ollama", llm_model="test-model")
 
         mock_response = '{"atoms": [{"subject": "mountains", "kind": "preference", "source": "document", "content": "Amulya dislikes mountains.", "valid_from": null, "valid_until": null}]}'
         with patch("lattice.ingest.complete", return_value=mock_response):
-            atoms = _extract_atoms(segment, {"source": "user"}, ref)
+            atoms = _extract_atoms(segment, {"source": "user"}, ref, cfg)
 
         assert all(a["source"] == "user" for a in atoms)
 
     def test_metadata_source_override_ignored_for_chat_segments(self):
         """Pipeline guard: metadata.source is NOT applied for chat segments even if caller passes it."""
+        from lattice.config import Config
         from lattice.ingest import _extract_atoms
         from lattice.parsers import Segment
         from datetime import datetime, timezone
 
         segment = Segment("s0", "user: I hate TypeScript\nassistant: Noted.", "chat", 0, 40)
         ref = datetime(2026, 6, 3, tzinfo=timezone.utc)
+        cfg = Config(llm_provider="ollama", llm_model="test-model")
 
         mock_response = '{"atoms": [{"subject": "TypeScript", "kind": "preference", "source": "user", "content": "User hates TypeScript.", "valid_from": null, "valid_until": null}]}'
         with patch("lattice.ingest.complete", return_value=mock_response):
-            # caller wrongly passes source="assistant" for a chat segment
-            atoms = _extract_atoms(segment, {"source": "assistant"}, ref)
+            atoms = _extract_atoms(segment, {"source": "assistant"}, ref, cfg)
 
-        # pipeline guard preserved LLM attribution, not the override
         assert atoms[0]["source"] == "user"
 
     def test_no_metadata_source_preserves_llm_attribution(self):
         """Without metadata.source, LLM-assigned source survives intact."""
+        from lattice.config import Config
         from lattice.ingest import _extract_atoms
         from lattice.parsers import Segment
         from datetime import datetime, timezone
 
         segment = Segment("s0", "user: I hate TypeScript\nassistant: Noted.", "chat", 0, 40)
         ref = datetime(2026, 6, 3, tzinfo=timezone.utc)
+        cfg = Config(llm_provider="ollama", llm_model="test-model")
 
         mock_response = '{"atoms": [{"subject": "TypeScript", "kind": "preference", "source": "user", "content": "User hates TypeScript.", "valid_from": null, "valid_until": null}]}'
         with patch("lattice.ingest.complete", return_value=mock_response):
-            atoms = _extract_atoms(segment, {}, ref)
+            atoms = _extract_atoms(segment, {}, ref, cfg)
 
         assert atoms[0]["source"] == "user"
 

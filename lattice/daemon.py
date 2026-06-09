@@ -25,6 +25,7 @@ _SOCKET_PATH = _LATTICE_DIR / "daemon.sock"
 
 _shutdown = threading.Event()
 _db: LatticeDB | None = None
+_cfg: Config | None = None
 
 log = logging.getLogger("lattice.daemon")
 
@@ -108,7 +109,7 @@ def _dispatch(msg: dict) -> dict:
         )
         t0 = time.monotonic()
         try:
-            result = ingest(text, metadata=metadata, db=_db)
+            result = ingest(text, metadata=metadata, db=_db, cfg=_cfg)
         except Exception as exc:
             log.error(
                 "ingest job error",
@@ -201,7 +202,7 @@ class InboxEventHandler(FileSystemEventHandler):
                 shutil.move(str(p), str(dest))
                 return
             from lattice.ingest import ingest
-            result = ingest(text, metadata={"source_id": source_id}, db=self._db)
+            result = ingest(text, metadata={"source_id": source_id}, db=self._db, cfg=_cfg)
             atom_count = result.get("atoms_created", 0)
             log.info(
                 "inbox: ingested %s atoms from %s",
@@ -280,7 +281,7 @@ def _cleanup(cfg: Config) -> None:
 
 
 def run():
-    global _db
+    global _db, _cfg
 
     logging.basicConfig(
         level=logging.INFO,
@@ -288,6 +289,7 @@ def run():
     )
 
     cfg = Config.from_env()
+    _cfg = cfg
     cfg.lattice_dir.mkdir(parents=True, exist_ok=True)
 
     fh = logging.FileHandler(cfg.log_path, encoding="utf-8")
@@ -314,7 +316,8 @@ def run():
     observer = _start_inbox_watcher(_db, cfg)
 
     import uvicorn
-    from lattice.web.app import app as web_app
+    from lattice.web.app import app as web_app, set_config as _set_web_config
+    _set_web_config(cfg)
     uv_config = uvicorn.Config(web_app, host=cfg.web_host, port=cfg.web_port, log_level="warning")
     web_server = uvicorn.Server(uv_config)
     web_thread = threading.Thread(target=web_server.run, daemon=True)
