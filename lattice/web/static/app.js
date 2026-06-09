@@ -253,6 +253,8 @@ function _atomAgeDays(a) {
 
 function _channelLabel(sourceId) {
   if (!sourceId) return '';
+  // URLs are shown as a clickable link separately — just label as "web"
+  if (/^https?:\/\//.test(sourceId)) return 'web';
   // Strip file-type parser prefix (pdf:file.pdf → file.pdf)
   return sourceId.replace(/^(pdf|pptx|xlsx|xls|docx):/, '');
 }
@@ -284,6 +286,12 @@ function renderReferences(orderedAtoms, numMap) {
     const raw = a.content || a.source_title || a.subject || '—';
     const preview = escHtml(raw.length > 90 ? raw.slice(0, 90) + '…' : raw);
 
+    const isUrl = a.source_id && /^https?:\/\//.test(a.source_id);
+    const srcLabel = escHtml(a.source_title || a.source_id || '');
+    const srcLink = isUrl
+      ? `<a class="ref-source-link" href="${escHtml(a.source_id)}" target="_blank" rel="noopener">${srcLabel}</a>`
+      : '';
+
     const kindBadge = a.kind && !_SKIP_KINDS.has(a.kind)
       ? `<span class="ref-kind">${escHtml(a.kind)}</span>` : '';
     const channel = _channelLabel(a.source_id);
@@ -296,6 +304,7 @@ function renderReferences(orderedAtoms, numMap) {
       <span class="ref-num">[${num}]</span>
       <div class="ref-body">
         <span class="ref-preview">${preview}</span>
+        ${srcLink ? `<span class="ref-source">${srcLink}</span>` : ''}
         <span class="ref-meta">${kindBadge}${channelBadge}${ageSpan}</span>
       </div>
     </li>`;

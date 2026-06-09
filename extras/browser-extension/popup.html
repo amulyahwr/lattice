@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 260px;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-size: 13px;
+      background: #f5ede3;
+      color: #3d2b1f;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 12px 14px 10px;
+      border-bottom: 1px solid #e5d5c5;
+    }
+    header span { font-weight: 600; font-size: 14px; }
+    #status-dot {
+      width: 8px; height: 8px;
+      border-radius: 50%;
+      background: #ccc;
+      margin-left: auto;
+    }
+    #status-dot.green { background: #6abf8e; }
+    #status-dot.red   { background: #e07070; }
+    #status-label {
+      font-size: 11px;
+      color: #9a7a6a;
+    }
+    main { padding: 12px 14px; }
+    p { line-height: 1.5; color: #6a4a3a; margin-bottom: 8px; }
+    kbd {
+      display: inline-block;
+      padding: 1px 5px;
+      border: 1px solid #c5a98a;
+      border-radius: 3px;
+      font-size: 11px;
+      background: #ede0d4;
+    }
+    #atom-count {
+      margin-top: 10px;
+      font-size: 12px;
+      color: #9a7a6a;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <span>Lattice</span>
+    <div id="status-label">checking…</div>
+    <div id="status-dot"></div>
+  </header>
+  <main>
+    <p>Select text on any page, then right-click → <strong>Save to Lattice</strong>.</p>
+    <p>Or press <kbd>⌥</kbd>+<kbd>⇧</kbd>+<kbd>S</kbd> with text selected.</p>
+    <div id="atom-count"></div>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>
