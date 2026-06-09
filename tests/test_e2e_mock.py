@@ -11,10 +11,13 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from lattice.config import Config
 from lattice.db import LatticeDB
 from lattice.ingest import ingest
 from lattice.selection import _retrieve, select
 from lattice.synthesis import stream_synthesis
+
+_CFG = Config(llm_provider="ollama", llm_model="test-model")
 
 
 # ── LLM mock helpers ──────────────────────────────────────────────────────────
@@ -69,7 +72,7 @@ def seeded_db(db):
         atoms = [{"subject": subject, "kind": kind, "source": "user",
                   "content": text, "valid_from": None, "valid_until": None}]
         with patch("lattice.ingest.complete", side_effect=[_ingest_response(atoms)]):
-            ingest(text, db=db)
+            ingest(text, db=db, cfg=_CFG)
     return db
 
 
@@ -77,51 +80,51 @@ def seeded_db(db):
 
 class TestRetrieve:
     def test_retrieve_returns_relevant_atoms(self, seeded_db):
-        results = _retrieve("coffee", db=seeded_db)
+        results = _retrieve("coffee", db=seeded_db, cfg=_CFG)
         assert results, "expected at least one result"
         subjects = [r["subject"] for r in results]
         assert any("coffee" in s.lower() for s in subjects)
 
     def test_retrieve_no_llm_call(self, seeded_db):
         # _retrieve() is LLM-free — verify it returns results without any LLM patch
-        results = _retrieve("coffee", db=seeded_db)
+        results = _retrieve("coffee", db=seeded_db, cfg=_CFG)
         assert results, "expected results without LLM"
 
     def test_retrieve_result_has_required_keys(self, seeded_db):
-        results = _retrieve("editor", db=seeded_db)
+        results = _retrieve("editor", db=seeded_db, cfg=_CFG)
         assert results
         required = {"atom_id", "subject", "kind", "content", "source_id", "observed_at"}
         assert required.issubset(results[0].keys())
 
     def test_retrieve_empty_db(self, db):
-        assert _retrieve("anything", db=db) == []
+        assert _retrieve("anything", db=db, cfg=_CFG) == []
 
 
 class TestSelect:
     def test_select_returns_results(self, seeded_db):
         # select() = _retrieve() — no LLM calls
-        results = select("editor", db=seeded_db)
+        results = select("editor", db=seeded_db, cfg=_CFG)
         assert results
 
     def test_select_empty_db(self, db):
-        assert select("anything", db=db) == []
+        assert select("anything", db=db, cfg=_CFG) == []
 
     def test_select_result_shape_matches_retrieve(self, seeded_db):
         # select and _retrieve should return same shape
-        r1 = select("coffee", db=seeded_db)
-        r2 = _retrieve("coffee", db=seeded_db)
+        r1 = select("coffee", db=seeded_db, cfg=_CFG)
+        r2 = _retrieve("coffee", db=seeded_db, cfg=_CFG)
         assert {a["atom_id"] for a in r1} == {a["atom_id"] for a in r2}
 
 
 class TestStreamSynthesis:
     def test_full_pipeline_produces_tokens(self, seeded_db):
-        candidates = _retrieve("coffee", db=seeded_db)
+        candidates = _retrieve("coffee", db=seeded_db, cfg=_CFG)
         assert candidates
 
         client = _mock_synthesis_client("You like dark roast coffee.")
         events = []
         with patch("lattice.synthesis.make_llm_client", return_value=client):
-            for chunk in stream_synthesis("What coffee do I like?", candidates):
+            for chunk in stream_synthesis("What coffee do I like?", candidates, _CFG):
                 chunk = chunk.strip()
                 if chunk.startswith("data: "):
                     events.append(json.loads(chunk[6:]))
@@ -131,11 +134,11 @@ class TestStreamSynthesis:
         assert events[-1]["type"] == "done"
 
     def test_full_pipeline_emits_citations_applied(self, seeded_db):
-        candidates = _retrieve("coffee", db=seeded_db)
+        candidates = _retrieve("coffee", db=seeded_db, cfg=_CFG)
         client = _mock_synthesis_client("You like dark roast coffee.")
         events = []
         with patch("lattice.synthesis.make_llm_client", return_value=client):
-            for chunk in stream_synthesis("What coffee do I like?", candidates):
+            for chunk in stream_synthesis("What coffee do I like?", candidates, _CFG):
                 chunk = chunk.strip()
                 if chunk.startswith("data: "):
                     events.append(json.loads(chunk[6:]))
@@ -151,16 +154,16 @@ class TestStreamSynthesis:
                           "source": "user", "content": raw,
                           "valid_from": None, "valid_until": None}]
         with patch("lattice.ingest.complete", side_effect=[_ingest_response(atoms_payload)]):
-            result = ingest(raw, db=db)
+            result = ingest(raw, db=db, cfg=_CFG)
         assert result["atoms_created"] == 1
 
-        retrieved = _retrieve("programming language", db=db)
+        retrieved = _retrieve("programming language", db=db, cfg=_CFG)
         assert retrieved
 
         client = _mock_synthesis_client("Your favourite language is Python.")
         events = []
         with patch("lattice.synthesis.make_llm_client", return_value=client):
-            for chunk in stream_synthesis("What is my favourite language?", retrieved):
+            for chunk in stream_synthesis("What is my favourite language?", retrieved, _CFG):
                 chunk = chunk.strip()
                 if chunk.startswith("data: "):
                     events.append(json.loads(chunk[6:]))

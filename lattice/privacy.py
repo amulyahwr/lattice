@@ -3,20 +3,20 @@
 Flow: redact(text) → send redacted text to cloud LLM → restore(response) → real names back.
 Atoms on disk always contain real values. Names never leave the machine in plaintext.
 
-Active when: LLM_PROVIDER != "ollama" AND LATTICE_PII_SCRUB != "0"/"false".
+Active when: cfg.llm_provider != "ollama" AND cfg.pii_scrub is True.
 Ollama path: skip entirely — data stays local.
 
-NER path (LATTICE_NER_MODEL set): Ollama NER model identifies persons + orgs for consistent
+NER path (cfg.ner_model set): Ollama NER model identifies persons + orgs for consistent
 cross-segment entity numbering. Regex-only path (default): emails + phones only.
 """
 from __future__ import annotations
 
 import json
-import os
 import re
+from typing import TYPE_CHECKING
 
-_SCRUB_ACTIVE = os.environ.get("LATTICE_PII_SCRUB", "true").lower() not in ("0", "false", "no")
-_NER_MODEL = os.environ.get("LATTICE_NER_MODEL", "")
+if TYPE_CHECKING:
+    from lattice.config import Config
 
 _EMAIL_RE = re.compile(r"\b[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}\b")
 _PHONE_RE = re.compile(r"\b(?:\+?1[\s\-.]?)?\(?\d{3}\)?[\s\-.]?\d{3}[\s\-.]?\d{4}\b")
@@ -29,11 +29,9 @@ _NER_SYSTEM = (
 )
 
 
-def is_active() -> bool:
+def is_active(cfg: "Config") -> bool:
     """True when PII scrubbing should run on this call."""
-    if not _SCRUB_ACTIVE:
-        return False
-    return os.environ.get("LLM_PROVIDER", "ollama") != "ollama"
+    return cfg.pii_scrub and cfg.llm_provider != "ollama"
 
 
 def _apply_replacements(text: str, replacements: dict[str, str]) -> str:
@@ -46,17 +44,15 @@ def _apply_replacements(text: str, replacements: dict[str, str]) -> str:
 class EntityRedactor:
     """Stateless redactor — all state lives in the returned entity_map."""
 
-    def redact_batch(self, texts: list[str]) -> tuple[list[str], dict[str, str]]:
+    def redact_batch(self, texts: list[str], cfg: "Config") -> tuple[list[str], dict[str, str]]:
         """Redact PII across multiple texts using one shared entity_map.
 
         Returns (redacted_texts, entity_map). entity_map maps tag → original for restore.
         No-op when not active.
         """
-        if not is_active() or not texts:
+        if not is_active(cfg) or not texts:
             return texts, {}
 
-        # replacements: original → tag  (for substitution)
-        # entity_map:   tag → original  (for restore)
         replacements: dict[str, str] = {}
         entity_map: dict[str, str] = {}
         counter: dict[str, int] = {}
@@ -69,16 +65,14 @@ class EntityRedactor:
             replacements[original] = tag
             entity_map[tag] = original
 
-        # NER pass: one LLM call across all texts → consistent numbering
-        if _NER_MODEL:
+        if cfg.ner_model:
             combined = "\n\n---\n\n".join(t[:4000] for t in texts)
-            ner = self._run_ner(combined)
+            ner = self._run_ner(combined, cfg)
             for name in ner.get("persons", []):
                 _add("PER", name.strip())
             for name in ner.get("orgs", []):
                 _add("ORG", name.strip())
 
-        # Regex pass: emails + phones across all texts
         all_text = "\n".join(texts)
         for m in _EMAIL_RE.finditer(all_text):
             _add("EMAIL", m.group(0))
@@ -92,8 +86,8 @@ class EntityRedactor:
 
         return [_apply_replacements(t, replacements) for t in texts], entity_map
 
-    def redact(self, text: str) -> tuple[str, dict[str, str]]:
-        texts, entity_map = self.redact_batch([text])
+    def redact(self, text: str, cfg: "Config") -> tuple[str, dict[str, str]]:
+        texts, entity_map = self.redact_batch([text], cfg)
         return texts[0], entity_map
 
     def restore(self, text: str, entity_map: dict[str, str]) -> str:
@@ -103,15 +97,16 @@ class EntityRedactor:
             text = text.replace(tag, original)
         return text
 
-    def _run_ner(self, text: str) -> dict:
+    def _run_ner(self, text: str, cfg: "Config") -> dict:
         try:
-            from lattice.llm import make_llm_client
-            client = make_llm_client(
+            from openai import OpenAI
+            client = OpenAI(
                 base_url="http://localhost:11434/v1",
                 api_key="ollama",
+                timeout=90.0,
             )
             resp = client.chat.completions.create(
-                model=_NER_MODEL,
+                model=cfg.ner_model,
                 messages=[
                     {"role": "system", "content": _NER_SYSTEM},
                     {"role": "user", "content": text},

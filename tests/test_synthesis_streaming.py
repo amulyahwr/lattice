@@ -7,7 +7,10 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from lattice.config import Config
 from lattice.synthesis import stream_synthesis
+
+_CFG = Config(llm_provider="ollama", llm_model="test-model")
 
 
 def _parse_events(gen) -> list[dict]:
@@ -45,7 +48,7 @@ def _mock_client(stream_texts: list[str], tool_resp_content: str = "Final answer
 # ---------------------------------------------------------------------------
 
 def test_empty_atoms_yields_no_info():
-    events = _parse_events(stream_synthesis("q", []))
+    events = _parse_events(stream_synthesis("q", [], _CFG))
     assert events[0]["type"] == "token"
     assert "No relevant information" in events[0]["text"]
     assert events[-1]["type"] == "done"
@@ -56,7 +59,7 @@ def test_tokens_streamed_in_order():
     client = _mock_client(["Hello", " world"])
 
     with patch("lattice.synthesis.make_llm_client", return_value=client):
-        events = _parse_events(stream_synthesis("q", atoms))
+        events = _parse_events(stream_synthesis("q", atoms, _CFG))
 
     tokens = [e for e in events if e["type"] == "token"]
     assert [t["text"] for t in tokens] == ["Hello", " world"]
@@ -67,7 +70,7 @@ def test_done_event_always_last():
     client = _mock_client(["ok"])
 
     with patch("lattice.synthesis.make_llm_client", return_value=client):
-        events = _parse_events(stream_synthesis("q", atoms))
+        events = _parse_events(stream_synthesis("q", atoms, _CFG))
 
     assert events[-1]["type"] == "done"
 
@@ -77,7 +80,7 @@ def test_provider_error_yields_error_event():
     atoms = [{"subject": "s", "kind": "fact", "content": "c", "source": "doc"}]
 
     with patch("lattice.synthesis.make_llm_client", side_effect=EnvironmentError("unsupported provider")):
-        events = _parse_events(stream_synthesis("q", atoms))
+        events = _parse_events(stream_synthesis("q", atoms, _CFG))
 
     assert events[0]["type"] == "error"
     assert "unsupported provider" in events[0]["message"]
@@ -95,7 +98,7 @@ def test_streaming_exception_yields_error_event():
     client.chat.completions.create.side_effect = [tool_resp, RuntimeError("network timeout")]
 
     with patch("lattice.synthesis.make_llm_client", return_value=client):
-        events = _parse_events(stream_synthesis("q", atoms))
+        events = _parse_events(stream_synthesis("q", atoms, _CFG))
 
     error_events = [e for e in events if e["type"] == "error"]
     assert len(error_events) == 1
@@ -116,7 +119,7 @@ def test_no_token_events_for_empty_delta():
     client.chat.completions.create.side_effect = [tool_resp, iter([empty_chunk, real_chunk])]
 
     with patch("lattice.synthesis.make_llm_client", return_value=client):
-        events = _parse_events(stream_synthesis("q", atoms))
+        events = _parse_events(stream_synthesis("q", atoms, _CFG))
 
     tokens = [e for e in events if e["type"] == "token"]
     assert len(tokens) == 1
