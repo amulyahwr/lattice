@@ -50,8 +50,9 @@ lattice/
   parsers/         Source-aware pre-ingest segmentation. `infer_source_type()` detects chat/
                    markdown/code. `parse()` returns list[Segment] with role, context, span.
                    chat.py preserves turn windowing + role field. markdown.py splits on headings.
-  ingest.py        Segments source via parsers/, then LLM extracts atoms per segment,
-                   then checks supersession per atom.
+  ingest.py        Four public pipeline stages: segment_source() → extract_atoms()
+                   → detect_supersession() → persist_atoms(). ingest() orchestrates
+                   all four. Each stage is independently callable and testable.
   query.py         Query intent classifier: detects aggregation/temporal/recommendation/preference
                    signals. Returns QueryIntent with shape + primary_kind. Stateless; used by selection.py.
   selection.py     select() = _retrieve(): BM25 scored seeds → zero-score seed filter
