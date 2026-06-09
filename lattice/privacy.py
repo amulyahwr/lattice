@@ -99,21 +99,18 @@ class EntityRedactor:
 
     def _run_ner(self, text: str, cfg: "Config") -> dict:
         try:
-            from openai import OpenAI
-            client = OpenAI(
-                base_url="http://localhost:11434/v1",
-                api_key="ollama",
-                timeout=90.0,
-            )
-            resp = client.chat.completions.create(
-                model=cfg.ner_model,
-                messages=[
+            import dataclasses
+            from lattice.llm import LLMClient
+            # NER always runs on local Ollama regardless of the main LLM provider
+            ner_cfg = dataclasses.replace(cfg, llm_provider="ollama", llm_model=cfg.ner_model)
+            client = LLMClient(ner_cfg)
+            raw = client.complete(
+                [
                     {"role": "system", "content": _NER_SYSTEM},
                     {"role": "user", "content": text},
                 ],
-                response_format={"type": "json_object"},
-                extra_body={"num_ctx": 4096, "think": False},
+                text_format=dict,
             )
-            return json.loads(resp.choices[0].message.content or "{}")
+            return json.loads(raw)
         except Exception:
             return {}

@@ -38,11 +38,11 @@ def _make_tool_resp(content: str) -> MagicMock:
 
 
 def _mock_client(stream_texts: list[str], tool_resp_content: str = "Final answer.") -> MagicMock:
-    client = MagicMock()
+    mock_llm = MagicMock()
     tool_resp = _make_tool_resp(tool_resp_content)
     stream_chunks = [_make_stream_chunk(t) for t in stream_texts]
-    client.chat.completions.create.side_effect = [tool_resp, iter(stream_chunks)]
-    return client
+    mock_llm.create.side_effect = [tool_resp, iter(stream_chunks)]
+    return mock_llm
 
 
 # ---------------------------------------------------------------------------
@@ -58,7 +58,7 @@ def test_tokens_streamed_in_order():
     atoms = [{"subject": "s", "kind": "fact", "content": "c", "source": "doc"}]
     client = _mock_client(["Hello", " world"])
 
-    with patch("lattice.synthesis.make_llm_client", return_value=client):
+    with patch("lattice.synthesis.LLMClient", return_value=client):
         events = _parse_events(stream_synthesis("q", atoms, _CFG))
 
     tokens = [e for e in events if e["type"] == "token"]
@@ -69,7 +69,7 @@ def test_done_event_always_last():
     atoms = [{"subject": "s", "kind": "fact", "content": "c", "source": "doc"}]
     client = _mock_client(["ok"])
 
-    with patch("lattice.synthesis.make_llm_client", return_value=client):
+    with patch("lattice.synthesis.LLMClient", return_value=client):
         events = _parse_events(stream_synthesis("q", atoms, _CFG))
 
     assert events[-1]["type"] == "done"
@@ -79,7 +79,7 @@ def test_provider_error_yields_error_event():
     """Rule 6: EnvironmentError from make_llm_client must surface as error event."""
     atoms = [{"subject": "s", "kind": "fact", "content": "c", "source": "doc"}]
 
-    with patch("lattice.synthesis.make_llm_client", side_effect=EnvironmentError("unsupported provider")):
+    with patch("lattice.synthesis.LLMClient", side_effect=EnvironmentError("unsupported provider")):
         events = _parse_events(stream_synthesis("q", atoms, _CFG))
 
     assert events[0]["type"] == "error"
@@ -95,9 +95,9 @@ def test_streaming_exception_yields_error_event():
     msg.content = "ready"
     tool_resp = MagicMock()
     tool_resp.choices = [SimpleNamespace(message=msg)]
-    client.chat.completions.create.side_effect = [tool_resp, RuntimeError("network timeout")]
+    client.create.side_effect = [tool_resp, RuntimeError("network timeout")]
 
-    with patch("lattice.synthesis.make_llm_client", return_value=client):
+    with patch("lattice.synthesis.LLMClient", return_value=client):
         events = _parse_events(stream_synthesis("q", atoms, _CFG))
 
     error_events = [e for e in events if e["type"] == "error"]
@@ -116,9 +116,9 @@ def test_no_token_events_for_empty_delta():
     tool_resp.choices = [SimpleNamespace(message=msg)]
     empty_chunk = _make_stream_chunk("")
     real_chunk = _make_stream_chunk("answer")
-    client.chat.completions.create.side_effect = [tool_resp, iter([empty_chunk, real_chunk])]
+    client.create.side_effect = [tool_resp, iter([empty_chunk, real_chunk])]
 
-    with patch("lattice.synthesis.make_llm_client", return_value=client):
+    with patch("lattice.synthesis.LLMClient", return_value=client):
         events = _parse_events(stream_synthesis("q", atoms, _CFG))
 
     tokens = [e for e in events if e["type"] == "token"]

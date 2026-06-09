@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING, Generator
 
-from lattice.llm import make_llm_client, resolve_model
+from lattice.llm import LLMClient
 from lattice.privacy import EntityRedactor, is_active as _pii_active
 
 if TYPE_CHECKING:
@@ -90,12 +90,6 @@ _TOOLS = [
         },
     },
 ]
-
-
-def _ollama_extra(cfg: "Config") -> dict:
-    if cfg.llm_provider == "ollama":
-        return {"num_ctx": cfg.llm_num_ctx, "think": False}
-    return {}
 
 
 def _execute_tool(name: str, args: dict) -> str:
@@ -206,10 +200,8 @@ def _build_messages(query: str, atoms: list[dict], query_date: date | None) -> l
 
 
 def _run_tool_loop(
-    client: "OpenAI",
-    model: str,
+    client: "LLMClient",
     messages: list[dict],
-    cfg: "Config",
 ) -> tuple[list[dict], list[dict]]:
     """Run the tool-calling agent loop until the model stops calling tools or hits 5 rounds.
 
@@ -218,12 +210,8 @@ def _run_tool_loop(
     for generating the final text response (streaming or non-streaming).
     """
     tool_calls_log: list[dict] = []
-    extra = _ollama_extra(cfg)
     for _ in range(5):
-        resp = client.chat.completions.create(
-            model=model, messages=messages, tools=_TOOLS, tool_choice="auto",
-            **( {"extra_body": extra} if extra else {}),
-        )
+        resp = client.create(messages=messages, tools=_TOOLS, tool_choice="auto")
         msg = resp.choices[0].message
         if not msg.tool_calls:
             break
@@ -245,16 +233,12 @@ def synthesize(
     if not atoms:
         return SynthesisResult(answer="No relevant information found in the lattice.", raw_response="")
 
-    model = resolve_model(cfg, cfg.synthesis_model)
-    client = make_llm_client(cfg)
+    client = LLMClient(cfg, model=cfg.synthesis_model)
     redacted_atoms, entity_map = _redact_atoms(atoms, cfg)
     messages = _build_messages(query, redacted_atoms, query_date)
-    messages, tool_calls_log = _run_tool_loop(client, model, messages, cfg)
+    messages, tool_calls_log = _run_tool_loop(client, messages)
 
-    extra = _ollama_extra(cfg)
-    resp = client.chat.completions.create(
-        model=model, messages=messages, **( {"extra_body": extra} if extra else {}),
-    )
+    resp = client.create(messages=messages)
     raw = resp.choices[0].message.content or ""
     if entity_map:
         raw = EntityRedactor().restore(raw, entity_map)
@@ -285,8 +269,7 @@ def stream_synthesis(
         return
 
     try:
-        model = resolve_model(cfg, cfg.synthesis_model)
-        client = make_llm_client(cfg)
+        client = LLMClient(cfg, model=cfg.synthesis_model)
     except EnvironmentError as exc:
         # Rule 6: make degradation visible — signal provider gap to the caller
         yield f'data: {json.dumps({"type": "error", "message": str(exc)})}\n\n'
@@ -296,17 +279,14 @@ def stream_synthesis(
     _redactor = EntityRedactor()
     messages = _build_messages(query, redacted_atoms, query_date)
     try:
-        messages, tool_calls_log = _run_tool_loop(client, model, messages, cfg)
+        messages, tool_calls_log = _run_tool_loop(client, messages)
     except Exception as exc:
         yield f'data: {json.dumps({"type": "error", "message": f"Tool loop failed: {exc}"})}\n\n'
         return
 
     full_answer: list[str] = []
-    extra = _ollama_extra(cfg)
     try:
-        stream = client.chat.completions.create(
-            model=model, messages=messages, stream=True, **( {"extra_body": extra} if extra else {}),
-        )
+        stream = client.create(messages=messages, stream=True)
         for chunk in stream:
             delta = chunk.choices[0].delta
             if delta.content:

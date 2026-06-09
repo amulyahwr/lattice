@@ -8,7 +8,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from starlette.testclient import TestClient
 
-from lattice.web.app import app, _utc_today
+from lattice.web.app import app
+
+
+def _utc_today():
+    return datetime.now(timezone.utc).date()
 from lattice.telegram_bot import _topic_depth_message
 
 client = TestClient(app)

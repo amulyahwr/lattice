@@ -9,9 +9,19 @@ from unittest.mock import patch, MagicMock
 import pytest
 from starlette.testclient import TestClient
 
-from lattice.web.app import app, _compute_streak, _load_usage, _record_usage, _utc_today
+from lattice.web.app import app
+from lattice.config import Config
+from lattice.telemetry import compute_streak, load_usage, record_usage
 
 client = TestClient(app)
+
+
+def _utc_today():
+    return datetime.now(timezone.utc).date()
+
+
+def _compute_streak(records):
+    return compute_streak(records)[0]
 
 
 # ---------------------------------------------------------------------------
@@ -20,14 +30,14 @@ client = TestClient(app)
 
 class TestRecordUsage:
     # --- positive ---
-    def test_creates_usage_file(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("LATTICE_DIR", str(tmp_path))
-        _record_usage("what is my name?", 50, 300, 2, "web")
+    def test_creates_usage_file(self, tmp_path):
+        cfg = Config(lattice_dir=tmp_path)
+        record_usage("what is my name?", 50, 300, 2, "web", cfg)
         assert (tmp_path / "usage.jsonl").exists()
 
-    def test_record_has_required_fields(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("LATTICE_DIR", str(tmp_path))
-        _record_usage("what is my name?", 50, 300, 2, "web")
+    def test_record_has_required_fields(self, tmp_path):
+        cfg = Config(lattice_dir=tmp_path)
+        record_usage("what is my name?", 50, 300, 2, "web", cfg)
         record = json.loads((tmp_path / "usage.jsonl").read_text())
         assert "ts" in record
         assert "query_hash" in record
@@ -36,43 +46,43 @@ class TestRecordUsage:
         assert "atom_count" in record
         assert "channel" in record
 
-    def test_query_hash_is_sha1_not_plaintext(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("LATTICE_DIR", str(tmp_path))
-        _record_usage("what is my name?", 50, 300, 2, "web")
+    def test_query_hash_is_sha1_not_plaintext(self, tmp_path):
+        cfg = Config(lattice_dir=tmp_path)
+        record_usage("what is my name?", 50, 300, 2, "web", cfg)
         record = json.loads((tmp_path / "usage.jsonl").read_text())
         assert record["query_hash"] != "what is my name?"
         assert len(record["query_hash"]) == 40  # SHA-1 hex
 
-    def test_channel_recorded_correctly(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("LATTICE_DIR", str(tmp_path))
-        _record_usage("test", 10, 100, 1, "telegram")
+    def test_channel_recorded_correctly(self, tmp_path):
+        cfg = Config(lattice_dir=tmp_path)
+        record_usage("test", 10, 100, 1, "telegram", cfg)
         record = json.loads((tmp_path / "usage.jsonl").read_text())
         assert record["channel"] == "telegram"
 
-    def test_multiple_records_appended(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("LATTICE_DIR", str(tmp_path))
-        _record_usage("q1", 10, 100, 1, "web")
-        _record_usage("q2", 20, 200, 2, "mcp")
+    def test_multiple_records_appended(self, tmp_path):
+        cfg = Config(lattice_dir=tmp_path)
+        record_usage("q1", 10, 100, 1, "web", cfg)
+        record_usage("q2", 20, 200, 2, "mcp", cfg)
         lines = (tmp_path / "usage.jsonl").read_text().strip().split("\n")
         assert len(lines) == 2
 
-    def test_same_question_different_hash_preserved(self, tmp_path, monkeypatch):
+    def test_same_question_different_hash_preserved(self, tmp_path):
         """Two queries with same text still both recorded."""
-        monkeypatch.setenv("LATTICE_DIR", str(tmp_path))
-        _record_usage("same question", 10, 100, 1, "web")
-        _record_usage("same question", 15, 150, 1, "telegram")
+        cfg = Config(lattice_dir=tmp_path)
+        record_usage("same question", 10, 100, 1, "web", cfg)
+        record_usage("same question", 15, 150, 1, "telegram", cfg)
         lines = (tmp_path / "usage.jsonl").read_text().strip().split("\n")
         assert len(lines) == 2
 
     # --- edge ---
-    def test_empty_question_recorded(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("LATTICE_DIR", str(tmp_path))
-        _record_usage("", 0, 0, 0, "web")
+    def test_empty_question_recorded(self, tmp_path):
+        cfg = Config(lattice_dir=tmp_path)
+        record_usage("", 0, 0, 0, "web", cfg)
         assert (tmp_path / "usage.jsonl").exists()
 
-    def test_zero_latency_recorded(self, tmp_path, monkeypatch):
-        monkeypatch.setenv("LATTICE_DIR", str(tmp_path))
-        _record_usage("test", 0, 0, 0, "web")
+    def test_zero_latency_recorded(self, tmp_path):
+        cfg = Config(lattice_dir=tmp_path)
+        record_usage("test", 0, 0, 0, "web", cfg)
         record = json.loads((tmp_path / "usage.jsonl").read_text())
         assert record["selection_ms"] == 0
         assert record["synthesis_ms"] == 0

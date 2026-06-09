@@ -10,11 +10,15 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from starlette.testclient import TestClient
 
-from lattice.web.app import (
-    app,
-    _compute_streak_with_grace,
-    _utc_today,
-)
+from lattice.web.app import app
+from lattice.telemetry import compute_streak
+
+_compute_streak_with_grace = compute_streak
+
+
+def _utc_today():
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).date()
 from lattice.telegram_bot import _milestone_message, _get_streak_info
 
 client = TestClient(app)
