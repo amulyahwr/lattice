@@ -43,7 +43,19 @@ decisions, constraints, goals, events, and preferences into discrete atoms.
 Rules for each atom:
   - content    : a single self-contained statement. Do NOT reference "the text" or "the document" — \
 write as a standalone fact a reader could understand without the original source.
-  - kind       : a short descriptive label, e.g. fact, decision, constraint, goal, event, preference, belief
+  - kind       : a short descriptive label. Use these kinds:
+      fact        — objective circumstance ("User owns a car", "User lives in SF")
+      event       — one-time occurrence ("User attended a baking class", "User bought a guitar")
+      preference  — personal habit, tendency, dietary pattern, ongoing practice, or stated like/dislike.
+                    Test: "would knowing this inform a recommendation for this person?" → preference.
+                    Applies to both explicit ("I prefer vegetarian food") and implicit personal context
+                    ("I grow my own herbs", "I usually commute by bike", "I find noisy places distracting").
+      goal        — something the user wants to achieve
+      decision    — a deliberate choice made
+      constraint  — a hard limit or blocker
+      belief      — a view or opinion the user holds
+      count       — a numeric aggregate (see numeric rules below)
+      recommendation — a named product/venue/person suggested for this user (see assistant rules below)
   - subject    : short canonical noun phrase identifying what the atom is about, \
 e.g. "Project Alpha deadline", "auth module", "database schema", "deployment process", "API rate limit"
   - source     : where this came from — use the value from the caller's metadata if provided, \
@@ -112,6 +124,22 @@ tips that apply to anyone regardless of who they are.
   - Preserve explicit dates verbatim in atom content (e.g. "on January 10th", "on March 3rd"). \
 Do not drop them. When the user says "today", "this morning", or "tonight", replace with the ISO \
 date provided in "Today's date:" at the top of this prompt.
+
+Preference vs fact in chat — the distinction matters for retrieval:
+  User: "I grow tomatoes and herbs at home."
+  → kind=preference  subject="gardening"  ✓    NOT: kind=fact  subject="cherry tomatoes"  ✗
+
+  User: "I've been cooking mostly vegetarian meals lately."
+  → kind=preference  subject="dietary preference"  ✓
+
+  User: "I usually commute by bike."
+  → kind=preference  subject="commute"  ✓    NOT: kind=fact  subject="bike commute"  ✗
+
+  User: "I own a car."
+  → kind=fact  subject="transport"  ✓    (objective circumstance, not a habit or tendency)
+
+  User: "I had success with the lemon cake recipe last time."
+  → kind=preference  subject="baking"  ✓    (past success → informs future baking recommendations)
 
 Subject examples for chat — note how broad subjects cluster across conversations:
   User: "I went hiking on the Pacific Crest Trail last weekend."

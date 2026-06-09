@@ -76,8 +76,11 @@ A persistent daemon owns all writes — MCP server, web UI, Telegram bot, and `l
 ```bash
 git clone https://github.com/amulyahwr/lattice
 cd lattice
-uv sync
+uv sync --group pdf                        # base + PDF upload (web UI, Telegram, lc)
+uv sync --group pdf --group semantic       # + dense retrieval (LATTICE_DENSE_SEEDS=1)
 ```
+
+Install groups in a single `uv sync` call — running them separately can displace each other. Add `--group telegram` if using the Telegram bot.
 
 ### 2. Configure
 
@@ -95,7 +98,7 @@ export LATTICE_PII_SCRUB=true      # set false to disable
 export LATTICE_NER_MODEL=          # optional: local Ollama model for NER (e.g. gemma4:4b)
 
 # Dense retrieval (optional — fixes vocab-mismatch misses like "gym" ↔ "workout")
-# uv sync --group semantic   ← install fastembed first
+# requires: uv sync --group pdf --group semantic  (install both groups together)
 export LATTICE_DENSE_SEEDS=1       # enable dense seed augmentation
 export LATTICE_DENSE_TOP_K=10      # top-K dense hits merged with BM25 seeds
 ```
@@ -178,7 +181,7 @@ Capture thoughts from your phone via a Telegram bot — works even when your lap
 **c. Install the bot dep and plist:**
 
 ```bash
-uv sync --group telegram
+uv sync --group pdf --group telegram
 cp extras/dev.lattice.telegram.plist ~/Library/LaunchAgents/
 ```
 

@@ -58,16 +58,20 @@ lattice_ingest(source, metadata)
         │
         ▼
    LatticeGraph.add()    incremental update → graph/nodes.jsonl + edges.jsonl + manifest.json
+        │
+        ▼
+   embed index update    (if fastembed available) append row to embed_matrix.npy + embed_ids.json
 
 
 select(query, as_of)          ← production path used by web UI, MCP server
         │
         ▼
-   _retrieve()           BM25 top-20 (scored) → drop zero-score seeds
-        │                 (LATTICE_SEED_MIN_SCORE) → source-diversity probe →
-        │                 graph BFS; pointed path (7 seeds, max=14) or
-        │                 expansion path (all seeds, max=60); collapse
-        │                 superseded/dups; recommendation cap (max 5);
+   _retrieve()           BM25 top-20 (scored) → optional dense NN merge
+        │                 (LATTICE_DENSE_SEEDS; cosine top-10 from embed index) →
+        │                 drop zero-score seeds (LATTICE_SEED_MIN_SCORE) →
+        │                 source-diversity probe → graph BFS; pointed path
+        │                 (7 seeds, max=14) or expansion path (all seeds, max=60);
+        │                 collapse superseded/dups; recommendation cap (max 5);
         │                 kind fallback; optional BFS rescore by BM25
         │                 (LATTICE_BFS_RESCORE)
         │
@@ -109,7 +113,7 @@ stream_synthesis(query, atoms)
 | `lattice/graph.py` | `LatticeGraph` — `networkx.MultiDiGraph` backed by committed sidecars. Incrementally updated; full rebuild triggered when manifest atom count diverges from disk. |
 | `lattice/util.py` | Shared helpers: `write_file_atomic()` (canonical tempfile+rename); `_write_json_atomic()` delegates to it; `extract_file_text(path) → (text, source_id)` — dispatches by extension: `.pdf` via `pypdf`, `.docx` via `python-docx`, `.pptx` via `python-pptx`, `.xlsx` via `openpyxl`, `.xls` via `xlrd`, all others as UTF-8 text. Raises `ImportError` (missing optional dep) or `ValueError` (binary/unreadable). Used by daemon inbox watcher, web `/api/ingest-file`, `lc` CLI, and Telegram `_handle_document`. |
 | `lattice/parsers/` | Source-aware segmentation. `infer_source_type()` checks `metadata["source_id"]` prefix/suffix first (`pdf:*`, `*.pptx`, `*.xlsx`), then falls back to content heuristics for chat/markdown/code. `parse()` returns `list[Segment]` (frozen dataclass with `text`, `role`, `source_type`, `context`, `start`, `end`). `chat.py`: windowed turn parsing with role tagging. `markdown.py`: splits on headings. `pdf.py`: splits on `\f` (form feed) page separators, `context="page N"`. `pptx.py`: splits on `[Slide N]` markers, `context="Slide N"`. `xlsx.py`: splits on `[Sheet: name]` markers, `context="Sheet: name"`. |
-| `lattice/ingest.py` | Segments source via `parsers/` → PII redaction via `EntityRedactor` (when active) → LLM extracts atoms per segment → PII restore in atom content/subject → dedup + supersession check → write to DB. Returns `{atoms_new, atoms_updated, duplicates_skipped, atom_ids, new_atom_ids, updated_atom_ids, …}`. Per-atom check+write is wrapped in `with db.lock:` for thread safety. Extraction prompt (`_SYSTEM`): document sources use actual names not "User"; people facts rule — each contact/identity detail for a named person (email, phone, job title, employer, location, LinkedIn/URL) extracted as a separate `kind=fact` atom with `subject = full name`. Source-specific addendums injected per file type: `_PDF_ADDENDUM` (page-scoped context), `_PPTX_ADDENDUM` (one main point per slide), `_XLSX_ADDENDUM` (row-per-item facts, `kind=count` for numeric aggregates). |
+| `lattice/ingest.py` | Segments source via `parsers/` → PII redaction via `EntityRedactor` (when active) → LLM extracts atoms per segment → PII restore in atom content/subject → dedup + supersession check → write to DB. Returns `{atoms_new, atoms_updated, duplicates_skipped, atom_ids, new_atom_ids, updated_atom_ids, …}`. Per-atom check+write is wrapped in `with db.lock:` for thread safety. Extraction prompt (`_SYSTEM`): explicit kind taxonomy — `preference` covers personal habits, tendencies, dietary patterns, and ongoing practices (test: "would knowing this inform a recommendation?") in addition to explicit like/dislike statements; `fact` is objective circumstance only; `event` is one-time occurrence. Document sources use actual names not "User"; people facts rule — each contact/identity detail for a named person (email, phone, job title, employer, location, LinkedIn/URL) extracted as a separate `kind=fact` atom with `subject = full name`. `_CHAT_ADDENDUM` adds chat-specific preference vs fact examples. Source-specific addendums: `_PDF_ADDENDUM` (page-scoped context), `_PPTX_ADDENDUM` (one main point per slide), `_XLSX_ADDENDUM` (row-per-item facts, `kind=count` for numeric aggregates). |
 | `lattice/selection.py` | `select()` = `_retrieve()` — BM25 scored seeds → optional dense seed augmentation (cosine NN hits merged before BFS) → zero-score seed filter → source-diversity probe → graph BFS → optional BFS rescore. 0 LLM calls. Env: `LATTICE_SEED_MIN_SCORE`, `LATTICE_BFS_RESCORE`, `LATTICE_RECOMMENDATION_CAP`, `LATTICE_DENSE_SEEDS` (enable dense augmentation; requires fastembed + embed index), `LATTICE_DENSE_TOP_K` (default 10). |
 | `lattice/query.py` | `parse_query()` — detects query shape (`aggregation`/`temporal`/`preference`/`recommendation`/`factual`) and `primary_kind`. Returns `QueryIntent`. Used by `_retrieve()`. |
 | `lattice/synthesis.py` | Tool-calling agent via OpenAI-compat SDK. Model from `SYNTHESIS_MODEL` (falls back to `LLM_MODEL`). Tools: `date_diff`, `sum_numbers`. PII redaction: when `LATTICE_PII_SCRUB=true` and provider is not Ollama, atom content is redacted via `EntityRedactor` before the LLM call and restored in the response. `synthesize()` → `SynthesisResult` (answer has raw `[src:N]` markers — stripped by callers). `stream_synthesis()` → SSE generator; assigns `src_key = "{i+1}"` (pure numeric) to atoms before synthesis, builds `num_map` (src_key → first-appearance citation number) server-side, emits `pii_protected` flag in `citations_applied` event. `_is_no_answer(text)` — `<<NO_INFO>>` sentinel + fuzzy regex fallback. Prompt constraint: never assume gender pronouns. Ollama-specific `extra_body` applied only when `LLM_PROVIDER=ollama`. |
