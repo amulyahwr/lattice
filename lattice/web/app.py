@@ -140,6 +140,8 @@ def _record_grace_day() -> None:
 class IngestRequest(BaseModel):
     text: str
     source_id: str = "http"
+    url: str | None = None    # browser extension: page URL → overrides source_id
+    title: str | None = None  # browser extension: page title → stored as source_title
     metadata: dict[str, Any] = {}
 
 
@@ -169,9 +171,12 @@ async def health():
 
 @app.post("/api/ingest")
 async def api_ingest(req: IngestRequest):
+    source_id = req.url or req.source_id
     metadata = {**req.metadata, "observed_at": datetime.now(timezone.utc).isoformat()}
+    if req.title:
+        metadata["source_title"] = req.title
     try:
-        result = DaemonClient().ingest_full(req.text, req.source_id, metadata=metadata)
+        result = DaemonClient().ingest_full(req.text, source_id, metadata=metadata)
     except (RuntimeError, OSError):
         return JSONResponse(
             status_code=503,

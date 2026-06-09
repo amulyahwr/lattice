@@ -562,6 +562,18 @@ header h1 {
   word-break: break-word;
 }
 
+.ref-source {
+  display: block;
+  margin-top: 2px;
+}
+.ref-source-link {
+  font-size: 0.72rem;
+  color: var(--accent);
+  text-decoration: none;
+  word-break: break-all;
+}
+.ref-source-link:hover { text-decoration: underline; }
+
 .ref-meta {
   display: flex;
   align-items: center;
