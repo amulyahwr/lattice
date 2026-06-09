@@ -46,7 +46,7 @@ A streaming LLM call takes the atom pack and generates a prose answer with numbe
 
 **Architecture**
 
-A persistent daemon owns all writes — MCP server, web UI, Telegram bot, and `lc` CLI are all read-only clients that delegate over a Unix socket. The web UI runs at `localhost:7337`. Capture channels today: MCP tools (Claude Code), web UI, Telegram bot, `lc` terminal command, inbox file drop. All channels write to the same atom store; all recall channels record to `usage.jsonl` for streak tracking and feedback collection.
+A persistent daemon owns all writes — MCP server, web UI, Telegram bot, `lc` CLI, and browser extension are all read-only clients that delegate over a Unix socket. The web UI runs at `localhost:7337`. Capture channels today: MCP tools (Claude Code), web UI, Telegram bot, `lc` terminal command, inbox file drop, Chrome browser extension. All channels write to the same atom store; all recall channels record to `usage.jsonl` for streak tracking and feedback collection.
 
 ---
 
@@ -262,6 +262,12 @@ Send any message to your Lattice bot on Telegram — it's saved as memory instan
 
 Commands: `/ask <question>` to recall from memory. `/save` to capture the session Q&A thread as memory. `/status` to see your memory count. Bot only responds to your user ID — silently ignores everyone else. After a `/ask` answer, bot prompts 👍/👎 feedback when the answer has low confidence (≤1 source atom).
 
+### Browser extension — right-click any page
+
+Load `extras/browser-extension/` in Chrome (Developer mode → Load unpacked). Select text on any page, then right-click → **Save to Lattice**, or press **⌥+⇧+S** with text selected. The extension sends selected text plus the page URL and title to your local daemon. Captured atoms show a clickable URL source link in the web UI citations panel. The popup shows daemon status and current memory count.
+
+Requires the daemon to be running at `localhost:7337`. When the daemon is offline the extension shows a notification and the save fails — start the daemon first.
+
 ### Terminal capture via `lc`
 
 ```bash
@@ -307,7 +313,7 @@ Every fact is a plain `.md` file in `LATTICE_DIR`. Hand-editable, git-trackable.
 | PII round-trip redaction — `privacy.py` EntityRedactor; restore after LLM     | ✅ shipped |
 | Sources UX — content preview + kind + age; Telegram `/sources` command        | ✅ shipped |
 | VS Code / Cursor extension — capture + recall from the IDE                     | Phase 2B   |
-| Browser extension — right-click selected text → save to Lattice                | Phase 2B   |
+| Browser extension — right-click selected text → save to Lattice                | ✅ shipped |
 | Apple Shortcuts — global hotkey capture (iPhone / macOS)                       | Phase 2B   |
 | Menu bar app — macOS status icon + quick capture hotkey                        | Phase 2B   |
 | Cloudflare Tunnel — bridge to Claude mobile, ChatGPT mobile, any cloud AI      | Phase 2B   |
