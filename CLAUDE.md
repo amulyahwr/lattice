@@ -82,7 +82,7 @@ Drop any `.md` (or text) file into `LATTICE_INBOX` (default `LATTICE_DIR/inbox/`
 
 ### Distribution channel consistency
 
-Lattice has multiple capture/recall channels: MCP tools (Claude Code), web UI, `lc` CLI, Telegram bot, and future channels (VS Code extension, browser extension, Apple Shortcuts, menu bar app).
+Lattice has multiple capture/recall channels: MCP tools (Claude Code), web UI, `lc` CLI, Telegram bot, Chrome browser extension, and future channels (VS Code extension, Apple Shortcuts, menu bar app).
 
 **Rule 1 — New channel:** when a new distribution channel is added, all existing functionality (capture + recall) should be implemented in that channel where technically feasible. Don't ship a channel that only does half the job if the other half is achievable.
 
@@ -90,13 +90,14 @@ Lattice has multiple capture/recall channels: MCP tools (Claude Code), web UI, `
 
 **Current channel capability matrix:**
 
-| Capability | MCP | Web UI | `lc` CLI | Telegram | VS Code* | Browser ext* |
+| Capability | MCP | Web UI | `lc` CLI | Telegram | Browser ext | VS Code* |
 |---|---|---|---|---|---|---|
-| Capture (ingest) | ✅ | ✅ | ✅ | ✅ | planned | planned |
-| File ingest | ✅ `file_path` | ✅ drag-drop | ✅ `lc path/to/file` | ✅ document attach | planned | — |
-| Recall (synthesized answer) | ✅ | ✅ | — (out of scope) | ✅ auto-detect + `/ask` | planned | — |
+| Capture (ingest) | ✅ | ✅ | ✅ | ✅ | ✅ right-click / ⌥⇧S | planned |
+| File ingest | ✅ `file_path` | ✅ drag-drop | ✅ `lc path/to/file` | ✅ document attach | — | planned |
+| Recall (synthesized answer) | ✅ | ✅ | — (out of scope) | ✅ auto-detect + `/ask` | — | planned |
 | Session-end capture | ✅ | ✅ Save session btn | — (atomic by design) | ✅ `/save` | — | — |
-| Memory count / status | ✅ `lattice_status` | ✅ (recent atoms) | ✅ `lc status` | ✅ `/status` | — | — |
+| Memory count / status | ✅ `lattice_status` | ✅ (recent atoms) | ✅ `lc status` | ✅ `/status` | ✅ popup count | — |
+| Daemon status | — | — | — | — | ✅ popup dot | — |
 | Recall feedback | ❌ redundant (Claude Code has own UI) | ✅ thumbs + reason (all answers) | — (no recall) | ✅ 👍/👎 (all answers) | — | — |
 | Usage streak | ✅ `lattice_status` | ✅ "N days deep" badge | ✅ `lc status` shows streak | ✅ `/status` shows streak | — | — |
 | Milestone moments | — | ✅ cards Day 1/7/14/30 | ✅ `lc status` prints msg | ✅ prepended on recall | — | — |

@@ -222,6 +222,7 @@ LATTICE_DIR/
 - ✅ File ingest — all channels (STORY-014 extended) — `extract_file_text()` in `util.py` handles PDF/docx/pptx/xlsx/xls/plain text; daemon inbox accepts all types; web UI multi-file upload with parallel ingest and stacked toasts; `lc path/to/file`; Telegram document attachments; MCP `file_path` parameter. `ingest()` returns `atoms_new`/`atoms_updated`/`duplicates_skipped`; all channels show warm diff messages. `LatticeDB` fully thread-safe via `RLock`.
 - ✅ PII round-trip redaction (STORY-033) — `lattice/privacy.py` `EntityRedactor`; regex (email+phone) + optional NER via `LATTICE_NER_MODEL`; redact before cloud LLM call, restore in atom content + streamed response; `LATTICE_PII_SCRUB` env var; `🔒 PII protected` badge in web UI; no-op for Ollama.
 - ✅ Sources UX — content preview + kind pill + channel + age in web UI sources panel (scrollable); Telegram progressive disclosure: compact footer `📚 N sources · channel` + `/sources` command for full detail
+- ✅ Browser extension (`extras/browser-extension/`) — Manifest V3 Chrome extension; right-click context menu + ⌥+⇧+S keyboard shortcut (uses `e.code` not `e.key` for Mac compatibility); sends selected text + page URL + title to `POST /api/ingest`; popup shows daemon status dot + memory count; source_id set to page URL so web UI citations panel renders clickable links. Load unpacked in Chrome Developer mode.
 - Next: STORY-034 (lattice export) → VS Code extension
 
 See STORIES.md for acceptance criteria and FEATURES.md for rationale.
