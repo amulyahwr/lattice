@@ -59,7 +59,7 @@ class QueryIntent:
     def primary_kind(self) -> str | None:
         """Atom kind prioritized for this query shape. None = no bias."""
         return {
-            QueryShape.AGGREGATION: None,
+            QueryShape.AGGREGATION: "count",
             QueryShape.TEMPORAL: "event",
             QueryShape.RECOMMENDATION: "recommendation",
             QueryShape.PREFERENCE: "preference",
