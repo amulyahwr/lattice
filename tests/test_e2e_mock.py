@@ -46,11 +46,11 @@ def _make_tool_resp(content: str) -> MagicMock:
 
 
 def _mock_synthesis_client(answer: str) -> MagicMock:
-    client = MagicMock()
+    mock_llm = MagicMock()
     tool_resp = _make_tool_resp(answer)
     stream_chunks = [_make_stream_chunk(w + " ") for w in answer.split()]
-    client.chat.completions.create.side_effect = [tool_resp, iter(stream_chunks)]
-    return client
+    mock_llm.create.side_effect = [tool_resp, iter(stream_chunks)]
+    return mock_llm
 
 
 # ── fixtures ──────────────────────────────────────────────────────────────────
@@ -123,7 +123,7 @@ class TestStreamSynthesis:
 
         client = _mock_synthesis_client("You like dark roast coffee.")
         events = []
-        with patch("lattice.synthesis.make_llm_client", return_value=client):
+        with patch("lattice.synthesis.LLMClient", return_value=client):
             for chunk in stream_synthesis("What coffee do I like?", candidates, _CFG):
                 chunk = chunk.strip()
                 if chunk.startswith("data: "):
@@ -137,7 +137,7 @@ class TestStreamSynthesis:
         candidates = _retrieve("coffee", db=seeded_db, cfg=_CFG)
         client = _mock_synthesis_client("You like dark roast coffee.")
         events = []
-        with patch("lattice.synthesis.make_llm_client", return_value=client):
+        with patch("lattice.synthesis.LLMClient", return_value=client):
             for chunk in stream_synthesis("What coffee do I like?", candidates, _CFG):
                 chunk = chunk.strip()
                 if chunk.startswith("data: "):
@@ -162,7 +162,7 @@ class TestStreamSynthesis:
 
         client = _mock_synthesis_client("Your favourite language is Python.")
         events = []
-        with patch("lattice.synthesis.make_llm_client", return_value=client):
+        with patch("lattice.synthesis.LLMClient", return_value=client):
             for chunk in stream_synthesis("What is my favourite language?", retrieved, _CFG):
                 chunk = chunk.strip()
                 if chunk.startswith("data: "):

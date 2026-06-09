@@ -123,27 +123,25 @@ class TestIsNoAnswer:
 
 class TestSynthesizeNoAnswer:
     def _mock_client(self, answer_text: str) -> MagicMock:
-        mock_client = MagicMock()
+        mock_llm = MagicMock()
         completion = MagicMock()
         completion.choices[0].message.content = answer_text
         completion.choices[0].message.tool_calls = None
-        mock_client.chat.completions.create.return_value = completion
-        return mock_client
+        mock_llm.create.return_value = completion
+        return mock_llm
 
     def test_verbose_no_answer_replaced(self):
-        with patch("lattice.synthesis.make_llm_client", return_value=self._mock_client(
+        with patch("lattice.synthesis.LLMClient", return_value=self._mock_client(
             "I cannot determine your skiing preference from the provided atoms."
         )):
-            with patch("lattice.synthesis.resolve_model", return_value="test-model"):
-                result = synthesize("what's my skiing preference?", _ATOMS, _CFG)
+            result = synthesize("what's my skiing preference?", _ATOMS, _CFG)
         assert result.answer == _NO_ANSWER_PHRASE
 
     def test_genuine_answer_preserved(self):
-        with patch("lattice.synthesis.make_llm_client", return_value=self._mock_client(
+        with patch("lattice.synthesis.LLMClient", return_value=self._mock_client(
             "You prefer dark roast coffee."
         )):
-            with patch("lattice.synthesis.resolve_model", return_value="test-model"):
-                result = synthesize("what coffee do I like?", _ATOMS, _CFG)
+            result = synthesize("what coffee do I like?", _ATOMS, _CFG)
         assert result.answer == "You prefer dark roast coffee."
 
     def test_no_atoms_returns_not_found(self):
@@ -153,19 +151,17 @@ class TestSynthesizeNoAnswer:
     def test_raw_response_preserved_even_when_replaced(self):
         """raw_response always holds the LLM's actual output for debugging."""
         llm_text = "I cannot determine this from the atoms."
-        with patch("lattice.synthesis.make_llm_client", return_value=self._mock_client(llm_text)):
-            with patch("lattice.synthesis.resolve_model", return_value="test-model"):
-                result = synthesize("q", _ATOMS, _CFG)
+        with patch("lattice.synthesis.LLMClient", return_value=self._mock_client(llm_text)):
+            result = synthesize("q", _ATOMS, _CFG)
         assert result.answer == _NO_ANSWER_PHRASE
         assert result.raw_response == llm_text
 
     def test_partial_answer_with_gap_not_replaced(self):
         """A real partial answer mentioning a gap should not be clobbered."""
-        with patch("lattice.synthesis.make_llm_client", return_value=self._mock_client(
+        with patch("lattice.synthesis.LLMClient", return_value=self._mock_client(
             "You prefer dark coffee, but your tea preference is not recorded."
         )):
-            with patch("lattice.synthesis.resolve_model", return_value="test-model"):
-                result = synthesize("what do I drink?", _ATOMS, _CFG)
+            result = synthesize("what do I drink?", _ATOMS, _CFG)
         assert "dark coffee" in result.answer
 
 
@@ -175,8 +171,8 @@ class TestSynthesizeNoAnswer:
 
 class TestStreamSynthesisNoAnswer:
     def _mock_stream_client(self, chunks: list[str]) -> MagicMock:
-        """Build a mock OpenAI client that streams the given text chunks."""
-        mock_client = MagicMock()
+        """Build a mock LLMClient that streams the given text chunks."""
+        mock_llm = MagicMock()
 
         # Tool-loop call: no tool calls
         tool_resp = MagicMock()
@@ -190,8 +186,8 @@ class TestStreamSynthesisNoAnswer:
             chunk.choices[0].delta.content = text
             stream_chunks.append(chunk)
 
-        mock_client.chat.completions.create.side_effect = [tool_resp, iter(stream_chunks)]
-        return mock_client
+        mock_llm.create.side_effect = [tool_resp, iter(stream_chunks)]
+        return mock_llm
 
     def _collect_events(self, gen) -> list[dict]:
         events = []
@@ -201,20 +197,18 @@ class TestStreamSynthesisNoAnswer:
         return events
 
     def test_verbose_no_answer_replaced_in_citations_applied(self):
-        with patch("lattice.synthesis.make_llm_client", return_value=self._mock_stream_client(
+        with patch("lattice.synthesis.LLMClient", return_value=self._mock_stream_client(
             ["I cannot determine", " your skiing preference."]
         )):
-            with patch("lattice.synthesis.resolve_model", return_value="test-model"):
-                events = self._collect_events(stream_synthesis("q", _ATOMS, _CFG))
+            events = self._collect_events(stream_synthesis("q", _ATOMS, _CFG))
         ca = next(e for e in events if e["type"] == "citations_applied")
         assert ca["answer"] == _NO_ANSWER_PHRASE
 
     def test_genuine_answer_preserved_in_stream(self):
-        with patch("lattice.synthesis.make_llm_client", return_value=self._mock_stream_client(
+        with patch("lattice.synthesis.LLMClient", return_value=self._mock_stream_client(
             ["You prefer ", "dark roast coffee."]
         )):
-            with patch("lattice.synthesis.resolve_model", return_value="test-model"):
-                events = self._collect_events(stream_synthesis("q", _ATOMS, _CFG))
+            events = self._collect_events(stream_synthesis("q", _ATOMS, _CFG))
         ca = next(e for e in events if e["type"] == "citations_applied")
         assert "dark roast" in ca["answer"]
 
@@ -224,19 +218,17 @@ class TestStreamSynthesisNoAnswer:
         assert any("No relevant" in t for t in token_texts)
 
     def test_done_event_always_emitted(self):
-        with patch("lattice.synthesis.make_llm_client", return_value=self._mock_stream_client(
+        with patch("lattice.synthesis.LLMClient", return_value=self._mock_stream_client(
             ["I cannot determine this."]
         )):
-            with patch("lattice.synthesis.resolve_model", return_value="test-model"):
-                events = self._collect_events(stream_synthesis("q", _ATOMS, _CFG))
+            events = self._collect_events(stream_synthesis("q", _ATOMS, _CFG))
         assert any(e["type"] == "done" for e in events)
 
     def test_token_events_still_emitted_before_replacement(self):
         """Tokens stream before the citations_applied replacement — both should exist."""
-        with patch("lattice.synthesis.make_llm_client", return_value=self._mock_stream_client(
+        with patch("lattice.synthesis.LLMClient", return_value=self._mock_stream_client(
             ["I cannot determine this."]
         )):
-            with patch("lattice.synthesis.resolve_model", return_value="test-model"):
-                events = self._collect_events(stream_synthesis("q", _ATOMS, _CFG))
+            events = self._collect_events(stream_synthesis("q", _ATOMS, _CFG))
         assert any(e["type"] == "token" for e in events)
         assert any(e["type"] == "citations_applied" for e in events)

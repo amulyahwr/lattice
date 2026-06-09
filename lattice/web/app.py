@@ -1,7 +1,6 @@
 import json
 import time
 from datetime import date, datetime, timezone
-from hashlib import sha1
 from pathlib import Path
 from typing import Any
 
@@ -15,6 +14,7 @@ from lattice.config import Config
 from lattice.db import LatticeDB
 from lattice.selection import select
 from lattice.synthesis import stream_synthesis, synthesize
+from lattice.telemetry import compute_streak, load_usage, record_grace_day, record_usage
 
 _STATIC = Path(__file__).parent / "static"
 
@@ -42,110 +42,6 @@ def _get_db() -> LatticeDB:
     if _db is not None:
         return _db
     return LatticeDB(_get_cfg().lattice_dir)  # not cached — new DB per test call
-
-
-# ── usage telemetry ───────────────────────────────────────────────────────────
-
-def _record_usage(
-    question: str,
-    selection_ms: int,
-    synthesis_ms: int,
-    atom_count: int,
-    channel: str = "web",
-) -> None:
-    cfg = _get_cfg()
-    record = {
-        "ts": datetime.now(timezone.utc).isoformat(),
-        "query_hash": sha1(question.encode()).hexdigest(),
-        "selection_ms": selection_ms,
-        "synthesis_ms": synthesis_ms,
-        "atom_count": atom_count,
-        "channel": channel,
-    }
-    with (cfg.lattice_dir / "usage.jsonl").open("a", encoding="utf-8") as f:
-        f.write(json.dumps(record) + "\n")
-
-
-def _load_usage() -> list[dict]:
-    path = _get_cfg().lattice_dir / "usage.jsonl"
-    if not path.exists():
-        return []
-    records = []
-    with path.open(encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                try:
-                    records.append(json.loads(line))
-                except json.JSONDecodeError:
-                    pass
-    return records
-
-
-def _utc_today() -> date:
-    return datetime.now(timezone.utc).date()
-
-
-def _compute_streak(records: list[dict]) -> int:
-    streak, _ = _compute_streak_with_grace(records)
-    return streak
-
-
-def _compute_streak_with_grace(records: list[dict]) -> tuple[int, bool]:
-    """Return (streak, grace_day_active).
-
-    grace_day_active is True when the user has not queried today but did query
-    yesterday — streak is held at yesterday's value for one day before resetting.
-    One grace day is allowed per 7-day window; after use it is recorded as a
-    {type: 'grace_day_used'} sentinel in usage.jsonl so we don't double-grant.
-    """
-    today = _utc_today()
-    yesterday = date.fromordinal(today.toordinal() - 1)
-
-    query_days: set[date] = set()
-    grace_used_dates: set[date] = set()
-    for r in records:
-        try:
-            d = date.fromisoformat(r["ts"][:10])
-            if r.get("type") == "grace_day_used":
-                grace_used_dates.add(d)
-            else:
-                query_days.add(d)
-        except (KeyError, ValueError):
-            pass
-
-    # Normal streak from today
-    if today in query_days:
-        streak = 0
-        current = today
-        while current in query_days:
-            streak += 1
-            current = date.fromordinal(current.toordinal() - 1)
-        return streak, False
-
-    # Today has no queries — check grace day eligibility
-    if yesterday in query_days:
-        # Check no grace day used in the last 7 days
-        week_ago = date.fromordinal(today.toordinal() - 6)
-        grace_used_recently = any(d >= week_ago for d in grace_used_dates)
-        if not grace_used_recently:
-            # Grace day active: compute streak from yesterday
-            streak = 0
-            current = yesterday
-            while current in query_days:
-                streak += 1
-                current = date.fromordinal(current.toordinal() - 1)
-            return streak, True
-
-    return 0, False
-
-
-def _record_grace_day() -> None:
-    """Write a grace_day_used sentinel to usage.jsonl."""
-    path = _get_cfg().lattice_dir / "usage.jsonl"
-    entry = json.dumps({"type": "grace_day_used", "ts": datetime.now(timezone.utc).isoformat()})
-    with path.open("a", encoding="utf-8") as f:
-        f.write(entry + "\n")
 
 
 # ── models ────────────────────────────────────────────────────────────────────
@@ -253,7 +149,7 @@ async def api_query(req: QueryRequest) -> StreamingResponse:
         yield from stream_synthesis(req.question, atoms, cfg)
 
         # synthesis_ms is 0 for streaming — generator is lazy, timing not meaningful here
-        _record_usage(req.question, sel_ms, 0, len(atoms), channel="web")
+        record_usage(req.question, sel_ms, 0, len(atoms), channel="web", cfg=cfg)
 
     return StreamingResponse(
         _generate(),
@@ -276,7 +172,7 @@ async def api_answer(req: QueryRequest):
     t1 = time.monotonic()
     result = synthesize(req.question, atoms, cfg)
     syn_ms = int((time.monotonic() - t1) * 1000)
-    _record_usage(req.question, sel_ms, syn_ms, len(atoms), channel="telegram")
+    record_usage(req.question, sel_ms, syn_ms, len(atoms), channel="telegram", cfg=cfg)
     atom_meta = [
         {
             "atom_id": a.get("atom_id"),
@@ -294,9 +190,10 @@ async def api_answer(req: QueryRequest):
 
 @app.get("/api/usage/summary")
 async def api_usage_summary():
-    records = _load_usage()
-    today = _utc_today().isoformat()
-    seven_days_ago = date.fromordinal(_utc_today().toordinal() - 6).isoformat()
+    cfg = _get_cfg()
+    records = load_usage(cfg)
+    today = datetime.now(timezone.utc).date().isoformat()
+    seven_days_ago = date.fromordinal(datetime.now(timezone.utc).date().toordinal() - 6).isoformat()
 
     today_count = sum(1 for r in records if r.get("ts", "")[:10] == today and r.get("type") != "grace_day_used")
     week_count = sum(1 for r in records if r.get("ts", "")[:10] >= seven_days_ago and r.get("type") != "grace_day_used")
@@ -308,7 +205,7 @@ async def api_usage_summary():
     ]
     avg_latency_ms = int(sum(latencies) / len(latencies)) if latencies else 0
 
-    streak, grace_day_active = _compute_streak_with_grace(records)
+    streak, grace_day_active = compute_streak(records)
 
     db = _get_db()
     atom_count = len([a for a in db.all() if not a.is_superseded])
@@ -378,8 +275,9 @@ async def api_topic_depth(subject: str):
 async def api_usage_weekly():
     """Weekly memory report data — atoms saved, recalls, topics, new topics this week."""
     db = _get_db()
-    records = _load_usage()
-    today = _utc_today()
+    cfg = _get_cfg()
+    records = load_usage(cfg)
+    today = datetime.now(timezone.utc).date()
     week_ago = date.fromordinal(today.toordinal() - 6)
     week_ago_iso = week_ago.isoformat()
 
@@ -411,7 +309,7 @@ async def api_usage_weekly():
     subject_counts = Counter(a.subject for a in this_week_atoms if a.subject)
     top_topic = subject_counts.most_common(1)[0][0] if subject_counts else None
 
-    streak, _ = _compute_streak_with_grace(records)
+    streak, _ = compute_streak(records)
 
     return {
         "atoms_this_week": len(this_week_atoms),

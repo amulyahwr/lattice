@@ -12,34 +12,16 @@ def lc() -> None:
         sys.exit(1)
 
     if sys.argv[1] == "status":
-        from pathlib import Path as _Path
         from lattice.config import Config
         from lattice.db import LatticeDB
+        from lattice.telemetry import compute_streak, load_usage
         cfg = Config.from_env()
         db = LatticeDB(cfg.lattice_dir)
         active = [a for a in db.all() if not a.is_superseded]
         count = len(active)
         topics = list(dict.fromkeys(a.subject for a in active if a.subject))[:5]
 
-        # Fetch streak from usage.jsonl directly (no daemon needed)
-        import json as _json
-        from datetime import date as _date, datetime as _dt, timezone as _tz
-        usage_path = _Path(cfg.lattice_dir) / "usage.jsonl"
-        query_days: set[_date] = set()
-        if usage_path.exists():
-            for line in usage_path.read_text(encoding="utf-8").splitlines():
-                try:
-                    r = _json.loads(line)
-                    if r.get("type") != "grace_day_used":
-                        query_days.add(_date.fromisoformat(r["ts"][:10]))
-                except Exception:
-                    pass
-        today = _dt.now(_tz.utc).date()
-        streak = 0
-        current = today
-        while current in query_days:
-            streak += 1
-            current = _date.fromordinal(current.toordinal() - 1)
+        streak, _ = compute_streak(load_usage(cfg))
 
         parts = [f"{count} memories"]
         if topics:

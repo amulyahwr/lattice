@@ -312,8 +312,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         syn_ms = int((time.monotonic() - t1) * 1000)
 
         try:
-            from lattice.web.app import _record_usage
-            _record_usage(arguments["query"], sel_ms, syn_ms, len(atoms), channel="mcp")
+            from lattice.telemetry import record_usage as _record_usage
+            _record_usage(arguments["query"], sel_ms, syn_ms, len(atoms), channel="mcp", cfg=_cfg)
         except Exception:
             pass
 
@@ -323,8 +323,8 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         _db.preload_if_stale()
         count = len([a for a in _db.all() if not a.is_superseded])
         try:
-            from lattice.web.app import _compute_streak_with_grace, _load_usage
-            streak, grace_day_active = _compute_streak_with_grace(_load_usage())
+            from lattice.telemetry import compute_streak, load_usage
+            streak, grace_day_active = compute_streak(load_usage(_cfg))
         except Exception:
             streak, grace_day_active = 0, False
         return [TextContent(type="text", text=json.dumps({
