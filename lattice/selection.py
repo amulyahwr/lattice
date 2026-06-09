@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING
 
 from lattice.db import LatticeDB
 from lattice.models import Atom
-from lattice.query import parse_query
+from lattice.query import QueryIntent, QueryShape, parse_query
 
 if TYPE_CHECKING:
     from lattice.config import Config
@@ -49,7 +49,13 @@ def _decay_factor(kind: str | None, ref_dt: datetime | None, cfg: "Config", now:
     return max(math.exp(-age_days * math.log(2) / half_life), _DECAY_FLOOR)
 
 
-def _apply_recommendation_cap(atoms: list[dict], cfg: "Config") -> list[dict]:
+def _apply_recommendation_cap(
+    atoms: list[dict], cfg: "Config", intent: QueryIntent | None = None
+) -> list[dict]:
+    # Recommendation queries: the user is explicitly asking for recommendations —
+    # capping here would hide the most relevant results.
+    if intent is not None and intent.shape == QueryShape.RECOMMENDATION:
+        return atoms
     rec_seen = 0
     result = []
     for atom in atoms:
@@ -174,7 +180,7 @@ def _retrieve(
                 if fa.atom_id not in seen_ids:
                     result.append(_atom_to_dict(fa))
 
-    return _apply_recommendation_cap(result, cfg)
+    return _apply_recommendation_cap(result, cfg, intent)
 
 
 def _graph_select(

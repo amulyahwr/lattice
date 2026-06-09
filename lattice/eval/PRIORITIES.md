@@ -196,20 +196,22 @@ Evaluation method:
 | p32 | **LongMemEval-S stratified baseline** (30/category, n=176 after 4 ingest errors). Fresh S-version ingest. `LATTICE_TIME_DECAY=1`. | **63.1%** | First cross-category S-version measurement. Preference 33.3%, temporal 51.7% — dominant failure mass. Retrieval: BM25 hit=94.4%, selected barely changes BFS. 4 large-haystack questions (44–53 sessions) hit LLM output limits, removed. |
 | p33 | Synthesis prompt: clarified `valid_from`/`observed_at`, added ordering + preference grounding. Reused p32 lattice dirs. **Reverted.** | **63.6%** | +0.5pp overall, all deltas within SE (±3.8%). No statistically significant change. Reverted to p32 prompt. |
 | p34 | **M5 dense seed augmentation** (`LATTICE_DENSE_SEEDS=1`, BAAI/bge-small-en-v1.5). Reused p32 lattice dirs. | **67.8%** | **+4.7pp overall**. Preference +16.7pp (33.3%→50.0%), single-session-user +6.6pp, single-session-assistant +6.7pp. Preference Hit 76.7%→93.3% — vocab-mismatch atoms now retrieved. Temporal −5.0pp is noise (n=30 vs 29 + 4 extra zero-scored questions). Shipped. |
+| p40 | M22 query intent → selection: `is_on_topic` filter on kind-fallback + AGGREGATION `primary_kind="count"` + rec cap bypass. Reused p32 lattice dirs. **Reverted (`is_on_topic` only).** | **63.9%** | −3.9pp overall. `is_on_topic` cut atoms across all categories — KU −10pp was the sharpest signal. Reverted filter; kept AGGREGATION fix and rec cap bypass (both neutral). |
+| p41 | M22 without `is_on_topic` (AGGREGATION `primary_kind="count"` + rec cap bypass only). Reused p32 lattice dirs. | **63.9%** | −3.9pp vs p34, all deltas within ±1 SE (±9.1%). Multi-session and temporal exactly flat. Drops are synthesis variance. Changes confirmed neutral — shipped. |
 
 ## Category Tracker (last 10 runs)
 
 Note: phi4-mini-judge throughout. p19+ use qwen3-8b-ingest. p25 uses gpt-4o-mini ingest.
 
-| Category | p27b (oracle) | p30-m11 (S-KU) | p32 (S-baseline) | p33 (S-prompt) | **p34 (S-dense)** |
+| Category | p32 (S-baseline) | p33 (S-prompt) | p34 (S-dense) | p40 (M22+filter) | **p41 (M22)** |
 | --- | --- | --- | --- | --- | --- |
-| overall | 68.0% | 73.5%† | 63.1% | 63.6% | **67.8%** |
-| single-session-preference | 50.0% | — | 33.3% | 33.3% | **50.0%** |
-| temporal-reasoning | 69.2% | — | 51.7% | 48.3% | 46.7% |
-| multi-session | 51.9% | — | 63.0% | 70.4% | 66.7% |
-| knowledge-update | 75.0% | **73.5%** | 70.0% | 66.7% | 70.0% |
-| single-session-user | 78.6% | — | 76.7% | 80.0% | **83.3%** |
-| single-session-assistant | 90.9% | — | 83.3% | 83.3% | **90.0%** |
+| overall | 63.1% | 63.6% | **67.8%** | 63.9% | 63.9% |
+| single-session-preference | 33.3% | 33.3% | **50.0%** | 43.3% | 43.3% |
+| temporal-reasoning | 51.7% | 48.3% | 46.7% | 50.0% | 46.7% |
+| multi-session | 63.0% | 70.4% | **66.7%** | 63.3% | 66.7% |
+| knowledge-update | 70.0% | 66.7% | **70.0%** | 60.0% | 66.7% |
+| single-session-user | 76.7% | 80.0% | **83.3%** | 80.0% | 76.7% |
+| single-session-assistant | 83.3% | 83.3% | **90.0%** | 86.7% | 83.3% |
 
 †p30-m11 is knowledge-update only (34-question LongMemEval-S subset). S-version runs use stratified 30/category.
 

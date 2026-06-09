@@ -41,3 +41,45 @@ def test_aggregation_beats_recommendation():
 def test_aggregation_beats_temporal():
     # "how many days" has temporal token "days" — aggregation wins
     assert parse_query("how many days did I exercise last month").shape == QueryShape.AGGREGATION
+
+
+def test_aggregation_primary_kind_is_count():
+    intent = parse_query("how many times did I go to the gym")
+    assert intent.primary_kind == "count"
+
+
+def test_recommendation_primary_kind():
+    intent = parse_query("what did you recommend for breakfast")
+    assert intent.primary_kind == "recommendation"
+
+
+def test_preference_primary_kind():
+    intent = parse_query("what do I prefer to drink")
+    assert intent.primary_kind == "preference"
+
+
+def test_factual_primary_kind_is_none():
+    intent = parse_query("what is the capital of France")
+    assert intent.primary_kind is None
+
+
+def test_is_on_topic_match():
+    from lattice.models import Atom
+    intent = parse_query("what do I prefer about coffee")
+    coffee_atom = Atom(kind="preference", source="user", subject="coffee", content="Likes dark roast.")
+    assert intent.is_on_topic(coffee_atom) is True
+
+
+def test_is_on_topic_no_match():
+    from lattice.models import Atom
+    intent = parse_query("what do I prefer about coffee")
+    hiking_atom = Atom(kind="preference", source="user", subject="hiking trails", content="Likes long hikes.")
+    assert intent.is_on_topic(hiking_atom) is False
+
+
+def test_is_on_topic_empty_tokens():
+    from lattice.models import Atom
+    # Query entirely stopwords → tokens empty → always on topic
+    intent = parse_query("what is the")
+    atom = Atom(kind="fact", source="user", subject="anything", content="x")
+    assert intent.is_on_topic(atom) is True
