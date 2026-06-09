@@ -269,7 +269,7 @@ class TestChatFormatDetection:
     def test_metadata_source_override_applies_to_plain_atoms(self):
         """Mode A: metadata.source overrides every atom for plain segments."""
         from lattice.config import Config
-        from lattice.ingest import _extract_atoms
+        from lattice.ingest import extract_atoms
         from lattice.parsers import Segment
         from datetime import datetime, timezone
 
@@ -279,14 +279,14 @@ class TestChatFormatDetection:
 
         mock_response = '{"atoms": [{"subject": "mountains", "kind": "preference", "source": "document", "content": "Amulya dislikes mountains.", "valid_from": null, "valid_until": null}]}'
         with patch("lattice.ingest.complete", return_value=mock_response):
-            atoms = _extract_atoms(segment, {"source": "user"}, ref, cfg)
+            atoms = extract_atoms([segment], {"source": "user"}, ref, cfg)
 
         assert all(a["source"] == "user" for a in atoms)
 
     def test_metadata_source_override_ignored_for_chat_segments(self):
         """Pipeline guard: metadata.source is NOT applied for chat segments even if caller passes it."""
         from lattice.config import Config
-        from lattice.ingest import _extract_atoms
+        from lattice.ingest import extract_atoms
         from lattice.parsers import Segment
         from datetime import datetime, timezone
 
@@ -296,14 +296,14 @@ class TestChatFormatDetection:
 
         mock_response = '{"atoms": [{"subject": "TypeScript", "kind": "preference", "source": "user", "content": "User hates TypeScript.", "valid_from": null, "valid_until": null}]}'
         with patch("lattice.ingest.complete", return_value=mock_response):
-            atoms = _extract_atoms(segment, {"source": "assistant"}, ref, cfg)
+            atoms = extract_atoms([segment], {"source": "assistant"}, ref, cfg)
 
         assert atoms[0]["source"] == "user"
 
     def test_no_metadata_source_preserves_llm_attribution(self):
         """Without metadata.source, LLM-assigned source survives intact."""
         from lattice.config import Config
-        from lattice.ingest import _extract_atoms
+        from lattice.ingest import extract_atoms
         from lattice.parsers import Segment
         from datetime import datetime, timezone
 
@@ -313,7 +313,7 @@ class TestChatFormatDetection:
 
         mock_response = '{"atoms": [{"subject": "TypeScript", "kind": "preference", "source": "user", "content": "User hates TypeScript.", "valid_from": null, "valid_until": null}]}'
         with patch("lattice.ingest.complete", return_value=mock_response):
-            atoms = _extract_atoms(segment, {}, ref, cfg)
+            atoms = extract_atoms([segment], {}, ref, cfg)
 
         assert atoms[0]["source"] == "user"
 

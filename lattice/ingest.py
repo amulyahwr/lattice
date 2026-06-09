@@ -409,7 +409,8 @@ def _hash_text(text: str) -> str:
     return sha256(text.encode("utf-8")).hexdigest()
 
 
-def _segments_for_source(source: str, metadata: dict) -> list[Segment]:
+def segment_source(source: str, metadata: dict) -> list[Segment]:
+    """Stage 1: parse source into segments. No LLM calls."""
     source_type = infer_source_type(source, metadata)
     return parse(source, source_type)
 
@@ -450,7 +451,50 @@ def _extract_atoms(segment: Segment, metadata: dict, ref: datetime, cfg: "Config
     return atoms_data
 
 
-def _detect_supersession(db: LatticeDB, new_atom: Atom, cfg: "Config") -> str | None:
+def extract_atoms(
+    segments: list[Segment],
+    metadata: dict,
+    ref: datetime,
+    cfg: "Config",
+) -> list[dict]:
+    """Stage 2: LLM extraction with PII redact/restore. Returns raw atom dicts."""
+    _redactor = EntityRedactor()
+    _seg_texts, _entity_map = _redactor.redact_batch([s.text for s in segments], cfg)
+    if _entity_map:
+        segments = [
+            Segment(
+                segment_id=s.segment_id,
+                text=rt,
+                source_type=s.source_type,
+                start=s.start,
+                end=s.end,
+                role=s.role,
+                context=s.context,
+            )
+            for s, rt in zip(segments, _seg_texts)
+        ]
+
+    workers = cfg.ingest_workers
+    if workers == 1 or len(segments) == 1:
+        nested = [_extract_atoms(s, metadata, ref, cfg) for s in segments]
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            nested = list(
+                pool.map(lambda s: _extract_atoms(s, metadata, ref, cfg), segments)
+            )
+    atoms_data = [a for atoms in nested for a in atoms]
+
+    if _entity_map:
+        for a in atoms_data:
+            a["content"] = _redactor.restore(a["content"], _entity_map)
+            if a.get("subject"):
+                a["subject"] = _redactor.restore(a["subject"], _entity_map)
+
+    return atoms_data
+
+
+def detect_supersession(db: LatticeDB, new_atom: Atom, cfg: "Config") -> str | None:
+    """Stage 3: decide if new_atom supersedes an existing atom. Returns old atom_id or None."""
     # Fast path: subject registry
     existing_id = db.lookup_subject(new_atom.subject)
     if existing_id:
@@ -513,60 +557,15 @@ def _detect_supersession(db: LatticeDB, new_atom: Atom, cfg: "Config") -> str | 
     return superseded_id if superseded_id in valid_ids else None
 
 
-def ingest(
-    source: str,
-    metadata: dict | None = None,
-    db: LatticeDB | None = None,
-    cfg: "Config | None" = None,
+def persist_atoms(
+    atoms_data: list[dict],
+    db: LatticeDB,
+    source_id: str,
+    observed_at: "datetime | None",
+    ref: datetime,
+    cfg: "Config",
 ) -> dict:
-    if cfg is None:
-        from lattice.config import Config
-        cfg = Config.from_env()
-    if db is None:
-        db = LatticeDB(cfg.lattice_dir)
-    metadata = metadata or {}
-    source_id = str(metadata.get("source_id") or uuid.uuid4())
-    observed_at = _parse_datetime(
-        metadata.get("observed_at") or metadata.get("date") or metadata.get("timestamp")
-    )
-    ref = observed_at or _today()
-
-    segments = _segments_for_source(source, metadata)
-
-    # PII redaction: batch all segment texts → one shared entity_map → restore after extraction
-    _redactor = EntityRedactor()
-    _seg_texts, _entity_map = _redactor.redact_batch([s.text for s in segments], cfg)
-    if _entity_map:
-        segments = [
-            Segment(
-                segment_id=s.segment_id,
-                text=rt,
-                source_type=s.source_type,
-                start=s.start,
-                end=s.end,
-                role=s.role,
-                context=s.context,
-            )
-            for s, rt in zip(segments, _seg_texts)
-        ]
-
-    workers = cfg.ingest_workers
-    if workers == 1 or len(segments) == 1:
-        nested_atoms = [_extract_atoms(segment, metadata, ref, cfg) for segment in segments]
-    else:
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            nested_atoms = list(
-                pool.map(lambda s: _extract_atoms(s, metadata, ref, cfg), segments)
-            )
-    atoms_data = [a for atoms in nested_atoms for a in atoms]
-
-    # Restore real names after LLM extraction (PII was redacted before extraction)
-    if _entity_map:
-        for a in atoms_data:
-            a["content"] = _redactor.restore(a["content"], _entity_map)
-            if a.get("subject"):
-                a["subject"] = _redactor.restore(a["subject"], _entity_map)
-
+    """Stage 4: dedup + supersession + DB write. Returns summary dict (no segments_processed)."""
     created_ids: list[str] = []
     new_ids: list[str] = []
     updated_ids: list[str] = []
@@ -576,6 +575,7 @@ def ingest(
         content = data["content"]
         content_hash = _hash_text(content)
         normalized_hash = _hash_text(_normalized_content(content))
+        meta = data.get("metadata", {})
 
         with db.lock:
             duplicate = db.find_by_normalized_hash(normalized_hash)
@@ -593,17 +593,17 @@ def ingest(
                 ingested_at=ref,
                 observed_at=observed_at,
                 source_id=source_id,
-                source_title=metadata.get("title") or metadata.get("source_title"),
-                session_id=metadata.get("session_id"),
+                source_title=meta.get("title") or meta.get("source_title"),
+                session_id=meta.get("session_id"),
                 segment_id=data.get("segment_id"),
                 source_type=data.get("source_type"),
                 source_span=data.get("source_span"),
                 content_hash=content_hash,
                 normalized_content_hash=normalized_hash,
-                metadata=data.get("metadata", {}),
+                metadata=meta,
             )
 
-            old_id = _detect_supersession(db, atom, cfg)
+            old_id = detect_supersession(db, atom, cfg)
             if old_id:
                 db.supersede(old_id, atom)
                 updated_ids.append(atom.atom_id)
@@ -626,5 +626,29 @@ def ingest(
         "duplicates_skipped": len(duplicate_ids),
         "duplicate_atom_ids": duplicate_ids,
         "source_id": source_id,
-        "segments_processed": len(segments),
     }
+
+
+def ingest(
+    source: str,
+    metadata: dict | None = None,
+    db: LatticeDB | None = None,
+    cfg: "Config | None" = None,
+) -> dict:
+    if cfg is None:
+        from lattice.config import Config
+        cfg = Config.from_env()
+    if db is None:
+        db = LatticeDB(cfg.lattice_dir)
+    metadata = metadata or {}
+    source_id = str(metadata.get("source_id") or uuid.uuid4())
+    observed_at = _parse_datetime(
+        metadata.get("observed_at") or metadata.get("date") or metadata.get("timestamp")
+    )
+    ref = observed_at or _today()
+
+    segments = segment_source(source, metadata)
+    atoms_data = extract_atoms(segments, metadata, ref, cfg)
+    result = persist_atoms(atoms_data, db, source_id, observed_at, ref, cfg)
+    result["segments_processed"] = len(segments)
+    return result
