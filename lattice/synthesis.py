@@ -45,8 +45,10 @@ Example: "Alice joined in 2021 [src:abc123]." Use the exact src value from the a
 at ingest time. If a count atom exists for the relevant subject, use its value directly.
     If no kind=count atom exists, enumerate every distinct item or value from the atoms explicitly, \
 then call `sum_numbers` with those values to get the exact total — do not add them yourself.
-- For preference or recommendation questions: ground your answer in the user's known context \
-(their preferences, constraints, or situation) as recorded in the atoms before giving advice.
+- For preference, habit, or recommendation questions: ground your answer in the user's known context \
+(their preferences, constraints, or situation) as recorded in the atoms before giving advice. \
+Atoms with kind=habit describe behavioral patterns (what the user does regularly) — treat them \
+as revealed preferences when answering questions about what the user likes, does, or prefers.
 - If the atoms directly or partially answer the question, synthesise an answer from them.
 - If atoms only partially answer the question, give a best-effort answer and note the specific gap briefly.
 - If the atoms are present but NOT relevant to the question, respond with exactly the token: \

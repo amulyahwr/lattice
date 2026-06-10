@@ -29,6 +29,7 @@ _RECOMMENDATION_SIGNALS = {
 _PREFERENCE_SIGNALS = {
     "prefer", "preference", "like", "dislike", "favorite", "favourite",
     "enjoy", "hate", "love", "want", "wish", "rather",
+    "habit", "routine", "usually", "typically",
 }
 
 # Phrase-level triggers for aggregation (token matching can't catch "how many" / "how much"

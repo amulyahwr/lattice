@@ -935,6 +935,187 @@ Something new: Travel planning
 
 ---
 
+---
+
+### Epic 15 — UX transparency (Phase 2B, parallel track)
+
+#### STORY-035 · Response stats — time, cost, and credits
+
+**As a** user running Lattice with a cloud provider,
+**I want** to see how long each answer took and what it cost,
+**so that** I understand the real cost of cloud recall vs local, and can monitor my OpenRouter credits without leaving the app.
+
+**Acceptance criteria:**
+
+**Web UI:**
+- A stats bar appears below each completed answer: `Selection 12ms · Synthesis 1.4s · Cost $0.0003 · $4.21 remaining`
+- When `LLM_PROVIDER=ollama`: `Selection 12ms · Synthesis 1.4s · Local (free)`
+- Credits display only when provider is OpenRouter; omitted for other cloud providers
+- Stats bar fades in after synthesis completes — never during streaming
+- `$0.00` never shown for Ollama (shows `Local (free)` instead)
+
+**Telegram:**
+- Append a quiet footnote to every `/ask` answer: `_(local · 2.1s)_` or `_($0.0003 · 2.1s)_`
+- No credits display in Telegram (too noisy)
+
+**Cost calculation:**
+- Token counts come from the LLM response `usage` field (already returned by OpenAI-compat API)
+- Cost = `(prompt_tokens / 1M × input_price) + (completion_tokens / 1M × output_price)`
+- Model price table in `lattice/cost.py` — a dict of known model IDs to `(input_price, output_price)` per million tokens; returns `None` for unknown models (stats bar omits cost column)
+- Ollama responses have no `usage.cost` — cost always `$0.00 (local)`
+
+**Credits (OpenRouter only):**
+- `GET https://openrouter.ai/api/v1/key` returns `{data: {limit_remaining: ...}}`
+- Fetched once on daemon startup; cached in memory; refreshed after every 50 synthesis calls
+- `GET /api/cost/credits` endpoint in `app.py` returns cached value — web UI polls on page load and after every answer
+- If fetch fails or provider is not OpenRouter: credits field omitted from response
+
+**Technical notes:**
+- New `lattice/cost.py` — `estimate_cost(model, usage) → float | None`; `MODEL_PRICES` dict
+- `synthesis.py`: after LLM call, extract `response.usage` → pass `{prompt_tokens, completion_tokens, model}` to caller via the final SSE event
+- Web `app.py`: `_credits_cache` module-level dict; new `GET /api/cost/credits`; `POST /api/query` SSE stream appends `{type: "stats", sel_ms, syn_ms, cost, model}` event after synthesis completes
+- `app.js`: listen for `stats` SSE event, render stats bar
+- `telegram_bot.py`: receive `{cost, syn_ms}` from `POST /api/answer` response; append footnote
+- **Independent** — no story dependencies
+
+---
+
+### Epic 16 — Delight + habit reinforcement (Phase 2B, parallel track)
+
+#### STORY-036 · Memory collage — woven narratives from the past
+
+**As a** user who has been capturing memories for weeks or months,
+**I want** Lattice to surface a woven narrative of what I was thinking about at a meaningful point in the past,
+**so that** I feel the "second brain is working" moment without having to explicitly query for it.
+
+**Background:** Apple Photos and Google Photos surface "Memories" — temporal clusters of photos with a narrative wrapper. For Lattice the equivalent is richer: it's a cluster of *ideas and decisions*, not photos. A collage from "last June" might read: *"Last June you were deep in the Postgres migration — you settled on logical replication, had open questions about WAL performance at scale, and noted you'd revisit partitioning strategy in Q3."* This is the recall moment that builds the habit.
+
+**Acceptance criteria:**
+
+**Trigger conditions (checked on daemon startup and daily):**
+- Anniversary: atoms ingested within ±3 days of the same date last year (requires ≥1 year of data)
+- Monthly: atoms ingested 30 days ago, any subject
+- Weekly Monday (extends STORY-031 ✅): collage of last week's top subject cluster replaces or extends the weekly report card
+- Minimum atoms to generate: 3 (below this, no collage — not enough signal)
+
+**Algorithm:**
+1. Select atoms in the target temporal window
+2. Group by subject (using `subjects.json` + graph BFS for related subjects)
+3. Pick the largest group (most atoms = most salient topic cluster)
+4. Pass atom pack to LLM with a collage prompt: *"Write a 2–3 sentence narrative of what this person was thinking about during this period. Warm, personal tone. No bullet points. Use past tense."*
+5. Output: a short prose paragraph + time label ("A year ago this week", "Last month", "Last week")
+
+**Web UI:**
+- Collage card appears in the chat area on page load (before any query) when a trigger fires
+- Card: warm background (`#f5ede3` light / `#2a2a2a` dark), time label in small caps, narrative prose, subtle ✕ dismiss
+- Shown at most once per trigger period (`localStorage` key `lattice_collage_{trigger_key}`)
+- Never blocks input — appears above the empty state, fades out on first query
+
+**Telegram:**
+- On the first message of the day, if an anniversary trigger fires: prepend collage narrative before the normal reply
+- Format: `_A year ago this week —_ {narrative}`
+- At most one collage message per day per chat
+
+**Technical notes:**
+- New `lattice/collage.py` — `generate_collage(db, cfg, trigger_date) → CollageResult | None`
+- `CollageResult`: `{narrative: str, time_label: str, trigger_key: str, atom_count: int}`
+- LLM call uses `SYNTHESIS_MODEL` (same as synthesis — no new model required)
+- New `GET /api/collage/daily` endpoint — checks triggers, returns collage or `{"collage": null}`
+- `app.js` calls `/api/collage/daily` on page load; renders card if present and localStorage key absent
+- Telegram: `_check_collage(cfg, db)` called at bot startup and daily timer
+- **Depends on:** STORY-013 ✅ (usage dates), STORY-031 ✅ (weekly report pattern to extend)
+
+---
+
+### Epic 17 — Personalization (Phase 2B/3 parallel track)
+
+#### STORY-037 · User taste profile — behavior-derived preferences
+
+**As a** user who has been capturing and recalling memories,
+**I want** Lattice to understand what I actually care about — not what I self-report,
+**so that** it can surface more relevant collages, better spark cards, and (later) smarter enrichment.
+
+**Background:** A static `user.md` where you list interests drifts and dies. The system already observes real behavior: every question asked, every subject in selected atoms, every 👍/👎 rating. That signal is richer than anything self-reported. The taste profile is derived, not declared.
+
+**Signal sources (in priority order):**
+1. Subjects appearing in atoms selected for 👍-rated answers → strongest signal
+2. Subjects appearing in questions asked (from `usage.jsonl` query hashes — note: hashed, so reconstruct via question text in future) → medium signal
+3. Atom kinds stored most often (fact, decision, preference, reminder) → style signal
+4. Time-of-day capture pattern (morning vs evening) → behavioral signal
+
+**Acceptance criteria:**
+- `lattice/profile.py` — `derive_profile(db, cfg) → UserProfile`
+- `UserProfile` fields: `top_subjects: list[str]` (top 10 by frequency in positively-rated recall), `preferred_kinds: list[str]`, `active_hours: list[int]`, `derived_at: datetime`
+- Profile written as `kind=preference, subject="lattice-user-profile", source_id="lattice-profile-agent"` atom — stored in the same atom store, human-readable, hand-editable
+- Daemon re-derives profile weekly (or when atom count crosses a 10% growth threshold)
+- `GET /api/profile/summary` returns the latest profile atom's content as JSON
+- Web UI: collapsible "You, at a glance" section in sidebar — top 5 subjects as tags, preferred kind, streak. Hidden until ≥20 atoms stored.
+- `top_subjects` used by: Memory Spark card generation (STORY-029 already uses `/api/atoms/recent` — upgrade to profile subjects), Memory Collage subject prioritization (STORY-036), Ambient Enrichment filter (STORY-038)
+
+**Technical notes:**
+- `lattice/profile.py`: reads all non-superseded atoms + `feedback.jsonl` for rating signal
+- Profile atom subject = `"lattice-user-profile"` — supersession handles updates (only one active at a time)
+- `config.py`: no new env vars needed — cadence hardcoded to weekly; threshold check on daemon write path
+- **Depends on:** STORY-013 ✅ (usage.jsonl), STORY-027 ✅ (feedback signal)
+
+---
+
+### Epic 18 — Knowledge enrichment (Phase 3)
+
+#### STORY-038 · Ambient enrichment agent — companion atoms from the web
+
+**As a** user whose atoms capture what I *knew* at a point in time,
+**I want** Lattice to quietly augment relevant atoms with current context from the web,
+**so that** my second brain connects personal memory with the world it lives in.
+
+**Background:** A `kind=decision` atom ("decided to use Postgres for the new service") has no awareness of what's happened in the Postgres ecosystem since. An enrichment agent can create a companion atom: "Postgres 17 released (Nov 2024) — logical replication improvements, MERGE command enhancements" linked back to the original via an `enriches` graph edge. The original atom is never touched — enrichment is always additive, never mutating.
+
+**Design constraints (non-negotiable):**
+- Enrichment creates new atoms — never edits existing ones
+- Companion atoms: `kind=context, source_id="lattice-enrichment-agent"`, linked via `enriches` graph edge
+- Original atom `content` and `observed_at` are immutable — provenance is preserved
+- Enrichment is opt-in: `LATTICE_ENRICH=true` (default `false`)
+- Rate-limited: `LATTICE_ENRICH_DAILY_LIMIT` (default `10` enrichments per day)
+- Only atoms matching user taste profile subjects (STORY-037) are candidates — avoids enriching low-value atoms
+
+**Acceptance criteria:**
+
+**Eligibility filter (all must pass):**
+- Atom `kind` ∈ `{fact, decision, preference}` — not reminders, not profile atoms
+- Atom subject matches one of `UserProfile.top_subjects` (STORY-037)
+- Atom not already enriched in last 30 days (check existing `enriches` edges in graph)
+- Atom `content` is substantive (≥ 20 words)
+
+**Enrichment loop:**
+1. Daemon wakes daily enrichment task (configurable hour, default 3am local)
+2. Score eligible atoms by: recency × subject importance × absence of existing enrichment edges
+3. Pick top N (up to `LATTICE_ENRICH_DAILY_LIMIT`)
+4. For each: construct web search query from atom `subject` + `content` (LLM-generated query, 1 call)
+5. Fetch top 3 search results (Brave Search API or Tavily — `LATTICE_ENRICH_SEARCH_PROVIDER`)
+6. LLM summarizes results into a 2–3 sentence companion atom (`kind=context`)
+7. Write companion atom via `DaemonClient` → normal write path (dedup, graph update)
+
+**Web UI:**
+- Companion atoms appear in citation sources panel with a small `✦ enriched` tag
+- No special UI for the enrichment queue — it's ambient
+
+**Acceptance criteria (technical):**
+- `LATTICE_ENRICH=false` → enrichment loop never starts; zero web calls
+- `LATTAMA_ENRICH_DAILY_LIMIT` respected across daemon restarts (persisted in `enrichment.jsonl`)
+- Failed web searches logged, not retried for 7 days
+- No enrichment during active ingest (yield to the write path)
+
+**Technical notes:**
+- New `lattice/enrichment.py` — `EnrichmentAgent(db, cfg)`; `.run_daily()` async method
+- Daemon spawns via `threading.Thread` alongside Telegram bot and web server
+- Search providers: `brave` (`LATTICE_ENRICH_SEARCH_KEY` for Brave Search API) or `tavily` (`LATTICE_ENRICH_SEARCH_KEY` for Tavily). Provider selected via `LATTICE_ENRICH_SEARCH_PROVIDER=brave|tavily`.
+- Optional dep: `enrichment = ["httpx"]` (stdlib `urllib` works too — no extra dep strictly needed)
+- `enrichment.jsonl` in `LATTICE_DIR` — one record per enrichment attempt: `{ts, atom_id, companion_id, search_query, success}`
+- Graph: new edge type `enriches` (source: companion atom, target: original atom)
+- **Depends on:** STORY-037 (taste profile for eligibility filter)
+
+---
+
 ## Dependency map
 
 ```
@@ -966,7 +1147,11 @@ Phase 2B ordering
 ├── STORY-015 (Reminders) — independent, parallel
 ├── STORY-017 (Semantic dedup) — independent, parallel; requires fastembed optional dep
 ├── STORY-033 (PII scrubbing) — independent, parallel; activates only when LLM_PROVIDER != ollama
-└── STORY-034 (lattice export/import) — independent, parallel; stdlib only
+├── STORY-034 (lattice export/import) — independent, parallel; stdlib only
+├── STORY-035 (response stats + cost + credits) — independent, parallel; no story deps
+├── STORY-036 (memory collage) — depends on STORY-013 ✅, STORY-031 ✅
+├── STORY-037 (user taste profile) — depends on STORY-013 ✅, STORY-027 ✅
+└── STORY-038 (ambient enrichment agent) — depends on STORY-037; Phase 3
 
 Phase 3 (deferred)
 └── STORY-021 (Telegram voice notes)      ← after mobile habit validated

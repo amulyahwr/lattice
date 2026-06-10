@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import logging
 import math
 from datetime import date, datetime, timezone
 from typing import TYPE_CHECKING
+
+log = logging.getLogger(__name__)
 
 from lattice.db import LatticeDB
 from lattice.models import Atom
@@ -22,7 +25,9 @@ _HALF_LIFE: dict[str, float] = {
     "event":         60.0,
     "recommendation": 90.0,
     "decision":      180.0,
+    "goal":          180.0,
     "preference":    365.0,
+    "habit":         365.0,
     "belief":        365.0,
     "fact":          730.0,
     "count":         730.0,
@@ -140,19 +145,27 @@ def _retrieve(
     if not seeds:
         return []
 
-    if cfg.dense_seeds and db._embed_matrix is not None and db._embed_ids:
-        from lattice.embed import dense_search
-        dense_ids = dense_search(query, db._embed_matrix, db._embed_ids, top_k=cfg.dense_top_k)
-        seed_id_set = {a.atom_id for a in seeds}
-        for atom_id in dense_ids:
-            if atom_id not in seed_id_set:
-                try:
-                    atom = db.read(atom_id)
-                    if not atom.is_superseded:
-                        seeds.append(atom)
-                        seed_id_set.add(atom_id)
-                except Exception:
-                    pass
+    if cfg.dense_seeds:
+        if db._embed_matrix is None or not db._embed_ids:
+            log.warning(
+                "LATTICE_DENSE_SEEDS=1 but dense index unavailable for %s — "
+                "falling back to BM25 only. Run: uv sync --group semantic && "
+                "python -m lattice.eval.build_embed_index --lattice-root <dir>",
+                db.dir.name,
+            )
+        else:
+            from lattice.embed import dense_search
+            dense_ids = dense_search(query, db._embed_matrix, db._embed_ids, top_k=cfg.dense_top_k)
+            seed_id_set = {a.atom_id for a in seeds}
+            for atom_id in dense_ids:
+                if atom_id not in seed_id_set:
+                    try:
+                        atom = db.read(atom_id)
+                        if not atom.is_superseded:
+                            seeds.append(atom)
+                            seed_id_set.add(atom_id)
+                    except Exception:
+                        pass
 
     probe = seeds[:_PROBE_K]
     if _source_diversity(probe) <= 1:
@@ -174,11 +187,16 @@ def _retrieve(
 
     if intent.primary_kind is not None:
         present_kinds = {a["kind"] for a in result}
-        if intent.primary_kind not in present_kinds:
+        # For PREFERENCE queries, habit atoms are semantically equivalent
+        target_kinds = {intent.primary_kind}
+        if intent.primary_kind == "preference":
+            target_kinds.add("habit")
+        if not (target_kinds & present_kinds):
             seen_ids = {a["atom_id"] for a in result}
-            for fa in db.list_by_kind(intent.primary_kind, as_of=as_of):
-                if fa.atom_id not in seen_ids:
-                    result.append(_atom_to_dict(fa))
+            for kind in target_kinds:
+                for fa in db.list_by_kind(kind, as_of=as_of):
+                    if fa.atom_id not in seen_ids:
+                        result.append(_atom_to_dict(fa))
 
     return _apply_recommendation_cap(result, cfg, intent)
 

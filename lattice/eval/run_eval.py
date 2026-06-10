@@ -416,14 +416,17 @@ def _run_ingest(cfg: dict) -> None:
     def _ingest_one(item: dict) -> tuple[str, int | None, str | None]:
         """Ingest one question. Returns (qid, atoms_created_or_None, error_or_None)."""
         qid = item["question_id"]
-        tmpdir = str(lattice_root / qid)
-        db_check = LatticeDB(lattice_dir=tmpdir)
-        if Path(tmpdir).exists() and db_check.all():
-            return qid, -1, None  # -1 signals skip
+        tmpdir = Path(lattice_root / qid)
+        done_marker = tmpdir / ".done"
 
+        # Only skip if fully completed in a previous run
+        if done_marker.exists():
+            return qid, -1, None
+
+        # Wipe partial dir from a previous interrupted run
         shutil.rmtree(tmpdir, ignore_errors=True)
-        Path(tmpdir).mkdir(parents=True, exist_ok=True)
-        db = LatticeDB(lattice_dir=tmpdir)
+        tmpdir.mkdir(parents=True, exist_ok=True)
+        db = LatticeDB(lattice_dir=str(tmpdir))
 
         sessions = item.get("haystack_sessions", [])
         session_ids = item.get("haystack_session_ids", [f"s{i}" for i in range(len(sessions))])
@@ -440,6 +443,7 @@ def _run_ingest(cfg: dict) -> None:
                     cfg=lattice_cfg,
                 )
                 atoms_created += result["atoms_created"]
+            done_marker.write_text("ok")  # mark fully complete
             return qid, atoms_created, None
         except Exception as exc:
             return qid, None, str(exc)
