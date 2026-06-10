@@ -57,6 +57,12 @@
              Set to 0 to disable (Ollama/low-resource users). -->
         <key>LATTICE_DENSE_SEEDS</key>
         <string>1</string>
+
+        <!-- Optional: override ingest model for better habit/preference extraction.
+             e.g. anthropic/claude-haiku-4-5 via OpenRouter (~3x cost vs gpt-4o-mini but
+             significantly better personal context classification). Omit to use LLM_MODEL. -->
+        <!-- <key>INGEST_MODEL</key> -->
+        <!-- <string>anthropic/claude-haiku-4-5</string> -->
     </dict>
 
     <key>RunAtLoad</key>

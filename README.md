@@ -101,6 +101,10 @@ export LATTICE_NER_MODEL=          # optional: local Ollama model for NER (e.g. 
 # requires: uv sync --group pdf --group semantic  (install both groups together)
 export LATTICE_DENSE_SEEDS=1       # enable dense seed augmentation
 export LATTICE_DENSE_TOP_K=10      # top-K dense hits merged with BM25 seeds
+
+# Better ingest quality (optional — improves habit/preference extraction ~+7pp on preference recall)
+# Uses Claude Haiku 4.5 via OpenRouter; ~3x cost vs gpt-4o-mini. Omit to use LLM_MODEL for ingest.
+export INGEST_MODEL=anthropic/claude-haiku-4-5
 ```
 
 Using Ollama instead? Drop `LLM_BASE_URL` and `LLM_API_KEY`, set `LLM_PROVIDER=ollama` and `LLM_MODEL=gemma4:4b`.
