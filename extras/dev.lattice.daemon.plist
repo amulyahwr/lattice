@@ -51,6 +51,12 @@
         <!-- Telegram bot token — needed to send inbox-drain confirmations back to user -->
         <key>LATTICE_TELEGRAM_TOKEN</key>
         <string></string>
+
+        <!-- Dense seed augmentation for semantic retrieval (recommended).
+             Requires: uv sync --group semantic (installs fastembed, ~130MB model download on first use).
+             Set to 0 to disable (Ollama/low-resource users). -->
+        <key>LATTICE_DENSE_SEEDS</key>
+        <string>1</string>
     </dict>
 
     <key>RunAtLoad</key>
