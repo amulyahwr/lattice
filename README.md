@@ -38,7 +38,7 @@ After every write, a `LatticeGraph` (networkx `MultiDiGraph`) upserts nodes and 
 
 **Selection**
 
-Query path is deliberately LLM-free. BM25 seeds the top candidates → zero-score seeds filtered → source-diversity probe → graph BFS expands the evidence pack along supersession, subject, and provenance edges → optional BFS rescore. The result is a ranked list of atom dicts with full provenance, ready for synthesis. Fast, deterministic, auditable.
+Query path is deliberately LLM-free. BM25 seeds the top candidates → dense semantic search (BAAI/bge-small-en-v1.5) adds vocabulary-mismatch hits ("gym" ↔ "workout") → zero-score seeds filtered → source-diversity probe → graph BFS expands the evidence pack along supersession, subject, and provenance edges → optional BFS rescore. The result is a ranked list of atom dicts with full provenance, ready for synthesis. Fast, deterministic, auditable. Dense retrieval requires `uv sync --group semantic`; set `LATTICE_DENSE_SEEDS=1` (default in the provided plist).
 
 **Synthesis**
 
@@ -181,7 +181,7 @@ Capture thoughts from your phone via a Telegram bot — works even when your lap
 **c. Install the bot dep and plist:**
 
 ```bash
-uv sync --group pdf --group telegram
+uv sync --group pdf --group telegram --group semantic
 cp extras/dev.lattice.telegram.plist ~/Library/LaunchAgents/
 ```
 
