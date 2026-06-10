@@ -60,7 +60,9 @@ lattice/
                    all four. Each stage is independently callable and testable.
   query.py         Query intent classifier: detects aggregation/temporal/recommendation/preference
                    signals. Returns QueryIntent with shape + primary_kind. Stateless; used by selection.py.
-  selection.py     select() = _retrieve(): BM25 scored seeds → zero-score seed filter
+  selection.py     select() = _retrieve(): BM25 scored seeds → optional dense NN augmentation
+                   (LATTICE_DENSE_SEEDS, top-K=20 cosine hits merged; re-sorted by decay after
+                   merge except for TEMPORAL queries) → zero-score seed filter
                    (LATTICE_SEED_MIN_SCORE) → source-diversity probe → graph BFS → optional BFS
                    rescore (LATTICE_BFS_RESCORE) → atom dicts. 0 LLM calls.
   synthesis.py     LLM generates prose answer from atom dicts. Uses SYNTHESIS_MODEL env var
