@@ -64,6 +64,8 @@ class FeedbackRequest(BaseModel):
     rating: str
     reason: str | None = None
     atom_ids: list[str] | None = None
+    dismissed_atom_ids: list[str] | None = None
+    citation_map: dict[str, str] | None = None
 
 
 # ── routes ────────────────────────────────────────────────────────────────────
@@ -231,6 +233,8 @@ async def api_feedback(req: FeedbackRequest):
         "rating": req.rating,
         "reason": req.reason,
         "atom_ids": req.atom_ids or [],
+        "dismissed_atom_ids": req.dismissed_atom_ids or [],
+        "citation_map": req.citation_map or {},
     }
     with feedback_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record) + "\n")

@@ -99,7 +99,7 @@ lattice/
                    GET /api/usage/weekly  → weekly report data (atoms, recalls, topics, new topics)
                    GET /api/topic/depth   → atom count for a given subject
                    POST /api/feedback     → writes {ts, question, answer, rating, reason,
-                                            atom_ids} to feedback.jsonl
+                                            atom_ids, dismissed_atom_ids, citation_map} to feedback.jsonl
                    GET /api/health        → {ok: true}
 ```
 
@@ -125,7 +125,7 @@ Lattice has multiple capture/recall channels: MCP tools (Claude Code), web UI, `
 | Session-end capture | ✅ | ✅ Save session btn | — (atomic by design) | ✅ `/save` | — | — |
 | Memory count / status | ✅ `lattice_status` | ✅ (recent atoms) | ✅ `lc status` | ✅ `/status` | ✅ popup count | — |
 | Daemon status | — | — | — | — | ✅ popup dot | — |
-| Recall feedback | ❌ redundant (Claude Code has own UI) | ✅ thumbs + reason (all answers) | — (no recall) | ✅ 👍/👎 (all answers) | — | — |
+| Recall feedback | ❌ redundant (Claude Code has own UI) | ✅ thumbs + reason + per-source ✕ dismiss | — (no recall) | ✅ 👍/👎 (answer-level only) | — | — |
 | Usage streak | ✅ `lattice_status` | ✅ "N days deep" badge | ✅ `lc status` shows streak | ✅ `/status` shows streak | — | — |
 | Milestone moments | — | ✅ cards Day 1/7/14/30 | ✅ `lc status` prints msg | ✅ prepended on recall | — | — |
 | PII indicator | — (no UI) | ✅ `🔒` badge | — (no recall) | ✅ `🔒 PII protected` footer | — | — |

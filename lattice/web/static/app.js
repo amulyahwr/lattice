@@ -192,6 +192,17 @@ function buildCitationIndex(atoms) {
   return { byId, ordered };
 }
 
+function plainCitations(answer, numMap) {
+  return answer.replace(
+    /\[src:([^\]]+)\]|\[([^\]]+)\]\[src:([^\]]+)\]/g,
+    (_, bareId, label, labeledId) => {
+      const id  = bareId || labeledId;
+      const num = numMap[id];
+      return num != null ? `[${num}]` : `[${label || id}]`;
+    }
+  );
+}
+
 function renderCitations(html, numMap) {
   // Bare [src:id] must be tried first — otherwise adjacent [src:a][src:b] gets
   // consumed as a single [label][src:id] match, dropping the first citation.
@@ -294,19 +305,27 @@ function renderReferences(orderedAtoms, numMap) {
 
     const kindBadge = a.kind && !_SKIP_KINDS.has(a.kind)
       ? `<span class="ref-kind">${escHtml(a.kind)}</span>` : '';
+
     const channel = _channelLabel(a.source_id);
     const channelBadge = channel ? `<span class="ref-channel">${escHtml(channel)}</span>` : '';
+
     const age = _refAgeLabel(a);
     const ageSpan = age ? `<span class="ref-age-label${old ? ' is-old' : ''}">${escHtml(age)}</span>` : '';
 
+    const atomId = escHtml(a.atom_id || '');
+    const dismissBtn = atomId
+      ? `<button class="ref-dismiss" title="Not relevant" data-atom-id="${atomId}">✕</button>`
+      : '';
+
     return `
-    <li class="ref-item${oldClass}" id="ref-${escHtml(refKey)}">
+    <li class="ref-item${oldClass}" id="ref-${escHtml(refKey)}" data-atom-id="${atomId}">
       <span class="ref-num">[${num}]</span>
       <div class="ref-body">
         <span class="ref-preview">${preview}</span>
         ${srcLink ? `<span class="ref-source">${srcLink}</span>` : ''}
         <span class="ref-meta">${kindBadge}${channelBadge}${ageSpan}</span>
       </div>
+      ${dismissBtn}
     </li>`;
   }).join('');
 
@@ -332,6 +351,19 @@ function bindSourcesToggle(turn) {
     const open = wrap.classList.toggle('open');
     toggle.classList.toggle('open', open);
     toggle.setAttribute('aria-expanded', open);
+  });
+}
+
+function bindSourceDismiss(refsEl, turn) {
+  refsEl.querySelectorAll('.ref-dismiss').forEach(btn => {
+    btn.addEventListener('click', e => {
+      e.stopPropagation();
+      const atomId = btn.dataset.atomId;
+      if (!atomId) return;
+      btn.closest('.ref-item').classList.add('dismissed');
+      btn.disabled = true;
+      if (turn._dismissedIds) turn._dismissedIds.add(atomId);
+    });
   });
 }
 
@@ -601,7 +633,7 @@ function bindFeedback(turn, question, answer, atomIds) {
       } else {
         reasonsEl.style.display = 'none';
         turn.querySelector('.feedback-row .feedback-label').textContent = 'Thanks!';
-        await postFeedback(question, answer, 'up', null, atomIds);
+        await postFeedback(question, answer, 'up', null, atomIds, turn._dismissedIds, turn._citationMap);
       }
     });
   });
@@ -612,17 +644,25 @@ function bindFeedback(turn, question, answer, atomIds) {
       chip.classList.add('active');
       turn.querySelector('.feedback-row .feedback-label').textContent = 'Thanks for the feedback!';
       reasonsEl.style.display = 'none';
-      await postFeedback(question, answer, 'down', chip.dataset.reason, atomIds);
+      await postFeedback(question, answer, 'down', chip.dataset.reason, atomIds, turn._dismissedIds, turn._citationMap);
     });
   });
 }
 
-async function postFeedback(question, answer, rating, reason, atomIds) {
+async function postFeedback(question, answer, rating, reason, atomIds, dismissedIds, citationMap) {
   try {
     await fetch('/api/feedback', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question, answer, rating, reason, atom_ids: atomIds || [] }),
+      body: JSON.stringify({
+        question,
+        answer,
+        rating,
+        reason,
+        atom_ids: atomIds || [],
+        dismissed_atom_ids: dismissedIds ? [...dismissedIds] : [],
+        citation_map: citationMap || {},
+      }),
     });
   } catch (_) {}
 }
@@ -719,7 +759,17 @@ async function ask(question) {
             .map(k => citIndex.ordered.find(a => a.src_key === k || a.atom_id === k || a.source_id === k))
             .filter(Boolean);
 
+          // Build citation map (atom_id → citation number) and per-turn dismissed set
+          const citationMap = {};
+          keysByNum.forEach((k, idx) => {
+            const atom = citedAtoms[idx];
+            if (atom && atom.atom_id) citationMap[atom.atom_id] = String(idx + 1);
+          });
+          turn._citationMap = citationMap;
+          turn._dismissedIds = new Set();
+
           refsEl.innerHTML = renderReferences(citedAtoms, numMap);
+          bindSourceDismiss(refsEl, turn);
           if (evt.pii_protected) {
             const badge = document.createElement('span');
             badge.className = 'pii-badge';
@@ -737,7 +787,7 @@ async function ask(question) {
           });
           feedbackEl.style.display = 'flex';
           const citedAtomIds = citedAtoms.map(a => a.atom_id).filter(Boolean);
-          bindFeedback(turn, question, evt.answer, citedAtomIds);
+          bindFeedback(turn, question, plainCitations(evt.answer, numMap), citedAtomIds);
           bindCitationLinks(turn);
           bindSourcesToggle(turn);
           bindCopyBtn(turn, evt.answer);
