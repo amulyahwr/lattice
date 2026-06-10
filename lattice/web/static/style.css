@@ -605,6 +605,41 @@ header h1 {
   color: #c97d3a;
 }
 
+.ref-dismiss {
+  flex-shrink: 0;
+  align-self: flex-start;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 0.68rem;
+  cursor: pointer;
+  padding: 2px 5px;
+  border-radius: 3px;
+  opacity: 0;
+  transition: opacity 0.15s, background 0.15s;
+  line-height: 1;
+  margin-top: 2px;
+}
+.ref-item:hover .ref-dismiss {
+  opacity: 1;
+}
+.ref-dismiss:hover {
+  background: var(--accent-dim);
+  color: var(--text);
+}
+.ref-dismiss:disabled {
+  display: none;
+}
+
+.ref-item.dismissed {
+  opacity: 0.35;
+  pointer-events: none;
+}
+.ref-item.dismissed .ref-preview {
+  text-decoration: line-through;
+  text-decoration-color: var(--text-dim);
+}
+
 /* ── milestone card ─────────────────────────────────────────────────────── */
 
 @keyframes milestoneIn {
