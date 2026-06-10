@@ -57,6 +57,10 @@
              Set to 0 to disable (Ollama/low-resource users). -->
         <key>LATTICE_DENSE_SEEDS</key>
         <string>1</string>
+        <!-- Top-K dense neighbours merged with BM25 seeds before BFS. K=20 is empirically optimal
+             (K=10 misses vocab-mismatch atoms; K=30 introduces noise, hits drop 2pp). -->
+        <key>LATTICE_DENSE_TOP_K</key>
+        <string>20</string>
 
         <!-- Optional: override ingest model for better habit/preference extraction.
              e.g. anthropic/claude-haiku-4-5 via OpenRouter (~3x cost vs gpt-4o-mini but

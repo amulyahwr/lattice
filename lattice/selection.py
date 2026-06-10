@@ -129,12 +129,13 @@ def _retrieve(
     if cfg.seed_min_score > 0.0:
         scored_seeds = [(s, a) for s, a in scored_seeds if s > cfg.seed_min_score]
 
+    now_dt = (
+        datetime.combine(as_of, datetime.min.time()).replace(tzinfo=timezone.utc)
+        if as_of else datetime.now(tz=timezone.utc)
+    )
+
     if cfg.time_decay:
         # Decay relative to as_of when provided (historical queries); else wall clock.
-        now_dt = (
-            datetime.combine(as_of, datetime.min.time()).replace(tzinfo=timezone.utc)
-            if as_of else datetime.now(tz=timezone.utc)
-        )
         scored_seeds = [
             (s * _decay_factor(a.kind, a.observed_at or a.ingested_at, cfg, now=now_dt), a)
             for s, a in scored_seeds
@@ -166,6 +167,19 @@ def _retrieve(
                             seed_id_set.add(atom_id)
                     except Exception:
                         pass
+            # Re-sort combined seed list by decay so fresh atoms stay at the front.
+            # Without this, dense seeds append unweighted — stale pre-update atoms
+            # get equal BFS priority as fresh ones, causing synthesis to present
+            # contradictory old+new versions of the same fact.
+            # Skip for TEMPORAL queries — the correct atom may be an older event date,
+            # and decay re-sort would push it behind newer but irrelevant atoms.
+            if cfg.time_decay and intent.shape != QueryShape.TEMPORAL:
+                seeds.sort(
+                    key=lambda a: _decay_factor(
+                        a.kind, a.observed_at or a.ingested_at, cfg, now=now_dt
+                    ),
+                    reverse=True,
+                )
 
     probe = seeds[:_PROBE_K]
     if _source_diversity(probe) <= 1:
