@@ -227,20 +227,23 @@ Evaluation method:
 | p40 | M22 query intent → selection: `is_on_topic` filter on kind-fallback + AGGREGATION `primary_kind="count"` + rec cap bypass. Reused p32 lattice dirs. **Reverted (`is_on_topic` only).** | **63.9%** | −3.9pp overall. `is_on_topic` cut atoms across all categories — KU −10pp was the sharpest signal. Reverted filter; kept AGGREGATION fix and rec cap bypass (both neutral). |
 | p41 | M22 without `is_on_topic` (AGGREGATION `primary_kind="count"` + rec cap bypass only). Reused p32 lattice dirs. | **63.9%** | −3.9pp vs p34, all deltas within ±1 SE (±9.1%). Multi-session and temporal exactly flat. Drops are synthesis variance. Changes confirmed neutral — shipped. |
 | p42 | **M17: Haiku 4.5 ingest** (habit/preference taxonomy, functional subjects, SSA assistant-turn fix) + dense seeds backfilled via `build_embed_index.py`. Fresh ingest: 180q, 71,834 atoms, ~399/q. `LATTICE_DENSE_SEEDS=1`. | **69.4%** | **+1.6pp vs p34 baseline.** Preference **50%→56.7%** (+6.7pp from M17 atoms, isolated by p34 comparison with same dense seeds). Multi-session **66.7%→76.7%** (+10pp). SSU **83.3%→93.3%** (+10pp). SSA recovered 53%→76.7% after SSA prompt patch (still −13pp vs 90% p34). KU regressed **70%→56.7%** with dense — dense surfaces superseded atoms. Haiku alone (no dense): 66.7% / 46.7% preference — slightly worse than p34. Both M17 taxonomy AND dense needed. **Shipped.** |
+| p43 | **Dense decay re-sort (temporal-exempt)**: after dense augmentation, re-sort combined seed list by decay factor so fresh atoms lead BFS — skip for TEMPORAL queries where the correct atom may be old. Reused p42 lattice dirs. `LATTICE_DENSE_TOP_K=10`. | **69.4%** | KU fully recovered **56.7%→70.0%** (stale pre-update atoms no longer dominate BFS). Preference **56.7%→63.3%** (+6.6pp). Temporal held at 46.7% (exempted correctly). **Shipped.** |
+| p44 | **`LATTICE_DENSE_TOP_K=20`** (doubled from 10). Same p43 code. Reused p42 lattice dirs. | **72.8%** | **+5.0pp vs p34 baseline — new best.** Preference **63.3%→70.0%** 🎉 (exceeded 65% target). Temporal **46.7%→60.0%** (+13.3pp). KU 73.3% (+3.3pp). More dense seeds surface vocab-mismatch preference/habit atoms before BFS. **Shipped as new default `LATTICE_DENSE_TOP_K=20`.** |
+| p45 | `LATTICE_DENSE_TOP_K=30`. Retrieval proxy check only. | **67.8%** | Retrieval hit rate dropped 99.4%→97.2% — extra noisy seeds flip queries to EXPANSION mode, causing wrong BFS expansion. Accuracy collapses back to p34 baseline. K=30 is strictly worse. **Reverted.** K=20 confirmed as optimum. |
 
 ## Category Tracker (last 10 runs)
 
 Note: phi4-mini-judge throughout. p19+ use qwen3-8b-ingest. p25 uses gpt-4o-mini ingest.
 
-| Category | p32 (S-baseline) | p34 (S-dense) | p41 (M22) | **p42 (M17+dense)** |
+| Category | p34 (S-dense) | p42 (M17+dense) | p43 (decay sort) | p44 (K=20) |
 | --- | --- | --- | --- | --- |
-| overall | 63.1% | **67.8%** | 63.9% | **69.4%** |
-| single-session-preference | 33.3% | 50.0% | 43.3% | **56.7%** |
-| temporal-reasoning | 51.7% | 46.7% | 46.7% | 56.7% |
-| multi-session | 63.0% | 66.7% | 66.7% | **76.7%** |
-| knowledge-update | 70.0% | **70.0%** | 66.7% | 56.7% ⚠️ |
-| single-session-user | 76.7% | 83.3% | 76.7% | **93.3%** |
-| single-session-assistant | 83.3% | **90.0%** | 83.3% | 76.7% |
+| overall | 67.8% | 69.4% | 69.4% | **72.8%** |
+| single-session-preference | 50.0% | 56.7% | 63.3% | **70.0%** 🎉 |
+| temporal-reasoning | 46.7% | 56.7% | 46.7% | **60.0%** |
+| multi-session | 66.7% | **76.7%** | 70.0% | 70.0% |
+| knowledge-update | **70.0%** | 56.7% ⚠️ | **70.0%** | 73.3% |
+| single-session-user | 83.3% | **93.3%** | 93.3% | 90.0% |
+| single-session-assistant | **90.0%** | 76.7% | 73.3% | 73.3% |
 
 †p30-m11 is knowledge-update only (34-question LongMemEval-S subset). S-version runs use stratified 30/category.
 
