@@ -29,8 +29,11 @@ lattice/
   config.py        Centralised env-var parsing → Config dataclass. All 21 env vars here:
                    paths, LLM, selection tuning, ingest tuning, PII, embed. __post_init__
                    derives path fields from lattice_dir. Tests use Config(lattice_dir=tmp_path).
-  llm.py           openai.OpenAI wrapper. make_llm_client(cfg), resolve_model(cfg, override),
-                   complete(messages, cfg). All read from Config, not os.environ.
+  llm.py           LLM client with dual routing. Claude models (anthropic/* or claude-*) use
+                   native Anthropic SDK (_anthropic_complete); all others use openai.OpenAI compat.
+                   make_llm_client(cfg), resolve_model(cfg, override), complete(messages, cfg).
+                   All read from Config, not os.environ. complete() retries on 429 (2s/5s/15s).
+                   LLM_BASE_URL trailing /v1 stripped for Anthropic SDK (SDK appends it).
                    Ollama gets extra_body={num_ctx, think:false}; others don't.
   models.py        Atom pydantic model + markdown serialization (python-frontmatter).
   db.py            File-based store: one .md file per atom in LATTICE_DIR. BM25 search.
@@ -46,7 +49,9 @@ lattice/
                    IPC via Unix socket (LATTICE_SOCK). Also spawns the FastAPI web server.
                    JSON-lines log to LATTICE_DIR/daemon.log.
   client.py        DaemonClient: thin IPC wrapper over the Unix socket. Used by server.py
-                   to delegate writes to the daemon.
+                   to delegate writes to the daemon. ingest_full(text, source_id, metadata)
+                   returns full result dict {atoms_new, atoms_updated, duplicates_skipped,
+                   atom_ids}. ingest() is a back-compat alias returning only atom_ids.
   parsers/         Source-aware pre-ingest segmentation. `infer_source_type()` detects chat/
                    markdown/code. `parse()` returns list[Segment] with role, context, span.
                    chat.py preserves turn windowing + role field. markdown.py splits on headings.
@@ -63,7 +68,15 @@ lattice/
                    num_ctx=4096 and tool calls for date_diff + sum_numbers.
   embed.py         Optional semantic embedding via fastembed (install semantic extra). Guards
                    import; no-ops cleanly if fastembed absent. Not on hot query path.
-  util.py          Shared helpers: write_file_atomic, _normalized_subject.
+  privacy.py       PII round-trip redaction. EntityRedactor: redact_batch(texts) →
+                   (redacted_texts, entity_map); restore(text, entity_map) swaps tags back.
+                   is_active(cfg) → True when LATTICE_PII_SCRUB=true and provider != ollama.
+                   NER via LATTICE_NER_MODEL (Ollama model); regex-only fallback (email+phone)
+                   when unset. Used by ingest.py (before cloud LLM extraction) and
+                   synthesis.py (before cloud LLM call). Atoms on disk always have real names.
+  util.py          Shared helpers: write_file_atomic, _normalized_subject,
+                   extract_file_text(path) → (text, source_id) dispatches by extension
+                   (PDF/docx/pptx/xlsx/xls/plain). Used by daemon, web, lc, telegram.
   cli.py           Entry point for `lc` terminal command. `lc <text>` captures via DaemonClient
                    over Unix socket; fails fast if daemon not running. `lc status` reads LatticeDB
                    directly (no daemon needed) and prints memory count.
@@ -72,10 +85,20 @@ lattice/
                    writes inbox file as telegram-{chat_id}-{uuid}.txt and replies immediately.
                    Daemon drains inbox on startup (_drain_inbox) and sends follow-up reply via
                    urllib using LATTICE_TELEGRAM_TOKEN. Requires: uv sync --group telegram.
-  web/app.py       FastAPI app: GET / (chat UI), POST /api/ingest (HTTP capture — source_id +
-                   metadata pass-through, observed_at server-stamped), POST /api/query (streaming
-                   SSE synthesis), GET /api/atoms/recent (recent atoms JSON), POST /api/feedback.
-                   Started by daemon.
+  web/app.py       FastAPI app. Started by daemon. Routes:
+                   GET /               → index.html
+                   POST /api/ingest    → text capture (source_id + metadata, observed_at stamped)
+                   POST /api/ingest-file → multipart file upload; calls extract_file_text()
+                   POST /api/query     → streaming SSE synthesis (web UI path)
+                   POST /api/answer    → blocking JSON synthesis (Telegram path); returns
+                                         {answer, atoms, pii_protected}
+                   GET /api/atoms/recent  → recent non-superseded atoms JSON
+                   GET /api/usage/summary → streak, query counts, avg latency, atom count
+                   GET /api/usage/weekly  → weekly report data (atoms, recalls, topics, new topics)
+                   GET /api/topic/depth   → atom count for a given subject
+                   POST /api/feedback     → writes {ts, question, answer, rating, reason,
+                                            atom_ids} to feedback.jsonl
+                   GET /api/health        → {ok: true}
 ```
 
 ### Ingest drop mechanism
@@ -123,7 +146,7 @@ Lattice has multiple capture/recall channels: MCP tools (Claude Code), web UI, `
 
 **Supersession** (in `ingest.py`): when a new atom has the same subject as an existing one, an LLM call decides if it supersedes. Fast path uses `subjects.json`; slow path scans files (handles hand-edited atoms). Superseded atoms stay on disk with `is_superseded=true` and bidirectional links (`superseded_by` / `supersedes`).
 
-**LLM calls**: ingest/supersession go through `lattice.llm.complete(messages, cfg)`. Tests mock at `lattice.ingest.complete` — patch the module-level name, not `lattice.llm.complete`. Synthesis is different: patch `lattice.synthesis.make_llm_client` (returns a mock OpenAI client). Selection has no LLM calls.
+**LLM calls**: ingest/supersession go through `lattice.llm.complete(messages, cfg)`. Tests mock at `lattice.ingest.complete` — patch the module-level name, not `lattice.llm.complete`. For Claude models, `complete()` dispatches to `_anthropic_complete`; tests mock `lattice.llm._anthropic_complete` for those paths. Synthesis is different: patch `lattice.synthesis.make_llm_client` (returns a mock OpenAI client). Selection has no LLM calls.
 
 **Atom storage**: every atom is a `.md` file with YAML frontmatter. `LatticeDB` has an in-memory cache (`_atom_cache`). Cache is per-instance; `server.py` reuses one instance per process.
 

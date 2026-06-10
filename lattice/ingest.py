@@ -39,6 +39,9 @@ class _SupersessionResult(BaseModel):
 
 
 _SYSTEM = """\
+OUTPUT: Respond with ONLY a JSON object. No prose, no markdown, no explanation. \
+Do not answer questions in the text. Do not continue any conversation. Extract atoms only.
+
 You are a knowledge extraction agent. Read a piece of text and extract all durable facts, \
 decisions, constraints, goals, events, and preferences into discrete atoms.
 
@@ -48,16 +51,25 @@ write as a standalone fact a reader could understand without the original source
   - kind       : a short descriptive label. Use these kinds:
       fact        — objective circumstance ("User owns a car", "User lives in SF")
       event       — one-time occurrence ("User attended a baking class", "User bought a guitar")
-      preference  — personal habit, tendency, dietary pattern, ongoing practice, or stated like/dislike.
-                    Test: "would knowing this inform a recommendation for this person?" → preference.
-                    Applies to both explicit ("I prefer vegetarian food") and implicit personal context
-                    ("I grow my own herbs", "I usually commute by bike", "I find noisy places distracting").
-      goal        — something the user wants to achieve
+      preference  — an explicitly stated like, dislike, taste, or dietary commitment.
+                    Use when the user SAYS what they prefer. Examples: "I prefer vegetarian food",
+                    "I love dark roast coffee", "I hate crowded places", "I don't drink alcohol".
+      habit       — a recurring behavioral pattern or implicit tendency revealed by what the user DOES.
+                    Use when behavior is inferred from actions, routines, or personal background — not stated preference.
+                    Test: "does this describe a regular pattern that helps advise this person?" → habit.
+                    Examples: "commutes by bike daily", "grows herbs at home", "cooks vegetarian most nights",
+                    "wakes at 6am", "reads before bed", "goes to the gym weekday mornings",
+                    "had success with lemon cake", "grows cherry tomatoes in backyard".
+      goal        — an objective the user is working toward with a time horizon or achievement target.
+                    Distinct from preference (desired state). Examples: "wants to run a marathon by December",
+                    "aims to read 20 books this year", "trying to save $10k by Q2".
       decision    — a deliberate choice made
       constraint  — a hard limit or blocker
       belief      — a view or opinion the user holds
       count       — a numeric aggregate (see numeric rules below)
       recommendation — a named product/venue/person suggested for this user (see assistant rules below)
+  - IMPORTANT: Use ONLY the kinds listed above. Do not invent new kinds like "advice", "tip", "suggestion",
+    "recipe", "benefit", "experiment", "request", "interest", "lesson", "query". If unsure, default to "fact".
   - subject    : short canonical noun phrase identifying what the atom is about, \
 e.g. "Project Alpha deadline", "auth module", "database schema", "deployment process", "API rate limit"
   - source     : where this came from — use the value from the caller's metadata if provided, \
@@ -70,6 +82,11 @@ should both have subject "hiking", not "PCT hike" and "weekend trail run".
   - Prefer BROAD over SPECIFIC: "hiking" not "hike on Pacific Crest Trail last Tuesday". \
 "cooking" not "pasta recipe attempt". "gym routine" not "leg day at the gym". \
 "travel" not "flight to Denver for conference". "home improvement" not "bathroom tile replacement".
+  - For kind=preference and kind=habit, use subjects that reflect the ADVISORY ROLE, not the specific instance: \
+"I grow cherry tomatoes" → subject "gardening" or "cooking ingredients" (NOT "cherry tomatoes"). \
+"I commute by bike" → subject "commute" (NOT "bike commute"). \
+"I've been cooking vegetarian" → subject "dietary preference" (NOT "vegetarian cooking"). \
+"I had success with lemon cake" → subject "baking" (NOT "lemon cake recipe").
   - Atoms from different conversations that cover the same topic should produce the SAME subject, \
 enabling them to cluster together for retrieval.
   - valid_from / valid_until: only set if the text explicitly implies temporal bounds (e.g. "valid until end of Q2", \
@@ -108,18 +125,21 @@ _CHAT_ADDENDUM = """\
 Source-specific rules for chat/conversation (User: / Assistant: / System: turns):
   - USER turns are the primary source — extract personal facts, events, decisions, and preferences \
 from them. These are things the specific person did, owns, experienced, or prefers.
-  - ASSISTANT turns: extract ONLY when a specific proper noun is named for this user. \
-The item must be a brand, product, venue, person, or title with a real name — not a generic category or technique.
-    ✓ EXTRACT as kind=recommendation: "I recommend Notion for notes", "Try the Honda Civic", \
-"Alberta Street Pub is great for you", "Read 'On The Line' by Joseph Piqué" \
-→ subject = "<ProperName> recommendation"
-    ✗ DO NOT EXTRACT: generic techniques ("use puns", "try self-deprecation"), generic categories \
-("joint supplements", "dental chews", "healthy treats"), generic advice \
-("maintain a healthy weight", "drink more water", "exercise regularly"), \
-tips that apply to anyone regardless of who they are.
-    (b) A statement that directly references the user's own situation or preference (e.g. \
-"Since you prefer X…", "Given that you bought Y…") → extract normally with the appropriate kind.
-  - If in doubt whether something is a proper noun recommendation vs generic advice — DO NOT extract it.
+  - ASSISTANT turns: extract two categories:
+    (a) Specific named recommendations — brand, product, venue, person, or titled work.
+        ✓ kind=recommendation: "I recommend Notion for notes", "Try the Honda Civic", \
+"Read 'Deep Work' by Cal Newport" → subject = "<ProperName> recommendation"
+    (b) Specific facts or data the assistant stated that the user may plausibly ask about later — \
+a named technique with specific steps, a quoted statistic, a concrete list (e.g. specific languages, \
+specific ingredients, a sequence of items). Extract as kind=fact.
+        Test: "Could the user reasonably ask 'what did you tell me about X?' and need this specific detail?"
+        ✓ A specific list of options the assistant named for this user's situation
+        ✓ A specific number or measurement the assistant provided in context
+        ✗ Generic advice applicable to anyone ("drink more water", "exercise regularly")
+        ✗ Generic techniques without specific names ("use puns", "try self-deprecation")
+    (c) Any assistant statement that directly references the user's own situation \
+("Since you prefer X…", "Given that you bought Y…") → extract with the appropriate kind.
+  - When in doubt whether content is specific-and-recallable vs generic — DO NOT extract it.
   - Personal events in USER turns (e.g. "I just bought a car", "I downloaded Ibotta", \
 "I attended a class") must be captured as kind="event" atoms with the subject being the event \
 (e.g. "Ibotta adoption", "car purchase", "baking class attendance").
@@ -127,21 +147,35 @@ tips that apply to anyone regardless of who they are.
 Do not drop them. When the user says "today", "this morning", or "tonight", replace with the ISO \
 date provided in "Today's date:" at the top of this prompt.
 
-Preference vs fact in chat — the distinction matters for retrieval:
+Preference, habit, and fact in chat — the distinction matters for retrieval:
   User: "I grow tomatoes and herbs at home."
-  → kind=preference  subject="gardening"  ✓    NOT: kind=fact  subject="cherry tomatoes"  ✗
+  → kind=habit  subject="gardening"  ✓    NOT: kind=fact  subject="cherry tomatoes"  ✗
 
   User: "I've been cooking mostly vegetarian meals lately."
-  → kind=preference  subject="dietary preference"  ✓
+  → kind=habit  subject="dietary preference"  ✓    (recurring behavior revealed by what user does)
 
   User: "I usually commute by bike."
-  → kind=preference  subject="commute"  ✓    NOT: kind=fact  subject="bike commute"  ✗
+  → kind=habit  subject="commute"  ✓    NOT: kind=fact  subject="bike commute"  ✗
+
+  User: "I prefer not to eat spicy food."
+  → kind=preference  subject="dietary preference"  ✓    (explicitly stated preference)
+
+  User: "I love dark roast coffee."
+  → kind=preference  subject="coffee"  ✓    (explicitly stated like)
 
   User: "I own a car."
-  → kind=fact  subject="transport"  ✓    (objective circumstance, not a habit or tendency)
+  → kind=fact  subject="transport"  ✓    (objective circumstance, not a habit or preference)
 
   User: "I had success with the lemon cake recipe last time."
-  → kind=preference  subject="baking"  ✓    (past success → informs future baking recommendations)
+  → kind=habit  subject="baking"  ✓    NOT: kind=fact  subject="lemon cake"  ✗
+
+  User: "I want to run a marathon by December."
+  → kind=goal  subject="fitness goal"  ✓    (objective with time horizon)
+
+Habit vs preference rule: use kind=habit when the user SHOWS a pattern through what they do \
+("I usually...", "I've been...", "I grow...", "I go to the gym...", "I had success with..."). \
+Use kind=preference when the user STATES what they like or dislike \
+("I prefer...", "I love...", "I hate...", "I don't like...", "my favorite is...").
 
 Subject examples for chat — note how broad subjects cluster across conversations:
   User: "I went hiking on the Pacific Crest Trail last weekend."
@@ -357,6 +391,27 @@ def _resolve_dates(content: str, ref: datetime) -> str:
 # ── helpers ───────────────────────────────────────────────────────────────────
 
 
+def _extract_json(text: str) -> str:
+    """Extract the first complete top-level JSON object from an LLM response.
+
+    Walks brace depth so arbitrarily nested objects (atoms inside arrays inside
+    the top-level dict) are captured correctly. Handles markdown fences, prose
+    preambles, and trailing commentary without regex edge cases.
+    """
+    depth = 0
+    start = None
+    for i, ch in enumerate(text):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0 and start is not None:
+                return text[start : i + 1]
+    return text
+
+
 def _today() -> datetime:
     return datetime.now(tz=timezone.utc)
 
@@ -424,12 +479,15 @@ def _extract_atoms(segment: Segment, metadata: dict, ref: datetime, cfg: "Config
         {"role": "system", "content": system},
         {
             "role": "user",
-            "content": f"Today's date: {ref.date().isoformat()}\n\n---\n\n{text}",
+            "content": (
+                f"Today's date: {ref.date().isoformat()}\n\n---\n\n{text}"
+                "\n\n---\nRespond with the JSON object only."
+            ),
         },
     ]
     raw = complete(messages, cfg, text_format=_AtomList, model=cfg.ingest_model)
     try:
-        atoms_data: list[dict] = json.loads(raw)["atoms"]
+        atoms_data: list[dict] = json.loads(_extract_json(raw))["atoms"]
     except (json.JSONDecodeError, KeyError, TypeError):
         logging.getLogger("lattice.ingest").warning(
             "segment extraction returned unparseable JSON — skipping segment (len=%d)",
@@ -516,7 +574,10 @@ def detect_supersession(db: LatticeDB, new_atom: Atom, cfg: "Config") -> str | N
             },
         ]
         raw = complete(messages, cfg, text_format=_SupersessionResult, model=cfg.ingest_model)
-        superseded_id = json.loads(raw).get("superseded_atom_id")
+        try:
+            superseded_id = json.loads(_extract_json(raw)).get("superseded_atom_id")
+        except (json.JSONDecodeError, AttributeError):
+            return None
         if not superseded_id:
             return None
         return existing_id if superseded_id == existing_id else None
@@ -550,7 +611,10 @@ def detect_supersession(db: LatticeDB, new_atom: Atom, cfg: "Config") -> str | N
         },
     ]
     raw = complete(messages, cfg, text_format=_SupersessionResult, model=cfg.ingest_model)
-    superseded_id = json.loads(raw).get("superseded_atom_id")
+    try:
+        superseded_id = json.loads(_extract_json(raw)).get("superseded_atom_id")
+    except (json.JSONDecodeError, AttributeError):
+        return None
     if not superseded_id:
         return None
     valid_ids = {a.atom_id for a in existing}
@@ -586,7 +650,7 @@ def persist_atoms(
             atom = Atom(
                 kind=data.get("kind", "fact"),
                 source=data.get("source", "document"),
-                subject=data["subject"],
+                subject=data.get("subject") or data.get("topic") or "",
                 content=content,
                 valid_from=_parse_date(data.get("valid_from")),
                 valid_until=_parse_date(data.get("valid_until")),

@@ -223,7 +223,7 @@ LATTICE_DIR/
 - ✅ PII round-trip redaction (STORY-033) — `lattice/privacy.py` `EntityRedactor`; regex (email+phone) + optional NER via `LATTICE_NER_MODEL`; redact before cloud LLM call, restore in atom content + streamed response; `LATTICE_PII_SCRUB` env var; `🔒 PII protected` badge in web UI; no-op for Ollama.
 - ✅ Sources UX — content preview + kind pill + channel + age in web UI sources panel (scrollable); Telegram progressive disclosure: compact footer `📚 N sources · channel` + `/sources` command for full detail
 - ✅ Browser extension (`extras/browser-extension/`) — Manifest V3 Chrome extension; right-click context menu + ⌥+⇧+S keyboard shortcut (uses `e.code` not `e.key` for Mac compatibility); sends selected text + page URL + title to `POST /api/ingest`; popup shows daemon status dot + memory count; source_id set to page URL so web UI citations panel renders clickable links. Load unpacked in Chrome Developer mode.
-- Next: STORY-034 (lattice export) → VS Code extension
+- Next: STORY-034 (lattice export/import) → STORY-035 (response stats + cost display) → STORY-036 (memory collage) → STORY-037 (user taste profile) → VS Code extension; STORY-038 (ambient enrichment agent) is Phase 3
 
 See STORIES.md for acceptance criteria and FEATURES.md for rationale.
 

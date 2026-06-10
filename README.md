@@ -312,6 +312,10 @@ Every fact is a plain `.md` file in `LATTICE_DIR`. Hand-editable, git-trackable.
 | File ingest — PDF, docx, pptx, xlsx, all channels (inbox, web, lc, Telegram)  | ✅ shipped |
 | PII round-trip redaction — `privacy.py` EntityRedactor; restore after LLM     | ✅ shipped |
 | Sources UX — content preview + kind + age; Telegram `/sources` command        | ✅ shipped |
+| `lattice export` / `lattice import` — portable `.zip` atom archive, share like a file | Phase 2B   |
+| Response stats — per-query time, cost, OpenRouter credits remaining            | Phase 2B   |
+| Memory collage — woven narrative of what you were thinking about a year ago    | Phase 2B   |
+| User taste profile — behavior-derived interests from usage history             | Phase 2B   |
 | VS Code / Cursor extension — capture + recall from the IDE                     | Phase 2B   |
 | Browser extension — right-click selected text → save to Lattice                | ✅ shipped |
 | Apple Shortcuts — global hotkey capture (iPhone / macOS)                       | Phase 2B   |
@@ -323,3 +327,4 @@ Every fact is a plain `.md` file in `LATTICE_DIR`. Hand-editable, git-trackable.
 | Native mobile app (iOS / Android, on-device inference)                         | Phase 3    |
 | Messages / iMessage integration — macOS passive ingest via chat.db; iOS/Android via native app Share Sheet | Phase 3    |
 | Screenpipe integration — passive ambient capture                               | Phase 3    |
+| Ambient enrichment agent — companion atoms from web search, never mutates originals | Phase 3    |
