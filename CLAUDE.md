@@ -17,7 +17,7 @@ uv run lc "text"               # capture a one-liner from terminal
 
 Web UI auto-starts with the daemon at http://localhost:7337 (port tunable via `LATTICE_WEB_PORT`).
 
-Required env vars: `LLM_PROVIDER`, `LLM_MODEL`, `LATTICE_DIR`. `LLM_API_KEY` required for all providers except `ollama`. Per-stage model overrides: `INGEST_MODEL`, `SYNTHESIS_MODEL`. `LLM_BASE_URL` overrides the API endpoint — use for OpenRouter (`https://openrouter.ai/api/v1`), Anthropic-compat (`https://api.anthropic.com/v1`), or any OpenAI-compat endpoint; set `LLM_PROVIDER=openai` in all cases.
+Required env vars: `LLM_PROVIDER`, `LLM_MODEL`, `LATTICE_DIR`. `LLM_API_KEY` required for all providers except `ollama`. Per-stage model overrides: `INGEST_MODEL`, `SYNTHESIS_MODEL`, `REFORMULATION_MODEL` (falls back to `INGEST_MODEL` → `LLM_MODEL`). `LLM_BASE_URL` overrides the API endpoint — use for OpenRouter (`https://openrouter.ai/api/v1`), Anthropic-compat (`https://api.anthropic.com/v1`), or any OpenAI-compat endpoint; set `LLM_PROVIDER=openai` in all cases. Conversation tuning: `LATTICE_REFORMULATION=0` disables multi-turn reformulation; `LATTICE_CONVERSATION_TURNS` (default 2) sets history window.
 
 ## Architecture
 
@@ -26,9 +26,14 @@ The current pipeline is: **ingest → select → synthesize**. Ingest and synthe
 ```
 server.py          MCP stdio entrypoint. Owns one shared LatticeDB instance.
 lattice/
-  config.py        Centralised env-var parsing → Config dataclass. All 21 env vars here:
-                   paths, LLM, selection tuning, ingest tuning, PII, embed. __post_init__
-                   derives path fields from lattice_dir. Tests use Config(lattice_dir=tmp_path).
+  config.py        Centralised env-var parsing → Config dataclass. All env vars here:
+                   paths, LLM, selection tuning, ingest tuning, PII, embed, conversation.
+                   __post_init__ derives path fields from lattice_dir. Tests use Config(lattice_dir=tmp_path).
+  conversation.py  Multi-turn query reformulation. is_followup(query) → bool detects anaphoric/
+                   short follow-ups via phrase fast-path + pronoun heuristic + proper-noun check.
+                   reformulate(query, history, cfg) → str: single LLM call (REFORMULATION_MODEL →
+                   INGEST_MODEL → LLM_MODEL) with PII redact/restore; fallbacks on empty/identical/
+                   too-long response. Tests mock at lattice.conversation.complete.
   llm.py           LLM client with dual routing. Claude models (anthropic/* or claude-*) use
                    native Anthropic SDK (_anthropic_complete); all others use openai.OpenAI compat.
                    make_llm_client(cfg), resolve_model(cfg, override), complete(messages, cfg).
@@ -80,8 +85,9 @@ lattice/
                    extract_file_text(path) → (text, source_id) dispatches by extension
                    (PDF/docx/pptx/xlsx/xls/plain). Used by daemon, web, lc, telegram.
   cli.py           Entry point for `lc` terminal command. `lc <text>` captures via DaemonClient
-                   over Unix socket; fails fast if daemon not running. `lc status` reads LatticeDB
-                   directly (no daemon needed) and prints memory count.
+                   over Unix socket; fails fast if daemon not running. Prints followup tip if
+                   is_followup() detects an anaphoric query. `lc status` reads LatticeDB
+                   directly (no daemon needed) and prints memory count + streak + topics.
   telegram_bot.py  Telegram polling bot (STORY-018). Runs as independent launchd service
                    (dev.lattice.telegram.plist) — not a daemon subprocess. On daemon-down:
                    writes inbox file as telegram-{chat_id}-{uuid}.txt and replies immediately.
@@ -91,9 +97,12 @@ lattice/
                    GET /               → index.html
                    POST /api/ingest    → text capture (source_id + metadata, observed_at stamped)
                    POST /api/ingest-file → multipart file upload; calls extract_file_text()
-                   POST /api/query     → streaming SSE synthesis (web UI path)
-                   POST /api/answer    → blocking JSON synthesis (Telegram path); returns
-                                         {answer, atoms, pii_protected}
+                   POST /api/query     → streaming SSE synthesis (web UI path); accepts
+                                         conversation_history + session_id; runs is_followup() →
+                                         reformulate() if true; writes turn to chat.jsonl
+                   POST /api/answer    → blocking JSON synthesis (Telegram path); same
+                                         conversation_history support; returns {answer, atoms, pii_protected}
+                   GET /api/chat/recent   → last N Q&A turns for a session_id (page reload restore)
                    GET /api/atoms/recent  → recent non-superseded atoms JSON
                    GET /api/usage/summary → streak, query counts, avg latency, atom count
                    GET /api/usage/weekly  → weekly report data (atoms, recalls, topics, new topics)
@@ -101,6 +110,8 @@ lattice/
                    POST /api/feedback     → writes {ts, question, answer, rating, reason,
                                             atom_ids, dismissed_atom_ids, citation_map} to feedback.jsonl
                    GET /api/health        → {ok: true}
+                   chat.jsonl: every Q&A turn appended with {ts, session_id, question,
+                               reformulated_query?, answer, atom_ids, channel}
 ```
 
 ### Ingest drop mechanism
@@ -132,6 +143,7 @@ Lattice has multiple capture/recall channels: MCP tools (Claude Code), web UI, `
 | Rediscovery highlight | — (no UI) | ✅ amber glow | — (no recall) | ✅ age note in answer | — | — |
 | Weekly report | — | ✅ Monday card | — | ✅ Monday prepend | — | — |
 | Topic depth | — | ✅ depth cards | ✅ note on capture | ✅ note on capture | — | — |
+| Multi-turn reformulation | — (Claude owns context) | ✅ is_followup + reformulate, history in JS | ✅ followup tip on capture | ✅ qa_history passed on /ask | — | — |
 
 *not yet built. Update this table whenever a channel ships or gains a capability.
 

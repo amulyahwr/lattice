@@ -21,10 +21,22 @@ const MAX_HISTORY = 6;
 
 // ── state ─────────────────────────────────────────────────────────────────
 
-let atomsById  = {};
-let atomNumMap = {};
-let busy       = false;
-let sessionQA  = []; // {question, answer} pairs accumulated this session
+let atomsById          = {};
+let atomNumMap         = {};
+let busy               = false;
+let sessionQA          = []; // {question, answer} pairs accumulated this session (for Save Session)
+let conversationHistory = []; // {question, answer} last N turns sent to /api/query for reformulation
+let lastActivityAt     = Date.now();
+
+// Stable session ID per page session — persists across reloads, reset on new tab
+const sessionId = (() => {
+  let id = sessionStorage.getItem('lattice-session-id');
+  if (!id) {
+    id = crypto.randomUUID();
+    sessionStorage.setItem('lattice-session-id', id);
+  }
+  return id;
+})();
 
 // ── DOM refs ──────────────────────────────────────────────────────────────
 
@@ -686,10 +698,15 @@ async function ask(question) {
   const timer = startRing(turn);
 
   try {
+    lastActivityAt = Date.now();
     const resp = await fetch('/api/query', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ question }),
+      body: JSON.stringify({
+        question,
+        conversation_history: conversationHistory,
+        session_id: sessionId,
+      }),
     });
     if (!resp.ok) throw new Error(`Request failed: ${resp.status}`);
 
@@ -797,6 +814,7 @@ async function ask(question) {
           const citedSubjects = [...new Set(citedAtoms.map(a => a.subject).filter(Boolean))];
           if (citedSubjects.length) checkTopicDepth(citedSubjects);
           sessionQA.push({ question, answer: evt.answer });
+          conversationHistory.push({ question, answer: evt.answer });
           saveSessionBtn.disabled = false;
 
         } else if (evt.type === 'error') {
@@ -885,6 +903,17 @@ function showMilestoneCard(streak, atomCount) {
       setTimeout(() => cube.classList.remove('milestone-burst'), 900);
     }
   }
+}
+
+async function loadConversationHistory() {
+  try {
+    const resp = await fetch(`/api/chat/recent?session_id=${encodeURIComponent(sessionId)}&limit=2`);
+    if (!resp.ok) return;
+    const turns = await resp.json();
+    if (Array.isArray(turns) && turns.length) {
+      conversationHistory = turns;
+    }
+  } catch {}
 }
 
 async function loadUsageSummary({ checkMilestone = false } = {}) {
@@ -1116,6 +1145,18 @@ checkDaemonStatus();
 loadRecentAtoms();
 loadUsageSummary();
 loadWeeklyReport();
+loadConversationHistory();
 setInterval(loadRecentAtoms, 15000);
 setInterval(checkDaemonStatus, 30000);
+
+// Reset conversation history after 30 min of inactivity
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    if (Date.now() - lastActivityAt > 30 * 60 * 1000) {
+      conversationHistory = [];
+    }
+    lastActivityAt = Date.now();
+  }
+});
+
 input.focus();

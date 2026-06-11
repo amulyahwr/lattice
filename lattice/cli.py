@@ -39,6 +39,11 @@ def lc() -> None:
 
     arg = " ".join(sys.argv[1:])
 
+    # Tip: detect follow-up queries that won't make sense without context
+    from lattice.conversation import is_followup as _is_followup
+    if _is_followup(arg):
+        print("Tip: lc is single-shot — rephrase as a complete question for best results.")
+
     # If the argument is a path to an existing file, extract its text
     from pathlib import Path as _Path
     _arg_path = _Path(arg)
