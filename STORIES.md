@@ -1116,6 +1116,126 @@ Something new: Travel planning
 
 ---
 
+---
+
+### Epic 19 — Multi-turn conversation (Phase 2B, parallel track)
+
+#### STORY-039 · Multi-turn query reformulation
+
+**As a** user asking a follow-up question in the web UI or Telegram,
+**I want** "when was that?" and "tell me more" to actually work,
+**so that** Lattice feels like a conversation, not a series of disconnected searches.
+
+**Background:** Every Lattice query today is completely stateless. "When was that?" sends terrible BM25 seeds and returns nothing useful. The fix is query reformulation — a single LLM call that converts an anaphoric follow-up into a self-contained, searchable query using the last 2 Q&A pairs as context. Spell correction comes for free: the same LLM call that resolves "that" → "Postgres decision" also fixes "pstgres" → "postgres". MCP path is intentionally excluded — Claude Code handles its own context window.
+
+**Scope explicitly excluded from this story (Phase 3 STORY-040):**
+- Server-side session management
+- Token budget manager
+- Progressive summarization of older turns
+- Topic-anchored atom carry-forward
+- Cross-device session continuity
+
+**Acceptance criteria:**
+
+**Follow-up detection — `is_followup(query) → bool`:**
+- Returns `True` if query is short (< 6 words) AND/OR contains anaphoric pronouns: `that`, `it`, `those`, `them`, `this`, `the same`, `there`, `then`
+- Returns `True` if query contains no proper nouns (heuristic: no capitalized words other than sentence start)
+- Returns `False` for self-contained queries ("What did I decide about Postgres?") — zero latency penalty on the normal path
+- Returns `False` when no conversation history provided
+
+**Reformulation — `reformulate(query, history, cfg) → str`:**
+- Single LLM call using `INGEST_MODEL` (cheapest configured model — minimal cost)
+- Prompt: *"Given the conversation so far and the follow-up question, rewrite the follow-up as a complete, self-contained question that could be answered without the conversation context. Fix any typos. Return only the rewritten question."*
+- History: last 2 Q&A pairs (server truncates to 2 if client sends more)
+- If reformulation produces an empty or identical string → fall back to original query
+- Max 1 reformulation call per query — never chains
+
+**API:**
+- `POST /api/query` and `POST /api/answer` gain optional `conversation_history: list[{question: str, answer: str}]` — max 2 entries, extras silently truncated
+- No change to response shape — reformulation is transparent to caller
+- When `is_followup=false` or `conversation_history` absent: zero added latency (existing path)
+
+**Web UI:**
+- JS maintains `conversationHistory` array per page session — appends `{question, answer}` after each completed answer
+- Passes last 2 entries on every `POST /api/query`
+- Reset on page reload
+- 30-min inactivity: `conversationHistory` cleared silently (detected via `document.visibilitychange` + timestamp check on next query)
+- No visible UI change — reformulation is invisible to the user
+
+**Telegram:**
+- Bot passes last 2 Q&A pairs from its existing `context.chat_data` buffer (already maintained for `/save`) on every `/ask` call
+- No UI change — reformulation is invisible
+
+**`lc` CLI:** out of scope — atomic capture by design, no conversation context
+**MCP:** out of scope — Claude handles its own context window
+
+**Technical notes:**
+- New `lattice/conversation.py` — `is_followup(query: str) → bool`, `reformulate(query: str, history: list[dict], cfg: Config) → str`
+- `app.py`: before calling `select()`, check `is_followup(query)` and call `reformulate()` if true; pass reformulated query to both `select()` and `synthesize()` (original question shown to user; reformulated query used internally)
+- `telegram_bot.py`: `_handle_ask()` passes `context.chat_data.get("history", [])[-2:]` as `conversation_history` in the `POST /api/answer` body
+- `QueryRequest` model in `app.py` gains `conversation_history: list[dict] = []`
+- **Depends on:** STORY-024 ✅ (Telegram `/ask`). Independent otherwise.
+
+---
+
+### Epic 20 — Full context management (Phase 3)
+
+#### STORY-040 · Server-side sessions + token budget + progressive summarization
+
+**As a** user having extended conversations with Lattice,
+**I want** the system to manage context intelligently across many turns,
+**so that** long conversations remain coherent without degrading quality on small Ollama models.
+
+**Background:** STORY-039 handles the simple case (2-turn window, client-owned state). For longer conversations — especially on Ollama models with 4k–6k effective context — naive history accumulation destroys answer quality. The synthesis prompt budget (system + atoms + history + question) overflows fast. This story adds server-side sessions, a model-aware token budget, progressive summarization, and topic-anchored atom carry-forward. It also closes the loop on session capture: when a session expires, its Q&A thread is automatically saved as memory.
+
+**Acceptance criteria:**
+
+**Session lifecycle:**
+- `POST /api/session/new` → `{session_id: uuid}` — client requests a session at conversation start
+- `POST /api/query` and `POST /api/answer` accept optional `session_id`; server loads/updates session state
+- Session expires after 30 min inactivity → auto-triggers session summary capture (same as `/save` — formats Q&A as conversation chunk and calls `DaemonClient().ingest_full()`)
+- `POST /api/session/{id}/close` → explicit close + capture; returns `{atoms_new, atoms_updated}`
+- `GET /api/session/{id}/history` → last N turns for client to sync (web UI reload recovery)
+
+**Token budget manager:**
+- Auto-detect provider from `cfg.llm_provider` and model:
+  - `ollama`: 1500 tokens for conversation history budget
+  - cloud (openrouter, openai, anthropic): 4000 tokens
+- Budget split: 60% atom pack, 40% conversation history
+- Atom pack truncated last if budget exceeded (prefer keeping context)
+- Token estimate: ~4 chars per token (conservative heuristic, no tokenizer dep)
+
+**Progressive summarization (trigger at turn 5):**
+- When session reaches turn 5, compress turns 1–3 into a single summary paragraph via LLM
+- Carry forward: `{summary: str, turns: [turn_4, turn_5, current]}`
+- On subsequent summary triggers (every 3 turns): re-summarize `(old_summary + oldest full turn)` → updated summary
+- Summarization uses `INGEST_MODEL` — 1 LLM call per trigger, infrequent
+
+**Topic-anchored atom carry-forward:**
+- After each turn, record the `atom_ids` retrieved in that turn in session state
+- On next query: check if any previous-turn atoms share subjects with the reformulated query (graph BFS, 0 LLM calls)
+- Carry matching atoms as "context atoms" (passed to synthesis at lower priority than freshly selected atoms)
+- Non-matching atoms from previous turns are not carried — prevents topic pollution
+
+**Web UI:**
+- Requests `POST /api/session/new` on first query of a page session
+- Passes `session_id` on all subsequent queries
+- On page unload: `POST /api/session/{id}/close` (best-effort via `navigator.sendBeacon`)
+- "Conversation saved" toast when auto-capture fires on session expiry
+
+**Telegram:**
+- Bot maintains one session per chat (keyed by `chat_id`) — persists across bot restarts in `context.chat_data`
+- `/new` command: closes current session (triggering capture) and starts a fresh one
+
+**Technical notes:**
+- New `lattice/session.py` — `SessionManager` (in-memory dict + periodic expiry sweep), `Session` dataclass (`{session_id, turns, summary, atom_ids_by_turn, last_active}`), `TokenBudgetManager`
+- Daemon starts `SessionManager` alongside web server; state is in-memory (not persisted — sessions are ephemeral by design)
+- `app.py`: session middleware injected into `/api/query` and `/api/answer` handlers
+- Session capture on expiry: runs in a background thread so it doesn't block the expiry check
+- **Depends on:** STORY-039
+
+---
+
 ## Dependency map
 
 ```
@@ -1151,7 +1271,9 @@ Phase 2B ordering
 ├── STORY-035 (response stats + cost + credits) — independent, parallel; no story deps
 ├── STORY-036 (memory collage) — depends on STORY-013 ✅, STORY-031 ✅
 ├── STORY-037 (user taste profile) — depends on STORY-013 ✅, STORY-027 ✅
-└── STORY-038 (ambient enrichment agent) — depends on STORY-037; Phase 3
+├── STORY-038 (ambient enrichment agent) — depends on STORY-037; Phase 3
+├── STORY-039 (multi-turn reformulation) — depends on STORY-024 ✅; independent otherwise
+└── STORY-040 (full context management) — depends on STORY-039; Phase 3
 
 Phase 3 (deferred)
 └── STORY-021 (Telegram voice notes)      ← after mobile habit validated
@@ -1182,6 +1304,201 @@ Phase 3 (deferred)
 
 ---
 
+### Epic 21 — Continuous conversation experience (Phase 2B, parallel track)
+
+#### STORY-041 · One continuous thread — no session management
+
+**As a** user who just wants to keep talking to Lattice,
+**I want** the experience to feel like one continuous conversation — like iMessage with my own memory —
+**so that** I never have to think about sessions, saving, or starting fresh.
+
+**Background:** The previous framing of this story used "sessions" — opening cards, Save buttons, Start Fresh choices. That's the wrong mental model. iMessage and WhatsApp never ask you to save a conversation or switch sessions. ChatGPT's biggest UX win is that you just keep talking. Lattice should work the same way: one continuous thread, auto-save handled invisibly, context that shifts naturally when the topic shifts. No session management. No friction.
+
+The data already exists: `chat.jsonl` is a continuous log (STORY-039 ✅). Atoms have `ingested_at`. The graph has `same_subject_as` edges. This story wires those signals into a seamless experience.
+
+---
+
+**Principle 1 — Context shifts automatically with the topic**
+
+When the user asks a self-contained question (`is_followup = False`), the server signals the client to reset `conversationHistory`. Topic shift = implicit context reset. No "Start fresh" button needed.
+
+- Server: when `is_followup(query) = False`, include `"context_reset": true` in the SSE `atoms` event
+- Client: on receiving `context_reset`, clear `conversationHistory` silently — no toast, no UI change
+- Effect: "What do I know about Postgres?" after a Shivika conversation automatically resets context. The next follow-up ("when did I start using it?") correctly resolves to Postgres, not Shivika.
+- `conversationHistory` is topic-scoped, not time-scoped
+
+---
+
+**Principle 2 — Auto-save, no button required**
+
+`chat.jsonl` is the continuous log. The daemon sweeps it periodically and saves completed threads as atoms — zero user action needed. "Save session" button is demoted to a secondary explicit action (kept for users who want to force-save mid-session).
+
+- Daemon: on startup + every 30 min, scan `chat.jsonl` for threads with ≥2 turns, `ingested_at` null (not yet saved), last turn > 10 min ago → auto-ingest via `DaemonClient.ingest_full()` formatted as `user: Q\nassistant: A` conversation chunk
+- Each auto-saved thread written to `chat.jsonl` with `"auto_saved": true` flag — prevents double-ingestion on next sweep
+- "Save session" button: still exists but secondary — triggers immediate save of current unsaved turns
+- No closing summary card — save happens silently in the background
+
+---
+
+**Principle 3 — Opening: context, not choices**
+
+On first page load, show what's been happening — no buttons to click:
+
+```
+14 days deep  ·  5 new things saved  ·  You've been thinking about: Postgres, Shivika Garg
+```
+
+- Single quiet strip above spark cards — not a card with choices
+- "You've been thinking about" = last 3 distinct topics from `chat.jsonl` (most recent first)
+- "N new things saved" = atoms with `ingested_at` > last `chat.jsonl` entry timestamp
+- Topics are clickable → pre-fills `"Tell me about {topic}"` (no auto-submit — user decides)
+- Disappears once the user starts typing; does not reappear mid-session
+- No "Continue" button, no "Start fresh" button — just ambient context
+
+---
+
+**Principle 4 — Journey path in the sidebar**
+
+The sidebar "Recent memories" panel gains a **"Today's journey"** section at the top — a graph-derived topic tree showing how the user has navigated their knowledge today. Not a flat chronological list, not a raw atom dump — a structured path that reflects the graph underneath.
+
+```
+Today's journey
+
+  ● Shivika Garg
+  │  ├── her email address        8m ago
+  │  ├── colleges attended        5m ago
+  │  └── work 2019–2021          2m ago
+
+  ● Postgres
+     └── connection pooling       1m ago
+
+────────────────────
+Recent memories
+  ...
+```
+
+**How the tree is built (client-side, no extra LLM):**
+- Each completed turn contributes a leaf node: the primary cited atom subject becomes the branch label, the query text becomes the leaf label
+- Subjects are grouped into branch nodes using `same_subject_as` graph membership — if two queries cite atoms that share a `same_subject_as` edge, they fall under the same branch
+- Grouping resolved via `GET /api/atoms/related` (reuses Principle 5 endpoint) — if the new turn's cited subjects overlap with an existing branch's subjects, extend that branch; otherwise start a new branch
+- Branch order = first-seen today; leaf order = reverse-chronological within branch
+- Clicking any leaf → re-submits that exact query
+- Clicking a branch node → pre-fills `"Tell me about {branch subject}"`
+- Section hidden until at least 1 query made today
+- Updates live after every `citations_applied` SSE event
+- New endpoint: `GET /api/chat/today` — returns today's `chat.jsonl` entries for web channel (used on page load to rebuild tree from prior turns in the same day)
+
+**Why graph-derived beats chronological:**
+A flat list shows *when* — the tree shows *where you went*. Depth (3 questions under Shivika) signals engagement. Branches signal topic shifts. The structure emerges from the graph, not from manual categorisation. No other memory app can do this because none have a subject graph underneath.
+
+---
+
+**Principle 5 — Curiosity threads after each answer**
+
+Below each completed answer, show 2–3 related topics as clickable chips drawn from the graph:
+
+```
+You also know about:  [PgBouncer]  [connection pooling]  [SQLite]
+```
+
+- `GET /api/atoms/related?subjects=a,b,c&limit=3` — BFS from cited atom subjects via `same_subject_as` edges, returns top-N related subjects not already in this answer
+- One-tap → pre-fills input (no auto-submit — user chooses to go deeper)
+- Only shown for the most recent turn; older turns don't get chips
+- Hidden when no related subjects exist
+
+---
+
+**Principle 6 — Rediscovery timestamp**
+
+When the oldest cited atom is ≥ 30 days old, add one quiet line below the answer:
+
+> *"You first saved this 47 days ago."*
+
+- Single line only — not one per old atom
+- Already have `ingested_at` in SSE atom payload; no backend change needed
+
+---
+
+**Acceptance criteria:**
+
+- `context_reset: true` in SSE `atoms` event when `is_followup = False` and history was non-empty; client clears `conversationHistory` silently
+- Daemon auto-saves threads ≥2 turns older than 10 min; `auto_saved` flag prevents double-ingest
+- Opening strip shows recent topics + new atom count; disappears on first keystroke; topics pre-fill on click (no auto-submit)
+- Journey tree appears in sidebar after first query; groups queries under branch nodes by `same_subject_as` graph membership
+- New queries extend existing branch if subject overlaps, else start new branch
+- Clicking leaf → re-submits query; clicking branch → pre-fills topic
+- Tree rebuilds correctly on page reload from `GET /api/chat/today`
+- Curiosity chips appear below most recent answer; one-tap pre-fills input
+- Rediscovery timestamp shown when oldest cited atom ≥ 30 days
+- "Save session" button demoted — still functional, no longer primary CTA
+
+---
+
+**Cross-channel implementation**
+
+| Principle | Web UI | Telegram | `lc` CLI | MCP | Browser ext |
+|---|---|---|---|---|---|
+| Context reset on topic shift | ✅ `context_reset` SSE signal clears JS history | ✅ server already skips reformulation; `qa_history` in `chat_data` cleared when `is_followup=False` | — (atomic, no context) | — (Claude owns context) | — (capture only) |
+| Auto-save threads | ✅ daemon sweep of `chat.jsonl` | ✅ same sweep covers telegram channel entries | — | — | — |
+| Opening strip | ✅ on page load | ✅ first message of day: `"Today you've explored: Shivika Garg, Postgres. 5 new things saved."` prepended before reply | ✅ `lc status` appends: `"Today's journey: Shivika Garg (3 questions), Postgres (1 question)"` | — | — |
+| Journey path / tree | ✅ graph-derived CSS tree in sidebar | ✅ `/journey` command: text-format tree `"● Shivika Garg\n  └── email, colleges\n● Postgres\n  └── connection pooling"` | — | — | — |
+| Curiosity chips | ✅ clickable chips below answer | ✅ after `/ask` answer: `"You also know about: PgBouncer, connection pooling — reply /ask <topic> to explore"` | — | ✅ `related_subjects` field added to `lattice_answer` return value — Claude can optionally follow up | — |
+| Rediscovery timestamp | ✅ quiet line below answer | ✅ already shipped (STORY-032 ✅) | — | — | — |
+
+**Telegram specifics:**
+- First message of the day: prepend opening strip before normal reply (same pattern as weekly report and milestones)
+- `/journey` new command: renders today's topic tree as formatted text from `GET /api/chat/today`
+- Curiosity chips: appended as plain text footer after `/ask` answers — `"You also know about: [topic1] · [topic2] — use /ask <topic> to explore"`
+- `qa_history` auto-cleared in `context.chat_data` when server returns `context_reset=true` in `/api/answer` response body
+
+**`lc status` specifics:**
+- Read today's `chat.jsonl` entries (channel=lc or web, ts=today)
+- Append: `"Today's journey: {topic} ({n} questions)"` per branch, comma-separated
+- Only shown if ≥1 recall query made today; skipped if lc-only day (no recall)
+
+**MCP `lattice_answer` specifics:**
+- Add `related_subjects: list[str]` to the return dict — top-3 subjects from `GET /api/atoms/related` on cited subjects
+- Claude can choose to surface these or ignore them — no forced behaviour
+- Does not add rediscovery or opening strip (noise in Claude's context)
+
+---
+
+**Acceptance criteria:**
+
+- `context_reset: true` in SSE `atoms` event when `is_followup = False` and history was non-empty; client clears `conversationHistory` silently
+- Telegram `qa_history` cleared when `/api/answer` returns `context_reset: true`
+- Daemon auto-saves threads ≥2 turns older than 10 min; `auto_saved` flag prevents double-ingest; covers both web + telegram channels
+- Web opening strip shows recent topics + new atom count; disappears on first keystroke; topics pre-fill on click
+- Telegram first-message-of-day prepends opening strip text before reply
+- `lc status` appends today's journey summary when ≥1 recall query made today
+- Web journey tree groups queries by `same_subject_as` graph membership; leaf click re-submits; branch click pre-fills
+- `/journey` Telegram command returns text-format topic tree from today's `chat.jsonl`
+- Curiosity chips: web = clickable chips pre-fill; Telegram = text footer with `/ask` instructions; MCP = `related_subjects` in return dict
+- Rediscovery timestamp shown in web (quiet line) and Telegram (already shipped ✅)
+- "Save session" button demoted on web — still functional, no longer primary CTA
+
+**Out of scope:**
+- Full graph canvas visualisation with edges/physics — tree is the right sidebar format
+- Server-side persistent sessions (STORY-040)
+- Cross-device thread continuity (STORY-040)
+- VS Code journey (TypeScript context-switch — add in VS Code extension story)
+- Browser extension journey (capture-only channel)
+
+**Technical notes:**
+- SSE `atoms` event: add `"context_reset": bool` in `api_query` — true when `effective_query == req.question` and `req.conversation_history` was non-empty
+- `/api/answer` response body: add `"context_reset": bool` for Telegram path
+- Daemon: `_auto_save_chat_threads(cfg)` in `daemon.py` — reads `chat.jsonl`, groups by `session_id`, skips `auto_saved=true`, skips threads < 2 turns or last turn < 10 min ago, calls `DaemonClient.ingest_full()`, marks `auto_saved=true`
+- New endpoint: `GET /api/chat/today` — reads `chat.jsonl`, filters `ts` = today, returns `[{question, ts, atom_ids, channel}]` reverse-chron
+- New endpoint: `GET /api/atoms/related?subjects=a,b,c&limit=3` — BFS in `LatticeGraph` via `same_subject_as` edges, excludes input subjects, returns top-N by atom count
+- Journey tree: built in `app.js` from `citedAtoms` per turn; subject grouping via `GET /api/atoms/related`; CSS indented tree (no canvas, no library)
+- Opening strip: reads `GET /api/chat/today` + `GET /api/usage/summary` on page load
+- `lattice_answer` in `server.py`: add `related_subjects` to return dict using `GET /api/atoms/related`
+- `telegram_bot.py`: `/journey` command handler; opening strip prepend on first daily message; curiosity footer after `/ask`; `qa_history` clear on `context_reset`
+- `cli.py`: extend `lc status` to read today's `chat.jsonl` and append journey summary
+- **Depends on:** STORY-039 ✅ (chat.jsonl, conversationHistory, sessionId, qa_history), STORY-026 ✅ (Save Session), STORY-032 ✅ (rediscovery pattern), STORY-024 ✅ (Telegram /ask)
+
+---
+
 ## Dropped from scope
 
 | Story | Reason |
@@ -1199,7 +1516,7 @@ Phase 3 (deferred)
 ## Out of scope (Phase 3+)
 
 - Multi-device sync
-- Conversational recall / follow-up questions
+- Conversational recall — Phase 2B minimal (STORY-039), Phase 3 full (STORY-040)
 - First-class namespaces
 - Screenpipe integration
 - Contradiction detection UX (blocked on M6 semantic enrichment)

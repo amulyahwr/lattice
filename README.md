@@ -30,7 +30,7 @@ _This is what "local, structured, private" actually means in code. What you call
 
 **Ingest**
 
-Every piece of text — a Telegram message, a file dropped in an inbox folder, a Claude conversation, a terminal one-liner — enters a pipeline that segments it by source type (chat, markdown, code), then runs an LLM extraction pass to decompose it into _atoms_: typed, timestamped Pydantic models with fields like `kind`, `subject`, `content`, `valid_from`, `valid_until`, `observed_at`, and full provenance (`source_id`, `session_id`, `segment_id`). Each atom is stored as a plain `.md` file with YAML frontmatter — human-readable, git-trackable, hand-editable.
+Every piece of text — a Telegram message, a file dropped in an inbox folder, a Claude conversation, a terminal one-liner — enters a pipeline that segments it by source type (chat, markdown, code), then runs an LLM extraction pass to decompose it into _atoms_: typed, timestamped Pydantic models with fields like `kind`, `subject`, `content`, `valid_from`, `valid_until`, `observed_at`, and full provenance (`source_id`, `session_id`, `segment_id`). Each atom is stored as a plain `.md` file with YAML frontmatter — human-readable, git-trackable, hand-editable. When using a cloud LLM provider, `EntityRedactor` (`lattice/privacy.py`) runs before the extraction call: persons, orgs, emails, and phones are mapped to numbered tags (`PER_0`, `ORG_0`, …), the redacted text is sent to the LLM, and real values are restored in the returned atom fields before anything is written to disk. Atoms on disk always contain real names — redaction is in-memory only for the duration of the LLM call.
 
 **Graph**
 
@@ -38,7 +38,7 @@ After every write, a `LatticeGraph` (networkx `MultiDiGraph`) upserts nodes and 
 
 **Selection**
 
-Query path is deliberately LLM-free. BM25 seeds the top candidates → dense semantic search (BAAI/bge-small-en-v1.5) adds vocabulary-mismatch hits ("gym" ↔ "workout") → zero-score seeds filtered → source-diversity probe → graph BFS expands the evidence pack along supersession, subject, and provenance edges → optional BFS rescore. The result is a ranked list of atom dicts with full provenance, ready for synthesis. Fast, deterministic, auditable. Dense retrieval requires `uv sync --group semantic`; set `LATTICE_DENSE_SEEDS=1` (default in the provided plist).
+Query path is deliberately LLM-free. BM25 seeds the top candidates → dense semantic search (BAAI/bge-small-en-v1.5) adds vocabulary-mismatch hits ("gym" ↔ "workout") and spelling tolerance (typos embed close to their correct forms, so "pstgres" still finds "postgres" atoms) → zero-score seeds filtered → source-diversity probe → graph BFS expands the evidence pack along supersession, subject, and provenance edges → optional BFS rescore. The result is a ranked list of atom dicts with full provenance, ready for synthesis. Fast, deterministic, auditable. Dense retrieval requires `uv sync --group semantic`; set `LATTICE_DENSE_SEEDS=1` (default in the provided plist).
 
 **Synthesis**
 
@@ -105,6 +105,11 @@ export LATTICE_DENSE_TOP_K=20      # top-K dense hits merged with BM25 seeds (em
 # Better ingest quality (optional — improves habit/preference extraction ~+7pp on preference recall)
 # Uses Claude Haiku 4.5 via OpenRouter; ~3x cost vs gpt-4o-mini. Omit to use LLM_MODEL for ingest.
 export INGEST_MODEL=anthropic/claude-haiku-4-5
+
+# Multi-turn reformulation (optional — controls follow-up query rewriting)
+export REFORMULATION_MODEL=openai/gpt-4o-mini  # model for reformulation; falls back to INGEST_MODEL → LLM_MODEL
+export LATTICE_REFORMULATION=1                 # set 0 to disable (useful for slow Ollama setups)
+export LATTICE_CONVERSATION_TURNS=2            # history window passed to reformulation (default 2)
 ```
 
 Using Ollama instead? Drop `LLM_BASE_URL` and `LLM_API_KEY`, set `LLM_PROVIDER=ollama` and `LLM_MODEL=gemma4:4b`.
@@ -320,6 +325,7 @@ Every fact is a plain `.md` file in `LATTICE_DIR`. Hand-editable, git-trackable.
 | Response stats — per-query time, cost, OpenRouter credits remaining            | Phase 2B   |
 | Memory collage — woven narrative of what you were thinking about a year ago    | Phase 2B   |
 | User taste profile — behavior-derived interests from usage history             | Phase 2B   |
+| Multi-turn conversation — follow-up queries reformulated, context resets on topic shift, chat.jsonl log | ✅ shipped |
 | VS Code / Cursor extension — capture + recall from the IDE                     | Phase 2B   |
 | Browser extension — right-click selected text → save to Lattice                | ✅ shipped |
 | Apple Shortcuts — global hotkey capture (iPhone / macOS)                       | Phase 2B   |
@@ -332,3 +338,4 @@ Every fact is a plain `.md` file in `LATTICE_DIR`. Hand-editable, git-trackable.
 | Messages / iMessage integration — macOS passive ingest via chat.db; iOS/Android via native app Share Sheet | Phase 3    |
 | Screenpipe integration — passive ambient capture                               | Phase 3    |
 | Ambient enrichment agent — companion atoms from web search, never mutates originals | Phase 3    |
+| Full context management — server sessions, token budget, progressive summarization  | Phase 3    |

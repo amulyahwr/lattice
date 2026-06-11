@@ -47,6 +47,11 @@ class Config:
     llm_num_ctx: int = 4096
     ingest_model: str | None = None
     synthesis_model: str | None = None
+    reformulation_model: str | None = None  # REFORMULATION_MODEL; falls back to ingest_model → llm_model
+
+    # ── conversation ──────────────────────────────────────────────────────────
+    reformulation_enabled: bool = True   # LATTICE_REFORMULATION=0 to disable
+    conversation_turns: int = 2          # LATTICE_CONVERSATION_TURNS; history window passed to reformulation
 
     # ── selection ─────────────────────────────────────────────────────────────
     recommendation_cap: int = 5
@@ -96,6 +101,10 @@ class Config:
             llm_num_ctx=_env_int("LLM_NUM_CTX", 4096),
             ingest_model=os.environ.get("INGEST_MODEL") or None,
             synthesis_model=os.environ.get("SYNTHESIS_MODEL") or None,
+            reformulation_model=os.environ.get("REFORMULATION_MODEL") or None,
+            # conversation
+            reformulation_enabled=os.environ.get("LATTICE_REFORMULATION", "1").lower() not in ("0", "false"),
+            conversation_turns=_env_int("LATTICE_CONVERSATION_TURNS", 2),
             # selection
             recommendation_cap=_env_int("LATTICE_RECOMMENDATION_CAP", 5),
             seed_min_score=float(os.environ.get("LATTICE_SEED_MIN_SCORE", "0.0")),

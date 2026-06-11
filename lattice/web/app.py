@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from lattice.client import DaemonClient
 from lattice.config import Config
+from lattice.conversation import is_followup, reformulate
 from lattice.db import LatticeDB
 from lattice.selection import select
 from lattice.synthesis import stream_synthesis, synthesize
@@ -44,6 +45,45 @@ def _get_db() -> LatticeDB:
     return LatticeDB(_get_cfg().lattice_dir)  # not cached — new DB per test call
 
 
+# ── helpers ───────────────────────────────────────────────────────────────────
+
+def _write_chat(
+    cfg: Config,
+    *,
+    session_id: str | None,
+    question: str,
+    reformulated_query: str | None,
+    answer: str,
+    atom_ids: list[str],
+    channel: str,
+) -> None:
+    record: dict = {
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "session_id": session_id,
+        "question": question,
+        "answer": answer,
+        "atom_ids": atom_ids,
+        "channel": channel,
+    }
+    if reformulated_query and reformulated_query != question:
+        record["reformulated_query"] = reformulated_query
+    chat_path = cfg.lattice_dir / "chat.jsonl"
+    with chat_path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(record) + "\n")
+
+
+def _apply_reformulation(req: "QueryRequest", cfg: Config) -> str:
+    """Return reformulated query if conditions met, else original question."""
+    if not cfg.reformulation_enabled:
+        return req.question
+    history = req.conversation_history[-cfg.conversation_turns:] if req.conversation_history else []
+    if not history:
+        return req.question
+    if not is_followup(req.question):
+        return req.question
+    return reformulate(req.question, history, cfg)
+
+
 # ── models ────────────────────────────────────────────────────────────────────
 
 class IngestRequest(BaseModel):
@@ -56,6 +96,8 @@ class IngestRequest(BaseModel):
 
 class QueryRequest(BaseModel):
     question: str
+    conversation_history: list[dict] = []  # [{question, answer}, ...] last N turns
+    session_id: str | None = None          # UUID from client, written to chat.jsonl
 
 
 class FeedbackRequest(BaseModel):
@@ -137,21 +179,41 @@ async def api_ingest_file(file: UploadFile = File(...)):
 @app.post("/api/query")
 async def api_query(req: QueryRequest) -> StreamingResponse:
     db = _get_db()
-
     cfg = _get_cfg()
+    effective_query = _apply_reformulation(req, cfg)
 
     def _generate():
         t0 = time.monotonic()
-        atoms = select(req.question, db=db, cfg=cfg)
+        atoms = select(effective_query, db=db, cfg=cfg)
         sel_ms = int((time.monotonic() - t0) * 1000)
+        atom_ids = [a.get("atom_id", "") for a in atoms]
         for i, a in enumerate(atoms):
             a["src_key"] = f"{i + 1}"
 
         yield f'data: {json.dumps({"type": "atoms", "atoms": atoms})}\n\n'
-        yield from stream_synthesis(req.question, atoms, cfg)
 
-        # synthesis_ms is 0 for streaming — generator is lazy, timing not meaningful here
+        assembled_answer = []
+        for chunk in stream_synthesis(effective_query, atoms, cfg):
+            yield chunk
+            # Collect text from citations_applied event for chat.jsonl
+            if chunk.startswith("data:"):
+                try:
+                    evt = json.loads(chunk[5:].strip())
+                    if evt.get("type") == "citations_applied":
+                        assembled_answer.append(evt.get("answer", ""))
+                except Exception:
+                    pass
+
         record_usage(req.question, sel_ms, 0, len(atoms), channel="web", cfg=cfg)
+        _write_chat(
+            cfg,
+            session_id=req.session_id,
+            question=req.question,
+            reformulated_query=effective_query if effective_query != req.question else None,
+            answer=assembled_answer[0] if assembled_answer else "",
+            atom_ids=atom_ids,
+            channel="web",
+        )
 
     return StreamingResponse(
         _generate(),
@@ -164,17 +226,28 @@ async def api_query(req: QueryRequest) -> StreamingResponse:
 async def api_answer(req: QueryRequest):
     db = _get_db()
     cfg = _get_cfg()
+    effective_query = _apply_reformulation(req, cfg)
     t0 = time.monotonic()
-    atoms = select(req.question, db=db, cfg=cfg)
+    atoms = select(effective_query, db=db, cfg=cfg)
     sel_ms = int((time.monotonic() - t0) * 1000)
     if not atoms:
         return {"ok": True, "answer": None, "atom_count": 0}
     for i, a in enumerate(atoms):
         a["src_key"] = f"{i + 1}"
     t1 = time.monotonic()
-    result = synthesize(req.question, atoms, cfg)
+    result = synthesize(effective_query, atoms, cfg)
     syn_ms = int((time.monotonic() - t1) * 1000)
     record_usage(req.question, sel_ms, syn_ms, len(atoms), channel="telegram", cfg=cfg)
+    atom_ids = [a.get("atom_id", "") for a in atoms]
+    _write_chat(
+        cfg,
+        session_id=req.session_id,
+        question=req.question,
+        reformulated_query=effective_query if effective_query != req.question else None,
+        answer=result.answer,
+        atom_ids=atom_ids,
+        channel="telegram",
+    )
     atom_meta = [
         {
             "atom_id": a.get("atom_id"),
@@ -239,6 +312,29 @@ async def api_feedback(req: FeedbackRequest):
     with feedback_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record) + "\n")
     return {"ok": True}
+
+
+@app.get("/api/chat/recent")
+async def api_chat_recent(session_id: str | None = None, limit: int = 2):
+    """Return last N Q&A turns for a session — used by web UI on page load to restore history."""
+    cfg = _get_cfg()
+    chat_path = cfg.lattice_dir / "chat.jsonl"
+    if not chat_path.exists():
+        return []
+    records = []
+    with chat_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                records.append(json.loads(line))
+            except Exception:
+                continue
+    if session_id:
+        records = [r for r in records if r.get("session_id") == session_id]
+    records = records[-limit:]
+    return [{"question": r.get("question", ""), "answer": r.get("answer", "")} for r in records]
 
 
 @app.get("/api/atoms/recent")

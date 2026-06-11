@@ -238,7 +238,18 @@ async def _do_recall(update, context, question: str) -> None:
 
     cfg = Config.from_env()
     url = f"http://127.0.0.1:{os.environ.get('LATTICE_WEB_PORT', '7337')}/api/answer"
-    payload = json.dumps({"question": question}).encode()
+    # Build Q&A history from per-chat buffer (last cfg.conversation_turns pairs)
+    raw_history = context.chat_data.get("qa_history", [])
+    turns = cfg.conversation_turns
+    conv_history = [
+        {"question": h["question"], "answer": h["answer"]}
+        for h in raw_history[-turns:]
+    ]
+    payload = json.dumps({
+        "question": question,
+        "conversation_history": conv_history,
+        "session_id": f"telegram-{update.effective_chat.id}",
+    }).encode()
     req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=60) as resp:
@@ -341,6 +352,8 @@ async def _do_recall(update, context, question: str) -> None:
 
         _append_history(context, "user", question)
         _append_history(context, "assistant", clean)
+        # Q&A buffer for multi-turn reformulation (keyed separately from role history)
+        context.chat_data.setdefault("qa_history", []).append({"question": question, "answer": clean})
 
         # Milestone moment — prepend once per milestone day, once per session
         streak, _, atom_count = _get_streak_info()
