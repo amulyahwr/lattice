@@ -38,6 +38,10 @@ class _SupersessionResult(BaseModel):
     superseded_atom_id: str | None
 
 
+class _SupersessionMultiResult(BaseModel):
+    superseded_atom_ids: list[str]
+
+
 _SYSTEM = """\
 OUTPUT: Respond with ONLY a JSON object. No prose, no markdown, no explanation. \
 Do not answer questions in the text. Do not continue any conversation. Extract atoms only.
@@ -279,8 +283,9 @@ Return a JSON object: {"superseded_atom_id": "<atom_id>"} if superseded, or {"su
 _SUPERSESSION_MULTI_SYSTEM = """\
 You are deciding whether a new fact supersedes any of the existing facts listed below. \
 Supersession means the new fact contradicts or replaces an old one — not merely adds to it.
-Return a JSON object: {"superseded_atom_id": "<atom_id>"} for the one superseded fact, \
-or {"superseded_atom_id": null} if none are superseded.
+A new fact may supersede multiple existing facts (e.g. a new phone number replaces all prior phone number atoms).
+Return a JSON object: {"superseded_atom_ids": ["<atom_id>", ...]} listing ALL superseded atom IDs, \
+or {"superseded_atom_ids": []} if none are superseded.
 """
 
 
@@ -551,39 +556,75 @@ def extract_atoms(
     return atoms_data
 
 
-def detect_supersession(db: LatticeDB, new_atom: Atom, cfg: "Config") -> str | None:
-    """Stage 3: decide if new_atom supersedes an existing atom. Returns old atom_id or None."""
-    # Fast path: subject registry
+_EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
+_PHONE_KEYWORDS = frozenset({"phone", "mobile", "cell", "tel", "number"})
+
+
+def _pii_content_type(content: str) -> str | None:
+    """Return 'email' or 'phone' if the atom content is primarily a PII value, else None."""
+    if _EMAIL_RE.search(content):
+        return "email"
+    c_lower = content.lower()
+    if any(kw in c_lower for kw in _PHONE_KEYWORDS):
+        # Strip separators and check for 7+ consecutive digits (phone-length)
+        digits = re.sub(r"[^\d]", "", content)
+        if len(digits) >= 7:
+            return "phone"
+    return None
+
+
+def _pii_supersession(new_atom: Atom, existing: list[Atom]) -> list[str]:
+    """Deterministic supersession for PII atoms — no LLM, no cloud call.
+
+    If the new atom contains a phone number or email, supersede all existing
+    atoms of the same PII type for the same subject. Avoids sending PII to LLM.
+    """
+    new_type = _pii_content_type(new_atom.content)
+    if not new_type:
+        return []
+    return [a.atom_id for a in existing if _pii_content_type(a.content) == new_type]
+
+
+def detect_supersession(db: LatticeDB, new_atom: Atom, cfg: "Config") -> list[str]:
+    """Stage 3: decide if new_atom supersedes existing atoms. Returns list of old atom_ids."""
+    # PII fast path: phone/email atoms are superseded deterministically — no LLM, no PII leakage.
+    all_for_subject_early = [a for a in db.by_subject(new_atom.subject) if not a.is_superseded]
+    pii_ids = _pii_supersession(new_atom, all_for_subject_early)
+    if pii_ids:
+        return pii_ids
+
+    # LLM path: subject registry gives one candidate.
+    # Only use it directly when the subject has exactly one non-superseded atom.
+    # For broad subjects (many atoms per subject), the registry points to an arbitrary atom
+    # and the LLM comparison misses the topically relevant one — fall through to slow path.
     existing_id = db.lookup_subject(new_atom.subject)
     if existing_id:
-        try:
-            existing = db.read(existing_id)
-            if existing.is_superseded:
-                return None
-        except Exception:
-            return None
+        all_for_subject = all_for_subject_early  # already fetched above
+        if len(all_for_subject) == 1:
+            existing = all_for_subject[0]
+            messages = [
+                {"role": "system", "content": _SUPERSESSION_SYSTEM},
+                {
+                    "role": "user",
+                    "content": (
+                        f"New fact: {new_atom.content}\n\n"
+                        f"Existing fact [{existing_id}]: {existing.content}"
+                    ),
+                },
+            ]
+            raw = complete(messages, cfg, text_format=_SupersessionResult, model=cfg.ingest_model)
+            try:
+                superseded_id = json.loads(_extract_json(raw)).get("superseded_atom_id")
+            except (json.JSONDecodeError, AttributeError):
+                return []
+            if not superseded_id or superseded_id != existing_id:
+                return []
+            return [existing_id]
+        # Multiple candidates — fall through to slow path with word-overlap pre-filter.
 
-        messages = [
-            {"role": "system", "content": _SUPERSESSION_SYSTEM},
-            {
-                "role": "user",
-                "content": (
-                    f"New fact: {new_atom.content}\n\n"
-                    f"Existing fact [{existing_id}]: {existing.content}"
-                ),
-            },
-        ]
-        raw = complete(messages, cfg, text_format=_SupersessionResult, model=cfg.ingest_model)
-        try:
-            superseded_id = json.loads(_extract_json(raw)).get("superseded_atom_id")
-        except (json.JSONDecodeError, AttributeError):
-            return None
-        if not superseded_id:
-            return None
-        return existing_id if superseded_id == existing_id else None
-
-    # Slow path: scan by subject (handles hand-edited atoms)
-    existing = [a for a in db.by_subject(new_atom.subject) if not a.is_superseded]
+    # Slow path: scan by subject; pre-filter by content-word overlap to narrow to
+    # topically relevant candidates before sending to LLM.
+    existing = all_for_subject_early  # reuse — already fetched at top of function
     if not existing:
         # Fuzzy path: find semantically similar subjects via token overlap
         fuzzy_ids = db.fuzzy_subject_candidates(new_atom.subject, cfg.subject_fuzzy_threshold)
@@ -596,8 +637,18 @@ def detect_supersession(db: LatticeDB, new_atom: Atom, cfg: "Config") -> str | N
             except Exception:
                 pass
         if not fuzzy_candidates:
-            return None
+            return []
         existing = fuzzy_candidates
+
+    # Narrow to candidates with content-word overlap — avoids sending unrelated atoms to LLM.
+    if len(existing) > 1:
+        import re as _re
+        def _cwords(t: str) -> set[str]:
+            return {w for w in _re.sub(r"[^\w]", " ", t.lower()).split() if len(w) > 3}
+        new_words = _cwords(new_atom.content)
+        overlap = [a for a in existing if new_words & _cwords(a.content)]
+        if overlap:
+            existing = overlap
 
     candidates_text = "\n".join(f"[{a.atom_id}] {a.content}" for a in existing)
     messages = [
@@ -610,15 +661,15 @@ def detect_supersession(db: LatticeDB, new_atom: Atom, cfg: "Config") -> str | N
             ),
         },
     ]
-    raw = complete(messages, cfg, text_format=_SupersessionResult, model=cfg.ingest_model)
+    raw = complete(messages, cfg, text_format=_SupersessionMultiResult, model=cfg.ingest_model)
     try:
-        superseded_id = json.loads(_extract_json(raw)).get("superseded_atom_id")
+        superseded_ids = json.loads(_extract_json(raw)).get("superseded_atom_ids", [])
     except (json.JSONDecodeError, AttributeError):
-        return None
-    if not superseded_id:
-        return None
+        return []
+    if not superseded_ids:
+        return []
     valid_ids = {a.atom_id for a in existing}
-    return superseded_id if superseded_id in valid_ids else None
+    return [sid for sid in superseded_ids if sid in valid_ids]
 
 
 def persist_atoms(
@@ -667,9 +718,13 @@ def persist_atoms(
                 metadata=meta,
             )
 
-            old_id = detect_supersession(db, atom, cfg)
-            if old_id:
-                db.supersede(old_id, atom)
+            # Auto-saved chat history records context, not authoritative updates —
+            # skip supersession to prevent stale Q&A content from overwriting captures.
+            is_auto_save = atom.metadata.get("channel") == "auto_save"
+            old_ids = [] if is_auto_save else detect_supersession(db, atom, cfg)
+            if old_ids:
+                for old_id in old_ids:
+                    db.supersede(old_id, atom)
                 updated_ids.append(atom.atom_id)
             else:
                 db.write(atom)

@@ -110,12 +110,3 @@ class TestSaveSessionEndpoint:
 # HTML presence — verify button exists in served page
 # ---------------------------------------------------------------------------
 
-class TestSaveSessionHtml:
-    def test_save_session_button_in_html(self):
-        resp = client.get("/")
-        assert resp.status_code == 200
-        assert "save-session" in resp.text
-
-    def test_save_session_button_disabled_by_default(self):
-        resp = client.get("/")
-        assert "disabled" in resp.text

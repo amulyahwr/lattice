@@ -1,97 +1,12 @@
 """Tests for STORY-018 (Telegram bot), STORY-024 (/ask recall), STORY-025 (/save session),
-inbox drain (_drain_inbox), intent classifier (_classify), _notify_telegram."""
+inbox drain (_drain_inbox), _notify_telegram."""
 from __future__ import annotations
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from lattice.telegram_bot import _classify, _inbox_fallback
-
-
-# ---------------------------------------------------------------------------
-# Intent classifier — _classify
-# ---------------------------------------------------------------------------
-
-class TestClassify:
-    # --- recall signals ---
-    def test_question_mark_is_recall(self):
-        assert _classify("what do I prefer for coffee?") == "recall"
-
-    def test_question_word_what(self):
-        assert _classify("What is my gym routine") == "recall"
-
-    def test_question_word_how(self):
-        assert _classify("how often do I go to the gym") == "recall"
-
-    def test_question_word_when(self):
-        assert _classify("when did I buy the car") == "recall"
-
-    def test_question_word_remind(self):
-        assert _classify("remind me about the project deadline") == "recall"
-
-    def test_question_word_show(self):
-        assert _classify("show me what I know about coffee") == "recall"
-
-    def test_recall_phrase_remind_me(self):
-        assert _classify("can you remind me what do I prefer") == "recall"
-
-    def test_recall_phrase_tell_me_about(self):
-        assert _classify("tell me about my travel plans") == "recall"
-
-    def test_recall_phrase_what_do_i(self):
-        assert _classify("what do I usually have for breakfast") == "recall"
-
-    def test_recall_phrase_have_i(self):
-        assert _classify("have I been to Japan before") == "recall"
-
-    # --- capture signals ---
-    def test_i_prefix_is_capture(self):
-        assert _classify("I prefer dark coffee") == "capture"
-
-    def test_i_decided(self):
-        assert _classify("I decided to use Postgres") == "capture"
-
-    def test_i_bought(self):
-        assert _classify("I bought a new bike today") == "capture"
-
-    def test_just_prefix(self):
-        assert _classify("just finished the meeting") == "capture"
-
-    def test_decided_prefix(self):
-        assert _classify("decided to postpone the launch") == "capture"
-
-    def test_note_prefix(self):
-        assert _classify("note: remember to call Alex") == "capture"
-
-    def test_fyi_prefix(self):
-        assert _classify("fyi: the build is broken") == "capture"
-
-    # --- ambiguous / unclear ---
-    def test_single_word_is_unclear(self):
-        assert _classify("coffee") == "unclear"
-
-    def test_topic_phrase_is_unclear(self):
-        assert _classify("the gym") == "unclear"
-
-    def test_uncertain_statement_is_unclear(self):
-        assert _classify("not sure about this") == "unclear"
-
-    def test_empty_string_is_unclear(self):
-        assert _classify("") == "unclear"
-
-    def test_whitespace_only_is_unclear(self):
-        assert _classify("   ") == "unclear"
-
-    # --- case insensitivity ---
-    def test_uppercase_question_word(self):
-        assert _classify("WHAT is my preference") == "recall"
-
-    def test_uppercase_capture(self):
-        assert _classify("I PREFER dark mode") == "capture"
-
-    def test_mixed_case_phrase(self):
-        assert _classify("Remind Me about the trip") == "recall"
+from lattice.telegram_bot import _inbox_fallback
 
 
 # ---------------------------------------------------------------------------
@@ -290,8 +205,10 @@ class TestHandleMessage:
         from lattice.telegram_bot import _handle_message
         update = _make_update("I prefer dark coffee")
         ctx = _make_context()
-        with patch("lattice.client.DaemonClient") as mock_cls:
-            mock_cls.return_value.ingest.return_value = ["a1"]
+        with patch("lattice.conversation.classify_intent", return_value="capture"), \
+             patch("lattice.conversation.reformulate_capture", return_value="I prefer dark coffee"), \
+             patch("lattice.client.DaemonClient") as mock_cls:
+            mock_cls.return_value.ingest_full.return_value = {"atoms_new": 1, "atoms_updated": 0, "atom_ids": ["a1"]}
             run(_handle_message(update, ctx))
         reply = update.message.reply_text.call_args[0][0]
         assert "Saved" in reply
@@ -300,8 +217,10 @@ class TestHandleMessage:
         from lattice.telegram_bot import _handle_message
         update = _make_update("I prefer dark coffee")
         ctx = _make_context()
-        with patch("lattice.client.DaemonClient") as mock_cls:
-            mock_cls.return_value.ingest.return_value = ["a1"]
+        with patch("lattice.conversation.classify_intent", return_value="capture"), \
+             patch("lattice.conversation.reformulate_capture", return_value="I prefer dark coffee"), \
+             patch("lattice.client.DaemonClient") as mock_cls:
+            mock_cls.return_value.ingest_full.return_value = {"atoms_new": 1, "atoms_updated": 0, "atom_ids": ["a1"]}
             run(_handle_message(update, ctx))
         assert any(h["text"] == "I prefer dark coffee" for h in ctx.chat_data.get("history", []))
 
@@ -332,38 +251,6 @@ class TestHandleMessage:
         assert "user" in roles
         assert "assistant" in roles
 
-    def test_unclear_intent_asks_clarification(self):
-        from lattice.telegram_bot import _handle_message
-        update = _make_update("coffee")
-        ctx = _make_context()
-        run(_handle_message(update, ctx))
-        reply = update.message.reply_text.call_args[0][0]
-        assert "save" in reply.lower() or "ask" in reply.lower()
-        assert ctx.chat_data.get("pending_text") == "coffee"
-
-    def test_save_reply_to_clarification(self):
-        from lattice.telegram_bot import _handle_message
-        ctx = _make_context({"pending_text": "coffee thoughts"})
-        update = _make_update("save")
-        with patch("lattice.client.DaemonClient") as mock_cls:
-            mock_cls.return_value.ingest_full.return_value = {"atoms_new": 1, "atoms_updated": 0, "atom_ids": ["a1"]}
-            run(_handle_message(update, ctx))
-        assert "pending_text" not in ctx.chat_data
-        reply = update.message.reply_text.call_args[0][0]
-        assert "Saved" in reply
-
-    def test_ask_reply_to_clarification(self):
-        from lattice.telegram_bot import _handle_message
-        ctx = _make_context({"pending_text": "coffee"})
-        update = _make_update("ask")
-        mock_resp = MagicMock()
-        mock_resp.read.return_value = b'{"ok": true, "answer": "You prefer dark coffee.", "atom_count": 1}'
-        mock_resp.__enter__ = lambda s: s
-        mock_resp.__exit__ = MagicMock(return_value=False)
-        with patch("urllib.request.urlopen", return_value=mock_resp):
-            run(_handle_message(update, ctx))
-        assert "pending_text" not in ctx.chat_data
-
     # --- negative / edge ---
     def test_daemon_down_writes_inbox(self, tmp_path, monkeypatch):
         from lattice.telegram_bot import _handle_message
@@ -371,7 +258,9 @@ class TestHandleMessage:
         monkeypatch.setenv("LATTICE_INBOX", str(tmp_path / "inbox"))
         update = _make_update("I prefer dark coffee", chat_id=555)
         ctx = _make_context()
-        with patch("lattice.client.DaemonClient") as mock_cls:
+        with patch("lattice.conversation.classify_intent", return_value="capture"), \
+             patch("lattice.conversation.reformulate_capture", return_value="I prefer dark coffee"), \
+             patch("lattice.client.DaemonClient") as mock_cls:
             mock_cls.return_value.ingest_full.side_effect = OSError("no socket")
             run(_handle_message(update, ctx))
         files = list((tmp_path / "inbox").glob("telegram-555-*.txt"))
@@ -396,21 +285,13 @@ class TestHandleMessage:
             mock_cls.return_value.ingest_full.assert_not_called()
         update.message.reply_text.assert_not_called()
 
-    def test_new_message_drops_stale_pending(self):
-        """If user sends a new message while clarification pending, pending is dropped."""
-        from lattice.telegram_bot import _handle_message
-        ctx = _make_context({"pending_text": "old unclear thing"})
-        update = _make_update("I bought a new bike")  # clear capture
-        with patch("lattice.client.DaemonClient") as mock_cls:
-            mock_cls.return_value.ingest_full.return_value = {"atoms_new": 1, "atoms_updated": 0, "atom_ids": ["a1"]}
-            run(_handle_message(update, ctx))
-        assert "pending_text" not in ctx.chat_data
-
     def test_zero_atoms_returns_already_known_message(self):
         from lattice.telegram_bot import _handle_message
         update = _make_update("I prefer dark coffee")
         ctx = _make_context()
-        with patch("lattice.client.DaemonClient") as mock_cls:
+        with patch("lattice.conversation.classify_intent", return_value="capture"), \
+             patch("lattice.conversation.reformulate_capture", return_value="I prefer dark coffee"), \
+             patch("lattice.client.DaemonClient") as mock_cls:
             mock_cls.return_value.ingest_full.return_value = {"atoms_new": 0, "atoms_updated": 0, "atom_ids": []}
             run(_handle_message(update, ctx))
         reply = update.message.reply_text.call_args[0][0]

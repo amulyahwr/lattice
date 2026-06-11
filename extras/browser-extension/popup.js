@@ -23,3 +23,11 @@ fetch("http://localhost:7337/api/usage/summary")
     if (d.atom_count != null) countEl.textContent = `${d.atom_count} memories stored`;
   })
   .catch(() => {});
+
+const autoSaveEl = document.getElementById("auto-save-status");
+fetch("http://localhost:7337/api/auto-save/status")
+  .then((r) => r.json())
+  .then((d) => {
+    if (d.running) autoSaveEl.style.display = "block";
+  })
+  .catch(() => {});

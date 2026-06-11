@@ -8,8 +8,39 @@ def lc() -> None:
     if len(sys.argv) < 2:
         print("Usage: lc <text>", file=sys.stderr)
         print("       lc status", file=sys.stderr)
+        print("       lc clear", file=sys.stderr)
         print("Example: lc \"decided to use Postgres for the new service\"", file=sys.stderr)
         sys.exit(1)
+
+    if sys.argv[1] == "clear":
+        from lattice.config import Config
+        import json as _json
+        from datetime import datetime as _dt, timezone as _tz
+        from lattice.util import write_file_atomic
+        cfg = Config.from_env()
+        chat_path = cfg.lattice_dir / "chat.jsonl"
+        if not chat_path.exists():
+            print("Nothing to clear.")
+            return
+        today = _dt.now(_tz.utc).date().isoformat()
+        kept = []
+        removed = 0
+        with chat_path.open(encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    r = _json.loads(line)
+                    if r.get("ts", "")[:10] == today:
+                        removed += 1
+                    else:
+                        kept.append(line)
+                except Exception:
+                    kept.append(line)
+        write_file_atomic(chat_path, ("\n".join(kept) + "\n") if kept else "")
+        print(f"Today's journey cleared ({removed} turn{'s' if removed != 1 else ''} removed).")
+        return
 
     if sys.argv[1] == "status":
         from lattice.config import Config
@@ -35,6 +66,33 @@ def lc() -> None:
         msg = (f"Two weeks of asking and remembering. You have {count} things stored — this is becoming real." if streak == 14 else _MILESTONES.get(streak))
         if msg:
             print(msg)
+
+        # Today's journey — same grouping logic as web UI + Telegram
+        try:
+            import json as _json
+            from datetime import datetime as _dt, timezone as _tz
+            from lattice.telegram_bot import _build_journey_text as _bjt
+            chat_path = cfg.lattice_dir / "chat.jsonl"
+            if chat_path.exists():
+                today = _dt.now(_tz.utc).date().isoformat()
+                today_turns = []
+                with chat_path.open(encoding="utf-8") as _f:
+                    for _line in _f:
+                        _line = _line.strip()
+                        if not _line:
+                            continue
+                        try:
+                            _r = _json.loads(_line)
+                        except Exception:
+                            continue
+                        if _r.get("ts", "")[:10] == today:
+                            today_turns.append(_r)
+                if today_turns:
+                    _tree = _bjt(today_turns)
+                    if _tree:
+                        print(f"Today's journey:\n{_tree}")
+        except Exception:
+            pass
         return
 
     arg = " ".join(sys.argv[1:])

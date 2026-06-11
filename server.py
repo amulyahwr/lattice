@@ -317,7 +317,40 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[TextContent]:
         except Exception:
             pass
 
-        return [TextContent(type="text", text=result.answer)]
+        # BFS-derived related subjects for follow-on exploration
+        related_subjects: list[str] = []
+        try:
+            cited_subjects = list(dict.fromkeys(a.get("subject", "") for a in atoms if a.get("subject")))
+            if cited_subjects:
+                cited_ids = {a.get("atom_id", "") for a in atoms if a.get("atom_id")}
+                input_norms = {s.lower().strip() for s in cited_subjects}
+                seed_nodes = [f"atom:{aid}" for aid in cited_ids]
+                expanded = _db.graph.bfs_expand(seed_nodes, max_depth=2, max_nodes=200)
+                counts: dict[str, int] = {}
+                for node in expanded:
+                    if not node.startswith("atom:"):
+                        continue
+                    aid = node[5:]
+                    if aid in cited_ids:
+                        continue
+                    try:
+                        a = _db.read(aid)
+                        if a.is_superseded or not a.subject:
+                            continue
+                        norm = a.subject.lower().strip()
+                        if norm in input_norms:
+                            continue
+                        counts[a.subject] = counts.get(a.subject, 0) + 1
+                    except Exception:
+                        continue
+                related_subjects = sorted(counts, key=lambda s: counts[s], reverse=True)[:3]
+        except Exception:
+            pass
+
+        payload = {"answer": result.answer}
+        if related_subjects:
+            payload["related_subjects"] = related_subjects
+        return [TextContent(type="text", text=json.dumps(payload))]
 
     if name == "lattice_status":
         _db.preload_if_stale()

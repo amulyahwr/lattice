@@ -1,4 +1,4 @@
-"""Tests for STORY-029 — Memory Sparks."""
+"""Tests for STORY-029 — Memory Sparks (now: journey tree + /start)."""
 from __future__ import annotations
 
 import asyncio
@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from lattice.telegram_bot import _spark_question
+from lattice.telegram_bot import _build_journey_text
 
 
 def run(coro):
@@ -38,104 +38,86 @@ def _make_context():
 
 
 # ---------------------------------------------------------------------------
-# _spark_question — question generation
+# _build_journey_text — cross-channel journey tree
 # ---------------------------------------------------------------------------
 
-class TestSparkQuestion:
-    # --- positive ---
-    def test_decision_kind(self):
-        atom = _make_atom("postgres", kind="decision")
-        assert _spark_question(atom) == "What did I decide about postgres?"
+class TestBuildJourneyText:
+    def test_groups_by_query_topic(self):
+        turns = [
+            {"question": "Tell me about Topic A", "query_topic": "Topic A", "subjects": ["unrelated subject"]},
+            {"question": "what is its detail?", "subjects": [], "context_reset": False},
+        ]
+        text = _build_journey_text(turns)
+        assert "● Topic A" in text
+        assert "Tell me about Topic A" in text
 
-    def test_preference_kind(self):
-        atom = _make_atom("coffee", kind="preference")
-        assert _spark_question(atom) == "What do I prefer about coffee?"
+    def test_empty_turns_returns_empty(self):
+        assert _build_journey_text([]) == ""
 
-    def test_fact_kind_uses_tell_me(self):
-        atom = _make_atom("travel", kind="fact")
-        assert _spark_question(atom) == "Tell me about travel"
+    def test_turns_without_topic_or_subject_skipped(self):
+        turns = [{"question": "why?", "subjects": []}]
+        assert _build_journey_text(turns) == ""
 
-    def test_unknown_kind_uses_tell_me(self):
-        atom = _make_atom("books", kind="goal")
-        assert _spark_question(atom) == "Tell me about books"
+    def test_falls_back_to_subjects_when_no_query_topic(self):
+        turns = [{"question": "how about connections?", "subjects": ["Postgres"]}]
+        text = _build_journey_text(turns)
+        assert "● Postgres" in text
 
-    # --- edge ---
-    def test_no_subject_falls_back_to_that(self):
-        atom = _make_atom(None, kind="preference")
-        assert _spark_question(atom) == "What do I prefer about that?"
+    def test_multiple_branches(self):
+        turns = [
+            {"question": "Tell me about Mars", "query_topic": "Mars", "subjects": []},
+            {"question": "Tell me about Jupiter", "query_topic": "Jupiter", "subjects": []},
+        ]
+        text = _build_journey_text(turns)
+        assert "● Mars" in text
+        assert "● Jupiter" in text
 
-    def test_empty_subject_falls_back_to_that(self):
-        atom = _make_atom("", kind="decision")
-        assert _spark_question(atom) == "What did I decide about that?"
+    def test_followup_uses_context_reset_flag(self):
+        turns = [
+            {"question": "Tell me about Topic B", "query_topic": "Topic B", "subjects": [], "context_reset": True},
+            {"question": "what is its detail?", "subjects": [], "context_reset": False},
+        ]
+        text = _build_journey_text(turns)
+        assert "● Topic B" in text
+        assert text.count("●") == 1, "follow-up should not create a new branch"
+        assert "what is its detail?" in text
+
+    def test_possessive_folds_into_existing_branch(self):
+        turns = [
+            {"question": "Tell me about Alpha", "query_topic": "Alpha", "subjects": [], "context_reset": True},
+            {"question": "What is Alphas' detail?", "query_topic": "Alpha", "subjects": [], "context_reset": True},
+        ]
+        text = _build_journey_text(turns)
+        assert "● Alpha" in text
+        assert text.count("●") == 1, "possessive overlap should fold into existing branch"
+
+    def test_context_reset_true_starts_new_branch(self):
+        turns = [
+            {"question": "Tell me about Topic C", "query_topic": "Topic C", "subjects": [], "context_reset": True},
+            {"question": "Tell me about Topic D", "query_topic": "Topic D", "subjects": [], "context_reset": True},
+        ]
+        text = _build_journey_text(turns)
+        assert "● Topic C" in text
+        assert "● Topic D" in text
+        assert text.count("●") == 2
 
 
 # ---------------------------------------------------------------------------
-# Telegram /start — with atoms
+# Telegram /start — no atom suggestions, just commands
 # ---------------------------------------------------------------------------
-
-def _patch_db(atoms):
-    """Patch LatticeDB at source so lazy imports in telegram_bot and cli pick it up."""
-    mock_db = MagicMock()
-    mock_db.all.return_value = atoms
-    mock_db_cls = MagicMock(return_value=mock_db)
-    return patch("lattice.db.LatticeDB", mock_db_cls)
-
 
 class TestTelegramStart:
-    # --- positive ---
-    def test_start_with_atoms_shows_suggestions(self):
-        from lattice.telegram_bot import _handle_start
-        update = _make_update()
-        ctx = _make_context()
-        atoms = [
-            _make_atom("coffee", "preference"),
-            _make_atom("postgres", "decision"),
-            _make_atom("travel", "fact"),
-        ]
-        with patch("lattice.telegram_bot._is_allowed", return_value=True):
-            with _patch_db(atoms):
-                run(_handle_start(update, ctx))
-        reply = update.message.reply_text.call_args[0][0]
-        assert "coffee" in reply or "postgres" in reply or "travel" in reply
-
-    def test_start_with_atoms_shows_at_most_3_suggestions(self):
-        from lattice.telegram_bot import _handle_start
-        update = _make_update()
-        ctx = _make_context()
-        atoms = [_make_atom(f"topic{i}", "fact") for i in range(6)]
-        with patch("lattice.telegram_bot._is_allowed", return_value=True):
-            with _patch_db(atoms):
-                run(_handle_start(update, ctx))
-        reply = update.message.reply_text.call_args[0][0]
-        # Count "Tell me about" occurrences — should be exactly 3
-        assert reply.count("Tell me about") == 3
-
-    def test_start_without_atoms_shows_empty_message(self):
+    def test_start_shows_commands(self):
         from lattice.telegram_bot import _handle_start
         update = _make_update()
         ctx = _make_context()
         with patch("lattice.telegram_bot._is_allowed", return_value=True):
-            with _patch_db([]):
-                run(_handle_start(update, ctx))
+            run(_handle_start(update, ctx))
         reply = update.message.reply_text.call_args[0][0]
-        assert "what's on your mind" in reply.lower() or "good to have you" in reply.lower()
+        assert "/ask" in reply
+        assert "/journey" in reply
+        assert "/status" in reply
 
-    def test_start_excludes_superseded_atoms(self):
-        from lattice.telegram_bot import _handle_start
-        update = _make_update()
-        ctx = _make_context()
-        atoms = [
-            _make_atom("coffee", "preference", is_superseded=True),
-            _make_atom("hiking", "fact", is_superseded=False),
-        ]
-        with patch("lattice.telegram_bot._is_allowed", return_value=True):
-            with _patch_db(atoms):
-                run(_handle_start(update, ctx))
-        reply = update.message.reply_text.call_args[0][0]
-        assert "hiking" in reply
-        assert "coffee" not in reply
-
-    # --- negative ---
     def test_start_not_allowed_sends_nothing(self):
         from lattice.telegram_bot import _handle_start
         update = _make_update(user_id=999)
@@ -143,18 +125,6 @@ class TestTelegramStart:
         with patch("lattice.telegram_bot._is_allowed", return_value=False):
             run(_handle_start(update, ctx))
         update.message.reply_text.assert_not_called()
-
-    # --- edge ---
-    def test_start_with_one_atom_shows_one_suggestion(self):
-        from lattice.telegram_bot import _handle_start
-        update = _make_update()
-        ctx = _make_context()
-        atoms = [_make_atom("sleep", "preference")]
-        with patch("lattice.telegram_bot._is_allowed", return_value=True):
-            with _patch_db(atoms):
-                run(_handle_start(update, ctx))
-        reply = update.message.reply_text.call_args[0][0]
-        assert "sleep" in reply
 
 
 # ---------------------------------------------------------------------------

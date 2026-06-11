@@ -117,6 +117,46 @@ def _source_diversity(seeds: list[Atom]) -> int:
     return len({a.source_id for a in seeds if a.source_id})
 
 
+_FILE_SOURCE_PREFIXES = frozenset({"pdf:", "docx:", "pptx:", "xlsx:", "xls:", "md:", "txt:"})
+
+
+def _top_source_is_file(seeds: list[Atom]) -> bool:
+    """True when the most common source_id is a file-based source (pdf:, docx:, etc.).
+
+    This distinguishes two-CV-style bugs (file sources, different people) from
+    LongMemEval multi-session queries (UUID session IDs, same person). The dominance
+    check must only fire for file sources — applying it to UUID sessions causes
+    multi-session accuracy loss (same failure mode as p39, reverted).
+    """
+    counts: dict[str, int] = {}
+    for a in seeds:
+        if a.source_id:
+            counts[a.source_id] = counts.get(a.source_id, 0) + 1
+    if not counts:
+        return False
+    top = max(counts, key=counts.__getitem__)
+    return any(top.startswith(p) for p in _FILE_SOURCE_PREFIXES)
+
+
+def _source_dominance(seeds: list[Atom]) -> float:
+    """Fraction of seeds from the single most common source_id.
+
+    Catches queries like 'What did Shivika study?' where BM25 returns atoms
+    from two CVs (shared subject 'education') — diversity=2 but one source
+    dominates. Those queries should stay POINTED.
+    Only meaningful when _top_source_is_file() is True.
+    """
+    if not seeds:
+        return 0.0
+    counts: dict[str, int] = {}
+    for a in seeds:
+        if a.source_id:
+            counts[a.source_id] = counts.get(a.source_id, 0) + 1
+    if not counts:
+        return 0.0
+    return max(counts.values()) / len(seeds)
+
+
 def _retrieve(
     query: str,
     db: LatticeDB,
@@ -182,7 +222,12 @@ def _retrieve(
                 )
 
     probe = seeds[:_PROBE_K]
-    if _source_diversity(probe) <= 1:
+    diversity = _source_diversity(probe)
+    # M21: file-source dominance check — only for file-based sources (pdf:, docx:, etc.)
+    # UUID session sources (LongMemEval, chat sessions) bypass this to avoid multi-session regression.
+    if diversity <= 1 or (
+        _top_source_is_file(probe) and _source_dominance(probe) >= cfg.pointed_dominance
+    ):
         active_seeds, max_atoms = probe, _POINTED_MAX
     else:
         active_seeds, max_atoms = seeds, _BFS_MAX_ATOMS
@@ -256,6 +301,9 @@ def _graph_select(
 
         result.append(atom)
 
+    # Strip superseded atoms from the final pack — they are included by evidence_pack
+    # for provenance context but must not reach synthesis (would cause LLM to cite stale facts).
+    result = [a for a in result if not a.is_superseded]
     return [_atom_to_dict(a) for a in result]
 
 
@@ -275,6 +323,7 @@ def _fallback_select(
             seen.add(atom.atom_id)
             if len(selected) >= max_atoms:
                 return [_atom_to_dict(a) for a in selected]
+    selected = [a for a in selected if not a.is_superseded]
     return [_atom_to_dict(a) for a in selected]
 
 

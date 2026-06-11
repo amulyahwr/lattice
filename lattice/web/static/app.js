@@ -24,9 +24,10 @@ const MAX_HISTORY = 6;
 let atomsById          = {};
 let atomNumMap         = {};
 let busy               = false;
-let sessionQA          = []; // {question, answer} pairs accumulated this session (for Save Session)
+let sessionQA          = []; // {question, answer} pairs this session (kept for compat, auto-save owns persistence)
 let conversationHistory = []; // {question, answer} last N turns sent to /api/query for reformulation
 let lastActivityAt     = Date.now();
+let journeyBranches    = []; // [{subject, queries: [{question, timeMs}]}] — built from today's queries
 
 // Stable session ID per page session — persists across reloads, reset on new tab
 const sessionId = (() => {
@@ -44,17 +45,19 @@ const form           = document.getElementById('query-form');
 const input          = document.getElementById('question');
 const submitBtn      = document.getElementById('submit');
 const history        = document.getElementById('chat-history');
-const atomsList      = document.getElementById('atoms-list');
 const statusDot      = document.getElementById('status-dot');
 const statusLbl      = document.getElementById('status-label');
 const themeToggle    = document.getElementById('theme-toggle');
 const scrollBtn      = document.getElementById('scroll-btn');
-const memCount       = document.getElementById('memory-count');
 const greetingEl     = document.getElementById('greeting');
-const saveSessionBtn = document.getElementById('save-session');
 const streakBadge    = document.getElementById('streak-badge');
 const fileUpload     = document.getElementById('file-upload');
 const uploadProgress = document.getElementById('upload-progress');
+const openingStrip    = document.getElementById('opening-strip');
+const journeyPanel    = document.getElementById('journey-panel');
+const journeyTreeEl   = document.getElementById('journey-tree');
+const journeyClearBtn = document.getElementById('journey-clear');
+const autoSaveIndicator = document.getElementById('auto-save-indicator');
 
 // ── theme ─────────────────────────────────────────────────────────────────
 
@@ -409,166 +412,20 @@ async function checkDaemonStatus() {
   statusLbl.textContent = 'Daemon offline';
 }
 
-// ── recent atoms panel ────────────────────────────────────────────────────
-
-async function loadRecentAtoms() {
+async function checkAutoSaveStatus() {
   try {
-    const res = await fetch('/api/atoms/recent?limit=50');
+    const res = await fetch('/api/auto-save/status', { signal: AbortSignal.timeout(2000) });
     if (!res.ok) return;
-    const atoms = await res.json();
-    renderAtomsList(atoms);
-    if (memCount) memCount.textContent = atoms.length ? `· ${atoms.length}` : '';
-    initSparks(atoms);
-  } catch (_) {}
+    const { running } = await res.json();
+    autoSaveIndicator.style.display = running ? 'inline-flex' : 'none';
+  } catch (_) {
+    autoSaveIndicator.style.display = 'none';
+  }
 }
 
-function renderAtomsList(atoms) {
-  if (!atoms.length) {
-    atomsList.innerHTML = `
-      <div class="atoms-empty">
-        No memories yet.<br>Drop a file into<br><code>~/.lattice/inbox/</code>
-      </div>`;
-    return;
-  }
+// ── clear sparks on conversation start ────────────────────────────────────
 
-  // Group by kind, preserving recency order within each group
-  const kindOrder = ['preference', 'decision', 'fact', 'goal', 'event', 'habit', 'reminder', 'count'];
-  const groups = {};
-  for (const a of atoms) {
-    const k = a.kind || 'fact';
-    if (!groups[k]) groups[k] = [];
-    groups[k].push(a);
-  }
-
-  // Sort groups: known kinds first in defined order, then unknowns alphabetically
-  const sortedKinds = [
-    ...kindOrder.filter(k => groups[k]),
-    ...Object.keys(groups).filter(k => !kindOrder.includes(k)).sort(),
-  ];
-
-  // Preserve expanded state across re-renders
-  const expanded = new Set(
-    [...atomsList.querySelectorAll('.kind-group.open')].map(el => el.dataset.kind)
-  );
-
-  atomsList.innerHTML = sortedKinds.map(kind => {
-    const items = groups[kind];
-    const isOpen = expanded.size === 0 ? true : expanded.has(kind); // default all open on first render
-    const rows = items.map(a => `
-      <div class="atom-item">
-        <div class="atom-subject">${escHtml(a.subject || '(no subject)')}</div>
-        <div class="atom-time">${relativeTime(a.observed_at)}</div>
-      </div>`).join('');
-    return `
-      <div class="kind-group ${isOpen ? 'open' : ''}" data-kind="${escHtml(kind)}">
-        <button class="kind-header">
-          <span class="kind-icon" data-kind="${escHtml(kind)}">${kindIcon(kind)}</span>
-          <span class="kind-label">${escHtml(kind.charAt(0).toUpperCase() + kind.slice(1))}</span>
-          <span class="kind-count">${items.length}</span>
-          <span class="kind-arrow">▸</span>
-        </button>
-        <div class="kind-items">${rows}</div>
-      </div>`;
-  }).join('');
-
-  // Bind toggles
-  atomsList.querySelectorAll('.kind-header').forEach(btn => {
-    btn.addEventListener('click', () => {
-      btn.closest('.kind-group').classList.toggle('open');
-    });
-  });
-}
-
-// ── memory sparks ────────────────────────────────────────────────────────
-
-let _ghostInterval = null;
-
-function _sparkQuestion(atom) {
-  const s = atom.subject || 'that';
-  if (atom.kind === 'decision') return `What did I decide about ${s}?`;
-  if (atom.kind === 'preference') return `What do I prefer about ${s}?`;
-  return `Tell me about ${s}`;
-}
-
-function initSparks(atoms) {
-  // Only affect empty state — stop if a conversation is active
-  if (!history.querySelector('.empty-state')) return;
-
-  const emptyState = history.querySelector('.empty-state');
-  const existingSparks = emptyState.querySelector('.spark-cards');
-  if (existingSparks) existingSparks.remove();
-
-  if (!atoms.length) {
-    // True empty state — no cards, no ghost
-    input.setAttribute('placeholder', 'Ask your memory anything…');
-    if (_ghostInterval) { clearInterval(_ghostInterval); _ghostInterval = null; }
-    const emptyMsg = emptyState.querySelector('.empty-spark-msg');
-    if (!emptyMsg) {
-      const msg = document.createElement('p');
-      msg.className = 'empty-spark-msg';
-      msg.textContent = 'Your memory starts here. Save something worth keeping, then come back and ask about it.';
-      emptyState.appendChild(msg);
-    }
-    return;
-  }
-
-  // Remove true-empty message if atoms now exist
-  const emptyMsg = emptyState.querySelector('.empty-spark-msg');
-  if (emptyMsg) emptyMsg.remove();
-
-  // Warm welcome message — only inject once
-  if (!emptyState.querySelector('.spark-welcome')) {
-    const welcome = document.createElement('p');
-    welcome.className = 'spark-welcome';
-    welcome.textContent = 'What would you like to remember today?';
-    emptyState.appendChild(welcome);
-  }
-
-  // Ghost queries — cycle every 3s
-  const ghostQueries = atoms.slice(0, 4).map(_sparkQuestion);
-  let ghostIdx = 0;
-  input.setAttribute('placeholder', ghostQueries[0]);
-  if (_ghostInterval) clearInterval(_ghostInterval);
-  _ghostInterval = setInterval(() => {
-    ghostIdx = (ghostIdx + 1) % ghostQueries.length;
-    input.setAttribute('placeholder', ghostQueries[ghostIdx]);
-  }, 3000);
-
-  // Clicking placeholder area fills the input with the current ghost query
-  input.addEventListener('focus', () => {
-    if (!input.value) input.value = input.getAttribute('placeholder') === 'Ask anything…' ? '' : '';
-  }, { once: true });
-
-  // Spark cards — 3 cards from first 3 atoms
-  const cardAtoms = atoms.slice(0, 3);
-  const cards = cardAtoms.map(a => {
-    const q = _sparkQuestion(a);
-    const timeLabel = relativeTime(a.ingested_at || a.observed_at);
-    const icon = kindIcon(a.kind);
-    return `<button class="spark-card" data-question="${escHtml(q)}">
-      <span class="spark-icon">${icon}</span>
-      <span class="spark-question">${escHtml(q)}</span>
-      <span class="spark-time">${escHtml(timeLabel)}</span>
-    </button>`;
-  }).join('');
-
-  const wrap = document.createElement('div');
-  wrap.className = 'spark-cards';
-  wrap.innerHTML = cards;
-  emptyState.appendChild(wrap);
-
-  wrap.querySelectorAll('.spark-card').forEach(card => {
-    card.addEventListener('click', () => {
-      input.value = card.dataset.question;
-      input.focus();
-      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
-    });
-  });
-}
-
-// Hide sparks and ghost queries once conversation starts
 function clearSparks() {
-  if (_ghostInterval) { clearInterval(_ghostInterval); _ghostInterval = null; }
   input.setAttribute('placeholder', 'Ask anything…');
 }
 
@@ -619,6 +476,8 @@ function appendTurn(question) {
         </div>
       </div>
       <div class="error-msg" style="display:none"></div>
+      <div class="answer-annotations" style="display:none"></div>
+      <div class="curiosity-chips-row" style="display:none"></div>
     </div>`;
 
   const empty = history.querySelector('.empty-state');
@@ -633,30 +492,32 @@ function appendTurn(question) {
 // ── feedback ──────────────────────────────────────────────────────────────
 
 function bindFeedback(turn, question, answer, atomIds) {
-  const reasonsEl = turn.querySelector('.feedback-reasons');
+  const reasonsEl  = turn.querySelector('.feedback-reasons');
+  const feedbackRow = turn.querySelector('.feedback-row');
+
+  function _lockFeedback(msg) {
+    // Replace the row with a single quiet "Thanks" line — no repeated votes
+    feedbackRow.innerHTML = `<span class="feedback-label">${msg}</span>`;
+  }
 
   turn.querySelectorAll('.feedback-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
       const val = btn.dataset.val;
-      turn.querySelectorAll('.feedback-btn').forEach(b => b.classList.remove('active-up', 'active-down'));
-      btn.classList.add(val === 'up' ? 'active-up' : 'active-down');
       if (val === 'down') {
+        turn.querySelectorAll('.feedback-btn').forEach(b => b.classList.remove('active-up', 'active-down'));
+        btn.classList.add('active-down');
         reasonsEl.style.display = 'flex';
       } else {
-        reasonsEl.style.display = 'none';
-        turn.querySelector('.feedback-row .feedback-label').textContent = 'Thanks!';
         await postFeedback(question, answer, 'up', null, atomIds, turn._dismissedIds, turn._citationMap);
+        _lockFeedback('Thanks!');
       }
     });
   });
 
   turn.querySelectorAll('.reason-chip').forEach(chip => {
     chip.addEventListener('click', async () => {
-      turn.querySelectorAll('.reason-chip').forEach(c => c.classList.remove('active'));
-      chip.classList.add('active');
-      turn.querySelector('.feedback-row .feedback-label').textContent = 'Thanks for the feedback!';
-      reasonsEl.style.display = 'none';
       await postFeedback(question, answer, 'down', chip.dataset.reason, atomIds, turn._dismissedIds, turn._citationMap);
+      _lockFeedback('Thanks for the feedback!');
     });
   });
 }
@@ -691,12 +552,15 @@ async function ask(question) {
   const feedbackEl = turn.querySelector('.feedback-row');
   const errorEl    = turn.querySelector('.error-msg');
 
-  let rawAnswer = '';
-  let citIndex  = { byId: {}, ordered: [] };
-  let cursorEl  = null;
+  let rawAnswer     = '';
+  let citIndex      = { byId: {}, ordered: [] };
+  let cursorEl      = null;
+  let contextReset  = false;  // set from atoms event, used in citations_applied
+  let queryTopic    = null;   // server-computed topic label for journey tree
 
   const timer = startRing(turn);
 
+  _journeyPollActive = true;
   try {
     lastActivityAt = Date.now();
     const resp = await fetch('/api/query', {
@@ -728,7 +592,22 @@ async function ask(question) {
         if (!line.startsWith('data: ')) continue;
         const evt = JSON.parse(line.slice(6));
 
-        if (evt.type === 'atoms') {
+        if (evt.type === 'captured') {
+          if (cursorEl) cursorEl.remove();
+          stopRing(timer);
+          loading.style.display = 'none';
+          const n = (evt.atoms_new || 0) + (evt.atoms_updated || 0);
+          answerEl.textContent = n > 0
+            ? `Saved${evt.atoms_updated ? ' (updated)' : ''}. ${n} memor${n === 1 ? 'y' : 'ies'} stored.`
+            : 'Already in memory — nothing new to add.';
+          answerEl.style.display = 'block';
+          break;
+
+        } else if (evt.type === 'atoms') {
+          // Topic shift → silently reset multi-turn context
+          contextReset = evt.context_reset || false;
+          queryTopic   = evt.query_topic || null;
+          if (contextReset) conversationHistory = [];
           const count = (evt.atoms || []).length;
           labelEl.textContent = count
             ? `Found ${count} relevant memor${count === 1 ? 'y' : 'ies'}…`
@@ -808,14 +687,43 @@ async function ask(question) {
           bindCitationLinks(turn);
           bindSourcesToggle(turn);
           bindCopyBtn(turn, evt.answer);
-          loadRecentAtoms();
           loadUsageSummary({ checkMilestone: true });
           // Topic depth check for cited subjects
           const citedSubjects = [...new Set(citedAtoms.map(a => a.subject).filter(Boolean))];
-          if (citedSubjects.length) checkTopicDepth(citedSubjects);
           sessionQA.push({ question, answer: evt.answer });
           conversationHistory.push({ question, answer: evt.answer });
-          saveSessionBtn.disabled = false;
+
+          // Remove curiosity chips from previous turn (only show on most recent)
+          history.querySelectorAll('.curiosity-chips-row').forEach(el => {
+            if (el.closest('.turn') !== turn) { el.style.display = 'none'; el.innerHTML = ''; }
+          });
+
+          // Rediscovery timestamp — quiet annotation below answer
+          const annotationsEl = turn.querySelector('.answer-annotations');
+          const oldestDays = citedAtoms.reduce((mx, a) => {
+            const d = _atomAgeDays(a);
+            return (d != null && d > (mx ?? -1)) ? d : mx;
+          }, null);
+          if (oldestDays != null && oldestDays >= _REDISCOVERY_DAYS) {
+            const line = document.createElement('span');
+            line.className = 'answer-annotation rediscovery-note';
+            line.textContent = `You first saved this ${oldestDays} day${oldestDays === 1 ? '' : 's'} ago.`;
+            annotationsEl.appendChild(line);
+          }
+
+          // Topic depth inline note (replaces card)
+          _checkTopicDepthInline(citedSubjects, annotationsEl);
+
+          if (annotationsEl.children.length) annotationsEl.style.display = 'block';
+
+          // Curiosity chips
+          if (citedSubjects.length) {
+            const chipsEl = turn.querySelector('.curiosity-chips-row');
+            loadCuriosityChips(citedSubjects, chipsEl);
+          }
+
+          // Journey tree update
+          updateJourneyTree(question, citedSubjects, contextReset, queryTopic);
 
         } else if (evt.type === 'error') {
           if (cursorEl) cursorEl.remove();
@@ -832,6 +740,8 @@ async function ask(question) {
     loading.style.display = 'none';
     errorEl.textContent = err.message;
     errorEl.style.display = 'block';
+  } finally {
+    _journeyPollActive = false;
   }
 }
 
@@ -872,29 +782,12 @@ const _MILESTONES = {
 
 function _milestoneKey(day) { return `lattice_milestone_shown_${day}`; }
 
-function showMilestoneCard(streak, atomCount) {
-  if (!_MILESTONES.hasOwnProperty(streak)) return;
-  if (localStorage.getItem(_milestoneKey(streak))) return;
+// Returns milestone message string (once per streak day), or null. No card created.
+function _getMilestoneMsg(streak, atomCount) {
+  if (!_MILESTONES.hasOwnProperty(streak)) return null;
+  if (localStorage.getItem(_milestoneKey(streak))) return null;
   localStorage.setItem(_milestoneKey(streak), '1');
-
-  let msg = _MILESTONES[streak];
-  if (streak === 14) {
-    msg = `Two weeks of asking and remembering. You have ${atomCount} things stored — this is becoming real.`;
-  }
-
-  const card = document.createElement('div');
-  card.className = 'milestone-card';
-  card.innerHTML = `
-    <span class="milestone-msg">${escHtml(msg)}</span>
-    <button class="milestone-dismiss" aria-label="Dismiss">✕</button>`;
-  card.querySelector('.milestone-dismiss').addEventListener('click', () => card.remove());
-
-  // Insert before the first turn, or at top of history
-  const firstTurn = history.querySelector('.turn');
-  if (firstTurn) history.insertBefore(card, firstTurn);
-  else history.appendChild(card);
-
-  // Cube particle burst — one per session
+  // Cube particle burst on milestone
   if (!sessionStorage.getItem('lattice_burst_done')) {
     sessionStorage.setItem('lattice_burst_done', '1');
     const cube = document.querySelector('.logo-cube');
@@ -903,6 +796,10 @@ function showMilestoneCard(streak, atomCount) {
       setTimeout(() => cube.classList.remove('milestone-burst'), 900);
     }
   }
+  if (streak === 14) {
+    return `Two weeks of asking and remembering. You have ${atomCount} things stored — this is becoming real.`;
+  }
+  return _MILESTONES[streak];
 }
 
 async function loadConversationHistory() {
@@ -938,9 +835,7 @@ async function loadUsageSummary({ checkMilestone = false } = {}) {
       streakBadge.title = 'Consecutive days you\'ve recalled something. Goal: 30 days deep.';
       streakBadge.style.display = 'flex';
     }
-
-    // Only show milestone card after a real query — not on page load
-    if (checkMilestone && streak > 0) showMilestoneCard(streak, atomCount);
+    // Milestone moments are now absorbed into the opening strip, not shown as inline cards.
   } catch {
     // silently ignore — streak is non-critical
   }
@@ -949,49 +844,30 @@ async function loadUsageSummary({ checkMilestone = false } = {}) {
 // ── weekly report ─────────────────────────────────────────────────────────
 
 function _isoWeek(d) {
-  // Returns "YYYY-Www" for a given Date
   const jan4 = new Date(d.getFullYear(), 0, 4);
   const weekNum = Math.ceil(((d - jan4) / 86400000 + jan4.getDay() + 1) / 7);
   return `${d.getFullYear()}-W${String(weekNum).padStart(2, '0')}`;
 }
 
-async function loadWeeklyReport() {
+// Returns a summary line for this week, or null. Absorbed into opening strip.
+async function _getWeeklyReportLine() {
   try {
     const now = new Date();
-    if (now.getDay() !== 1) return; // Monday only
+    if (now.getDay() !== 1) return null; // Monday only
     const weekKey = `lattice_weekly_report_${_isoWeek(now)}`;
-    if (localStorage.getItem(weekKey)) return;
+    if (localStorage.getItem(weekKey)) return null;
 
     const resp = await fetch('/api/usage/weekly');
-    if (!resp.ok) return;
+    if (!resp.ok) return null;
     const data = await resp.json();
-    if (data.streak < 7) return; // only after first full week
+    if (data.streak < 7) return null; // only after first full week
 
     localStorage.setItem(weekKey, '1');
-
-    const topicLine = data.top_topic ? `Most on your mind: ${data.top_topic}` : '';
-    const newLine = data.new_topics?.length ? `Something new: ${data.new_topics[0]}` : '';
-    const streakLine = data.streak ? `${data.streak} days deep.` : '';
-    const body = [
-      `${data.atoms_this_week} things saved · ${data.recalls_this_week} questions asked · ${data.topics_this_week} topics`,
-      topicLine, newLine, streakLine,
-    ].filter(Boolean).join('\n');
-
-    const card = document.createElement('div');
-    card.className = 'milestone-card weekly-report-card';
-    card.innerHTML = `
-      <div class="weekly-report-body">
-        <div class="weekly-report-title">This week</div>
-        <div class="weekly-report-lines">${escHtml(body).replace(/\n/g, '<br>')}</div>
-      </div>
-      <button class="milestone-dismiss" aria-label="Dismiss">✕</button>`;
-    card.querySelector('.milestone-dismiss').addEventListener('click', () => card.remove());
-
-    const emptyState = history.querySelector('.empty-state');
-    if (emptyState) emptyState.insertAdjacentElement('afterend', card);
-    else history.prepend(card);
+    const parts = [`${data.atoms_this_week} saved · ${data.recalls_this_week} questions`];
+    if (data.top_topic) parts.push(`Most: ${data.top_topic}`);
+    return `This week — ${parts.join(' · ')}`;
   } catch {
-    // non-critical
+    return null;
   }
 }
 
@@ -1003,61 +879,305 @@ const _DEPTH_THRESHOLDS = [
   [5,  "That's a topic you know well."],
 ];
 
-async function checkTopicDepth(subjects) {
+// Inline version: appends a quiet annotation line to annotationsEl (no card).
+async function _checkTopicDepthInline(subjects, annotationsEl) {
   for (const subject of subjects) {
     if (!subject) continue;
-    const key = `lattice_topic_depth_${subject.toLowerCase().replace(/\s+/g, '_')}`;
-    if (localStorage.getItem(key)) continue;
-
+    const storageKey = `lattice_topic_depth_${subject.toLowerCase().replace(/\s+/g, '_')}`;
+    if (localStorage.getItem(storageKey)) continue;
     try {
       const resp = await fetch(`/api/topic/depth?subject=${encodeURIComponent(subject)}`);
       if (!resp.ok) continue;
       const { count } = await resp.json();
       const hit = _DEPTH_THRESHOLDS.find(([t]) => count >= t);
       if (!hit) continue;
-      localStorage.setItem(key, String(hit[0]));
-
-      const card = document.createElement('div');
-      card.className = 'milestone-card topic-depth-card';
-      card.innerHTML = `
-        <span class="milestone-msg">You've saved ${count} things about <em>${escHtml(subject)}</em>. ${escHtml(hit[1])}</span>
-        <button class="milestone-dismiss" aria-label="Dismiss">✕</button>`;
-      card.querySelector('.milestone-dismiss').addEventListener('click', () => card.remove());
-      history.appendChild(card);
+      localStorage.setItem(storageKey, String(hit[0]));
+      const line = document.createElement('span');
+      line.className = 'answer-annotation topic-depth-note';
+      line.innerHTML = `You've saved ${count} things about <em>${escHtml(subject)}</em>. ${escHtml(hit[1])}`;
+      annotationsEl.appendChild(line);
+      annotationsEl.style.display = 'block';
     } catch {
       // non-critical
     }
   }
 }
 
-// ── save session ──────────────────────────────────────────────────────────
+// ── opening strip ─────────────────────────────────────────────────────────
 
-saveSessionBtn.addEventListener('click', async () => {
-  if (!sessionQA.length) return;
-  saveSessionBtn.disabled = true;
-  saveSessionBtn.textContent = 'Saving…';
-
-  const chunk = sessionQA
-    .map(({ question, answer }) => `user: ${question}\nassistant: ${answer}`)
-    .join('\n\n');
-
+async function loadOpeningStrip() {
   try {
-    const resp = await fetch('/api/ingest', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: chunk, source_id: 'web' }),
+    const [summaryResp, todayResp] = await Promise.all([
+      fetch('/api/usage/summary'),
+      fetch('/api/chat/today'),  // all channels — one continuous journey
+    ]);
+    if (!summaryResp.ok) return;
+    const summary = await summaryResp.json();
+    const todayTurns = todayResp.ok ? await todayResp.json() : [];
+
+    const streak    = summary.streak || 0;
+    const atomCount = summary.atom_count || 0;
+    const parts     = [];
+
+    // Milestone (once per day)
+    const milestoneMsg = _getMilestoneMsg(streak, atomCount);
+    if (milestoneMsg) {
+      parts.push(`<span class="os-milestone">${escHtml(milestoneMsg)}</span>`);
+    }
+
+    // Weekly report (Monday)
+    const weekLine = await _getWeeklyReportLine();
+    if (weekLine) {
+      parts.push(`<span class="os-weekly">${escHtml(weekLine)}</span>`);
+    }
+
+    // Stat strip
+    const statParts = [];
+    if (streak > 0) statParts.push(`${streak} day${streak === 1 ? '' : 's'} deep`);
+    if (atomCount > 0) statParts.push(`${atomCount} things saved`);
+    if (statParts.length) {
+      parts.push(`<span class="os-stats">${escHtml(statParts.join(' · '))}</span>`);
+    }
+
+    // Build journey branches first (same logic as loadJourneyToday) so opening strip
+    // topics come from branch subjects — not raw atom subjects which can differ
+    // (e.g. "Amulya Gupta" from atom vs "Amulya" from query extraction).
+    _buildJourneyFromTurns(todayTurns);
+
+    // Topics = the journey branch subjects, most recent first (branches ordered by first-seen)
+    const seenTopics = [...journeyBranches].reverse().map(b => b.subject).slice(0, 3);
+    if (seenTopics.length) {
+      const chips = seenTopics.map(t =>
+        `<button class="os-topic-chip" data-q="${escHtml('Tell me about ' + t)}">${escHtml(t)}</button>`
+      ).join('');
+      parts.push(`<span class="os-topics">You've been thinking about: ${chips}</span>`);
+    }
+
+    // Last question from any channel, any day — helps orient on return / channel switch
+    try {
+      const recentResp = await fetch('/api/chat/recent?limit=1');
+      if (recentResp.ok) {
+        const recent = await recentResp.json();
+        const lastQ = recent.length ? (recent[recent.length - 1].question || '') : '';
+        if (lastQ) {
+          const short = lastQ.length > 70 ? lastQ.slice(0, 70) + '…' : lastQ;
+          parts.push(`<span class="os-last">Last: <button class="os-last-q" data-q="${escHtml(lastQ)}">${escHtml(short)}</button></span>`);
+        }
+      }
+    } catch {
+      // non-critical
+    }
+
+    if (!parts.length) return;
+
+    openingStrip.innerHTML = parts.join('');
+    openingStrip.style.display = 'block';
+
+    // Topic chip + last question click → pre-fill input (no auto-submit)
+    openingStrip.querySelectorAll('.os-topic-chip, .os-last-q').forEach(btn => {
+      btn.addEventListener('click', () => {
+        input.value = btn.dataset.q;
+        input.focus();
+        openingStrip.style.display = 'none';
+      });
     });
-    if (!resp.ok) throw new Error('ingest failed');
-    sessionQA = [];
-    saveSessionBtn.textContent = '✓ Saved';
-    setTimeout(() => {
-      saveSessionBtn.textContent = 'Save session';
-      saveSessionBtn.disabled = true; // re-disable until next Q&A
-    }, 2000);
   } catch {
-    saveSessionBtn.textContent = 'Save session';
-    saveSessionBtn.disabled = false;
+    // non-critical
   }
+}
+
+// Hide opening strip on first keystroke
+input.addEventListener('input', () => {
+  if (openingStrip.style.display !== 'none') openingStrip.style.display = 'none';
+}, { once: true });
+
+// ── curiosity chips ───────────────────────────────────────────────────────
+
+async function loadCuriosityChips(subjects, chipsEl) {
+  try {
+    const subjectsParam = subjects.map(encodeURIComponent).join(',');
+    const resp = await fetch(`/api/atoms/related?subjects=${subjectsParam}&limit=3`);
+    if (!resp.ok) return;
+    const related = await resp.json();
+    if (!related.length) return;
+
+    const label = document.createElement('span');
+    label.className = 'curiosity-label';
+    label.textContent = 'You also know about:';
+    chipsEl.appendChild(label);
+
+    related.forEach(subj => {
+      const chip = document.createElement('button');
+      chip.className = 'curiosity-chip';
+      chip.textContent = subj;
+      chip.addEventListener('click', () => {
+        input.value = `Tell me about ${subj}`;
+        input.focus();
+      });
+      chipsEl.appendChild(chip);
+    });
+    chipsEl.style.display = 'flex';
+  } catch {
+    // non-critical
+  }
+}
+
+// ── journey tree ──────────────────────────────────────────────────────────
+
+function _timeAgo(ms) {
+  const sec = Math.round((Date.now() - ms) / 1000);
+  if (sec < 60)  return `${sec}s ago`;
+  if (sec < 3600) return `${Math.round(sec / 60)}m ago`;
+  return `${Math.round(sec / 3600)}h ago`;
+}
+
+
+function _renderJourneyTree() {
+  if (!journeyBranches.length) {
+    journeyPanel.style.display = 'none';
+    return;
+  }
+  journeyPanel.style.display = 'block';
+  journeyTreeEl.innerHTML = journeyBranches.map(branch => {
+    const leaves = branch.queries.map(q =>
+      `<button class="journey-leaf" title="${escHtml(q.question)}" data-q="${escHtml(q.question)}">
+        <span class="journey-leaf-text">${escHtml(q.question.length > 40 ? q.question.slice(0, 40) + '…' : q.question)}</span>
+        <span class="journey-leaf-time">${_timeAgo(q.timeMs)}</span>
+      </button>`
+    ).join('');
+    return `<div class="journey-branch">
+      <button class="journey-branch-label" data-q="${escHtml('Tell me about ' + branch.subject)}">● ${escHtml(branch.subject)}</button>
+      <div class="journey-leaves">${leaves}</div>
+    </div>`;
+  }).join('');
+
+  journeyTreeEl.querySelectorAll('.journey-branch-label, .journey-leaf').forEach(btn => {
+    btn.addEventListener('click', () => {
+      input.value = btn.dataset.q;
+      input.focus();
+    });
+  });
+}
+
+function updateJourneyTree(question, subjects, contextReset = false, queryTopic = null) {
+  const timeMs = Date.now();
+
+  // Follow-up (no topic shift): always append to the current (last) branch
+  if (!contextReset && journeyBranches.length > 0) {
+    journeyBranches[journeyBranches.length - 1].queries.push({ question, timeMs });
+    _renderJourneyTree();
+    return;
+  }
+
+  // New topic: use server-computed query_topic, fall back to first cited subject
+  const label = queryTopic || (subjects.length ? subjects[0] : null);
+  if (!label) return;
+
+  // If the extracted label contains an existing branch name (e.g. "Amulyas' email" → "Amulya"),
+  // fold into that branch rather than creating a duplicate.
+  const labelLower = label.toLowerCase().trim();
+  const overlap = journeyBranches.find(b => labelLower.includes(b.subject.toLowerCase().trim()));
+  if (overlap) {
+    overlap.queries.push({ question, timeMs });
+    _renderJourneyTree();
+    return;
+  }
+
+  journeyBranches.push({ subject: label, queries: [{ question, timeMs }] });
+  _renderJourneyTree();
+}
+
+function _buildJourneyFromTurns(turns) {
+  journeyBranches = [];
+  for (const r of turns) {
+    const question     = r.question || '';
+    const subjects     = r.subjects || [];
+    const timeMs       = new Date(r.ts).getTime();
+    const contextReset = r.context_reset !== undefined ? r.context_reset : null;
+
+    const queryTopicStored = r.query_topic || null;
+    const isFollowUp = contextReset === false ||
+      (contextReset === null && !queryTopicStored && journeyBranches.length > 0);
+
+    if (isFollowUp && journeyBranches.length > 0) {
+      if (!queryTopicStored) {
+        // genuine follow-up with no topic override — merge into current branch
+        journeyBranches[journeyBranches.length - 1].queries.push({ question, timeMs });
+        continue;
+      }
+      // Has a topic — only merge if it matches the current branch; otherwise fall through
+      const curBranch = journeyBranches[journeyBranches.length - 1];
+      const topicLower = queryTopicStored.toLowerCase().trim();
+      const curLower = curBranch.subject.toLowerCase().trim();
+      if (topicLower.includes(curLower) || curLower.includes(topicLower)) {
+        curBranch.queries.push({ question, timeMs });
+        continue;
+      }
+      // Topic doesn't match current branch — fall through to find or create correct branch
+    }
+
+    const label = queryTopicStored || (subjects.length ? subjects[0] : null);
+    if (!label) continue;
+
+    const labelLower = label.toLowerCase().trim();
+    const overlap = journeyBranches.find(b => labelLower.includes(b.subject.toLowerCase().trim()));
+    if (overlap) {
+      overlap.queries.push({ question, timeMs });
+    } else {
+      journeyBranches.push({ subject: label, queries: [{ question, timeMs }] });
+    }
+  }
+  _renderJourneyTree();
+}
+
+async function loadJourneyToday() {
+  try {
+    const resp = await fetch('/api/chat/today');
+    if (!resp.ok) return;
+    _buildJourneyFromTurns(await resp.json());
+  } catch {
+    // non-critical
+  }
+}
+
+// Poll for cross-channel turns (e.g. Telegram) written while web UI is open.
+// Only rebuilds journey when turn count increases; skips during active SSE stream.
+let _journeyPollKnownCount = 0;
+let _journeyPollActive = false; // set true while SSE stream is running
+
+function _startJourneyPoll() {
+  setInterval(async () => {
+    if (_journeyPollActive) return;
+    try {
+      const resp = await fetch('/api/chat/today');
+      if (!resp.ok) return;
+      const turns = await resp.json();
+      if (turns.length > _journeyPollKnownCount) {
+        _journeyPollKnownCount = turns.length;
+        _buildJourneyFromTurns(turns);
+      }
+    } catch {
+      // non-critical
+    }
+  }, 30000); // 30s
+}
+
+
+// ── journey clear ─────────────────────────────────────────────────────────
+
+journeyClearBtn.addEventListener('click', async () => {
+  try {
+    const resp = await fetch('/api/chat/clear-today', { method: 'POST' });
+    if (!resp.ok) return;
+    journeyBranches = [];
+    conversationHistory = [];
+    _journeyPollKnownCount = 0;
+    _renderJourneyTree();
+    // Refresh opening strip so topics + last-Q reflect cleared state
+    openingStrip.style.display = 'none';
+    openingStrip.innerHTML = '';
+    await loadOpeningStrip();
+  } catch (_) {}
 });
 
 // ── file upload ───────────────────────────────────────────────────────────
@@ -1126,7 +1246,7 @@ fileUpload.addEventListener('change', async () => {
         showToast(`${r.reason?.file?.name || 'File'} — ${r.reason?.message || 'upload failed'}`, true);
       }
     }
-    if (anySuccess) loadRecentAtoms();
+    if (anySuccess) loadJourneyToday();
   } catch {
     showToast('Upload failed — daemon may be offline.', true, 4000);
   } finally {
@@ -1142,12 +1262,18 @@ fileUpload.addEventListener('change', async () => {
 initGreeting();
 initScrollBtn();
 checkDaemonStatus();
-loadRecentAtoms();
 loadUsageSummary();
-loadWeeklyReport();
+loadOpeningStrip().then(async () => {
+  // Seed poll count from current turn count so first tick only fires on new turns
+  try {
+    const r = await fetch('/api/chat/today');
+    if (r.ok) _journeyPollKnownCount = (await r.json()).length;
+  } catch {}
+  _startJourneyPoll();
+});
 loadConversationHistory();
-setInterval(loadRecentAtoms, 15000);
 setInterval(checkDaemonStatus, 30000);
+setInterval(checkAutoSaveStatus, 5000);
 
 // Reset conversation history after 30 min of inactivity
 document.addEventListener('visibilitychange', () => {

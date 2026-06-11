@@ -1,4 +1,5 @@
 import json
+import re
 import time
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -11,7 +12,7 @@ from pydantic import BaseModel
 
 from lattice.client import DaemonClient
 from lattice.config import Config
-from lattice.conversation import is_followup, reformulate
+from lattice.conversation import classify_intent, is_followup, reformulate, reformulate_capture
 from lattice.db import LatticeDB
 from lattice.selection import select
 from lattice.synthesis import stream_synthesis, synthesize
@@ -26,11 +27,11 @@ _db: LatticeDB | None = None
 _cfg: Config | None = None
 
 
-def set_config(cfg: Config) -> None:
-    """Called by the daemon at startup to inject a pre-built Config."""
+def set_config(cfg: Config, db: LatticeDB | None = None) -> None:
+    """Called by the daemon at startup to inject a pre-built Config and shared DB."""
     global _cfg, _db
     _cfg = cfg
-    _db = LatticeDB(cfg.lattice_dir)
+    _db = db if db is not None else LatticeDB(cfg.lattice_dir)
 
 
 def _get_cfg() -> Config:
@@ -47,6 +48,27 @@ def _get_db() -> LatticeDB:
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
+def _best_topic_label(question: str, reformulated: str | None, subjects: list[str]) -> str | None:
+    """Pick the subject whose words best overlap with question or reformulated query.
+
+    Language-agnostic: strips punctuation, lowercases, counts shared tokens.
+    Filler prefixes ('okay.', 'umm', etc.) are irrelevant — only content words match.
+    """
+    def _words(text: str) -> set[str]:
+        return {w for w in re.sub(r"[^\w]", " ", text.lower()).split() if len(w) > 2}
+
+    for source in filter(None, [question, reformulated]):
+        src_words = _words(source)
+        best, best_score = None, 0
+        for subj in subjects:
+            score = len(src_words & _words(subj))
+            if score > best_score:
+                best, best_score = subj, score
+        if best_score >= 1:
+            return best
+    return None
+
+
 def _write_chat(
     cfg: Config,
     *,
@@ -56,6 +78,8 @@ def _write_chat(
     answer: str,
     atom_ids: list[str],
     channel: str,
+    subjects: list[str] | None = None,
+    context_reset: bool = False,
 ) -> None:
     record: dict = {
         "ts": datetime.now(timezone.utc).isoformat(),
@@ -64,9 +88,15 @@ def _write_chat(
         "answer": answer,
         "atom_ids": atom_ids,
         "channel": channel,
+        "context_reset": context_reset,
     }
     if reformulated_query and reformulated_query != question:
         record["reformulated_query"] = reformulated_query
+    if subjects:
+        record["subjects"] = subjects
+        topic = _best_topic_label(question, reformulated_query, subjects)
+        if topic:
+            record["query_topic"] = topic
     chat_path = cfg.lattice_dir / "chat.jsonl"
     with chat_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record) + "\n")
@@ -120,6 +150,16 @@ async def index():
 @app.get("/health")
 async def health():
     return {"ok": True}
+
+
+@app.get("/api/auto-save/status")
+async def api_auto_save_status():
+    """Returns whether the daemon auto-save sweep is currently running."""
+    try:
+        from lattice.daemon import _auto_save_active
+        return {"running": _auto_save_active.is_set()}
+    except Exception:
+        return {"running": False}
 
 
 @app.post("/api/ingest")
@@ -181,8 +221,36 @@ async def api_query(req: QueryRequest) -> StreamingResponse:
     db = _get_db()
     cfg = _get_cfg()
     effective_query = _apply_reformulation(req, cfg)
+    # context_reset: topic shifted (not a follow-up) but history existed
+    context_reset = not is_followup(req.question) and bool(req.conversation_history)
 
     def _generate():
+        # Capture intent: ingest the text, return confirmation, skip synthesis
+        if classify_intent(req.question, cfg) == "capture":
+            try:
+                history = req.conversation_history[-cfg.conversation_turns:] if req.conversation_history else []
+                text_to_ingest = reformulate_capture(req.question, history, cfg)
+                result = DaemonClient().ingest_full(
+                    text_to_ingest, "web",
+                    metadata={"observed_at": datetime.now(timezone.utc).isoformat()},
+                )
+                atoms_new = result.get("atoms_new", 0)
+                atoms_updated = result.get("atoms_updated", 0)
+                _write_chat(
+                    cfg,
+                    session_id=req.session_id,
+                    question=req.question,
+                    reformulated_query=text_to_ingest if text_to_ingest != req.question else None,
+                    answer=f"[captured: {atoms_new} new, {atoms_updated} updated]",
+                    atom_ids=result.get("atom_ids", []),
+                    channel="web",
+                    context_reset=False,
+                )
+                yield f'data: {json.dumps({"type": "captured", "atoms_new": atoms_new, "atoms_updated": atoms_updated})}\n\n'
+            except (RuntimeError, OSError):
+                yield f'data: {json.dumps({"type": "error", "message": "Save failed — daemon unavailable"})}\n\n'
+            return
+
         t0 = time.monotonic()
         atoms = select(effective_query, db=db, cfg=cfg)
         sel_ms = int((time.monotonic() - t0) * 1000)
@@ -190,7 +258,13 @@ async def api_query(req: QueryRequest) -> StreamingResponse:
         for i, a in enumerate(atoms):
             a["src_key"] = f"{i + 1}"
 
-        yield f'data: {json.dumps({"type": "atoms", "atoms": atoms})}\n\n'
+        cited_subjects_early = list(dict.fromkeys(a.get("subject", "") for a in atoms if a.get("subject")))
+        reformulated = effective_query if effective_query != req.question else None
+        query_topic = _best_topic_label(req.question, reformulated, cited_subjects_early)
+        atoms_evt: dict = {"type": "atoms", "atoms": atoms, "context_reset": context_reset}
+        if query_topic:
+            atoms_evt["query_topic"] = query_topic
+        yield f'data: {json.dumps(atoms_evt)}\n\n'
 
         assembled_answer = []
         for chunk in stream_synthesis(effective_query, atoms, cfg):
@@ -204,6 +278,7 @@ async def api_query(req: QueryRequest) -> StreamingResponse:
                 except Exception:
                     pass
 
+        cited_subjects = list(dict.fromkeys(a.get("subject", "") for a in atoms if a.get("subject")))
         record_usage(req.question, sel_ms, 0, len(atoms), channel="web", cfg=cfg)
         _write_chat(
             cfg,
@@ -213,6 +288,8 @@ async def api_query(req: QueryRequest) -> StreamingResponse:
             answer=assembled_answer[0] if assembled_answer else "",
             atom_ids=atom_ids,
             channel="web",
+            subjects=cited_subjects,
+            context_reset=context_reset,
         )
 
     return StreamingResponse(
@@ -227,6 +304,7 @@ async def api_answer(req: QueryRequest):
     db = _get_db()
     cfg = _get_cfg()
     effective_query = _apply_reformulation(req, cfg)
+    context_reset = not is_followup(req.question) and bool(req.conversation_history)
     t0 = time.monotonic()
     atoms = select(effective_query, db=db, cfg=cfg)
     sel_ms = int((time.monotonic() - t0) * 1000)
@@ -239,6 +317,7 @@ async def api_answer(req: QueryRequest):
     syn_ms = int((time.monotonic() - t1) * 1000)
     record_usage(req.question, sel_ms, syn_ms, len(atoms), channel="telegram", cfg=cfg)
     atom_ids = [a.get("atom_id", "") for a in atoms]
+    cited_subjects = list(dict.fromkeys(a.get("subject", "") for a in atoms if a.get("subject")))
     _write_chat(
         cfg,
         session_id=req.session_id,
@@ -247,6 +326,8 @@ async def api_answer(req: QueryRequest):
         answer=result.answer,
         atom_ids=atom_ids,
         channel="telegram",
+        subjects=cited_subjects,
+        context_reset=context_reset,
     )
     atom_meta = [
         {
@@ -260,7 +341,7 @@ async def api_answer(req: QueryRequest):
         }
         for a in atoms
     ]
-    return {"ok": True, "answer": result.answer, "atom_count": len(atoms), "atoms": atom_meta, "pii_protected": result.pii_protected}
+    return {"ok": True, "answer": result.answer, "atom_count": len(atoms), "atoms": atom_meta, "pii_protected": result.pii_protected, "context_reset": context_reset}
 
 
 @app.get("/api/usage/summary")
@@ -314,6 +395,33 @@ async def api_feedback(req: FeedbackRequest):
     return {"ok": True}
 
 
+class CaptureLogRequest(BaseModel):
+    question: str
+    answer: str
+    channel: str
+    atom_ids: list[str] = []
+    reformulated_query: str | None = None
+    session_id: str | None = None
+    context_reset: bool = False
+
+
+@app.post("/api/capture-log")
+async def api_capture_log(req: CaptureLogRequest):
+    """Write a capture event to chat.jsonl. Used by Telegram and other channels."""
+    cfg = _get_cfg()
+    _write_chat(
+        cfg,
+        session_id=req.session_id,
+        question=req.question,
+        reformulated_query=req.reformulated_query,
+        answer=req.answer,
+        atom_ids=req.atom_ids,
+        channel=req.channel,
+        context_reset=req.context_reset,
+    )
+    return {"ok": True}
+
+
 @app.get("/api/chat/recent")
 async def api_chat_recent(session_id: str | None = None, limit: int = 2):
     """Return last N Q&A turns for a session — used by web UI on page load to restore history."""
@@ -335,6 +443,111 @@ async def api_chat_recent(session_id: str | None = None, limit: int = 2):
         records = [r for r in records if r.get("session_id") == session_id]
     records = records[-limit:]
     return [{"question": r.get("question", ""), "answer": r.get("answer", "")} for r in records]
+
+
+@app.get("/api/chat/today")
+async def api_chat_today(channel: str | None = None):
+    """Return today's chat.jsonl entries. No channel param → all channels (cross-channel journey)."""
+    cfg = _get_cfg()
+    chat_path = cfg.lattice_dir / "chat.jsonl"
+    if not chat_path.exists():
+        return []
+    today = datetime.now(timezone.utc).date().isoformat()
+    records = []
+    with chat_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+                if r.get("ts", "")[:10] != today:
+                    continue
+                if channel and r.get("channel") != channel:
+                    continue
+                records.append(r)
+            except Exception:
+                continue
+    return records
+
+
+@app.post("/api/chat/clear-today")
+async def api_chat_clear_today():
+    """Remove today's entries from chat.jsonl — resets journey without touching atoms."""
+    cfg = _get_cfg()
+    chat_path = cfg.lattice_dir / "chat.jsonl"
+    if not chat_path.exists():
+        return {"ok": True, "removed": 0}
+    today = datetime.now(timezone.utc).date().isoformat()
+    kept: list[str] = []
+    removed = 0
+    with chat_path.open("r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                r = json.loads(line)
+                if r.get("ts", "")[:10] == today:
+                    removed += 1
+                else:
+                    kept.append(line)
+            except Exception:
+                kept.append(line)
+    from lattice.util import write_file_atomic
+    write_file_atomic(chat_path, ("\n".join(kept) + "\n") if kept else "")
+    return {"ok": True, "removed": removed}
+
+
+@app.get("/api/atoms/related")
+async def api_atoms_related(subjects: str = "", limit: int = 3):
+    """BFS from atoms with the given subjects → return nearby subjects not in the input set.
+
+    Used for curiosity chips: 'You also know about: [chip] [chip]'.
+    subjects: comma-separated subject strings from cited atoms.
+    """
+    db = _get_db()
+    if not subjects.strip():
+        return []
+    input_norms = {s.lower().strip() for s in subjects.split(",") if s.strip()}
+
+    # Collect atom IDs whose subject matches input
+    cited_ids: set[str] = set()
+    for a in db.all():
+        if not a.is_superseded and (a.subject or "").lower().strip() in input_norms:
+            cited_ids.add(a.atom_id)
+
+    if not cited_ids:
+        return []
+
+    # BFS expand in graph (max_depth=2 reaches co-segment atoms)
+    seed_nodes = [f"atom:{aid}" for aid in cited_ids]
+    try:
+        expanded: set[str] = db.graph.bfs_expand(seed_nodes, max_depth=2, max_nodes=200)
+    except Exception:
+        expanded = set()
+
+    # Collect subjects from expanded atoms not in cited set / input subjects
+    subject_counts: dict[str, int] = {}
+    for node in expanded:
+        if not node.startswith("atom:"):
+            continue
+        aid = node[5:]
+        if aid in cited_ids:
+            continue
+        try:
+            a = db.read(aid)
+            if a.is_superseded or not a.subject:
+                continue
+            norm = a.subject.lower().strip()
+            if norm in input_norms:
+                continue
+            subject_counts[a.subject] = subject_counts.get(a.subject, 0) + 1
+        except Exception:
+            continue
+
+    sorted_subjects = sorted(subject_counts, key=lambda s: subject_counts[s], reverse=True)
+    return sorted_subjects[:limit]
 
 
 @app.get("/api/atoms/recent")

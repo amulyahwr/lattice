@@ -59,6 +59,7 @@ class Config:
     dense_seeds: bool = False
     dense_top_k: int = 10
     bfs_rescore: bool = False
+    pointed_dominance: float = 0.7  # M21: stay POINTED when top source ≥ this fraction of probe
     time_decay: bool = True
 
     # ── ingest ────────────────────────────────────────────────────────────────
@@ -111,6 +112,7 @@ class Config:
             dense_seeds=os.environ.get("LATTICE_DENSE_SEEDS", "").lower() in ("1", "true"),
             dense_top_k=_env_int("LATTICE_DENSE_TOP_K", 10),
             bfs_rescore=os.environ.get("LATTICE_BFS_RESCORE", "").lower() in ("1", "true"),
+            pointed_dominance=float(os.environ.get("LATTICE_POINTED_DOMINANCE", "0.7")),
             time_decay=os.environ.get("LATTICE_TIME_DECAY", "1").lower() not in ("0", "false"),
             # ingest
             subject_fuzzy_threshold=_env_int("LATTICE_SUBJECT_FUZZY_THRESHOLD", 80),

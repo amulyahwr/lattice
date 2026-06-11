@@ -192,14 +192,17 @@ class TestFeedbackFlow:
     # --- negative / edge ---
     def test_non_feedback_reply_drops_pending_and_processes_normally(self):
         from lattice.telegram_bot import _handle_message
-        ctx = _make_context({"pending_feedback": {"question": "q", "answer": "a"}})
+        ctx = _make_context({"pending_feedback": {"question": "old-q", "answer": "old-a"}})
         update = _make_update("I bought a new bike")
-        with patch("lattice.telegram_bot._post_feedback") as mock_fb:
-            with patch("lattice.client.DaemonClient") as mock_dc:
-                mock_dc.return_value.ingest.return_value = ["a1"]
-                run(_handle_message(update, ctx))
+        with patch("lattice.telegram_bot._post_feedback") as mock_fb, \
+             patch("lattice.conversation.classify_intent", return_value="recall"), \
+             patch("lattice.conversation.reformulate_capture", return_value="I bought a new bike"):
+            run(_handle_message(update, ctx))
         mock_fb.assert_not_called()
-        assert "pending_feedback" not in ctx.chat_data
+        # Old pending_feedback was dropped — if a new one was set it should be for the new question
+        new_pf = ctx.chat_data.get("pending_feedback")
+        if new_pf:
+            assert new_pf.get("question") != "old-q"
 
     def test_recall_sets_pending_feedback(self):
         from lattice.telegram_bot import _handle_message

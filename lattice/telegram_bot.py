@@ -11,38 +11,7 @@ _CITATION_RE = re.compile(r"\[src:([^\]]+)\]")
 log = logging.getLogger("lattice.telegram_bot")
 
 # --- Intent detection --------------------------------------------------------
-
-_QUESTION_STARTERS = re.compile(
-    r"^(what|who|where|when|why|how|which|is|are|was|were|do|does|did|"
-    r"have|has|had|can|could|will|would|should|remind|tell|show|find|list)\b",
-    re.IGNORECASE,
-)
-
-_RECALL_PHRASES = re.compile(
-    r"\b(remind me|what do i|what did i|have i|do i have|"
-    r"what is my|what are my|what was my|tell me about|look up)\b",
-    re.IGNORECASE,
-)
-
-_CAPTURE_PHRASES = re.compile(
-    r"^(i |just |today |yesterday |we |decided |bought |learned |finished |"
-    r"started |going to |planning |note:|fyi:|btw:)",
-    re.IGNORECASE,
-)
-
-
-def _classify(text: str) -> str:
-    """Return 'recall', 'capture', or 'unclear'."""
-    t = text.strip()
-    if t.endswith("?"):
-        return "recall"
-    if _QUESTION_STARTERS.match(t):
-        return "recall"
-    if _RECALL_PHRASES.search(t):
-        return "recall"
-    if _CAPTURE_PHRASES.match(t):
-        return "capture"
-    return "unclear"
+# Shared LLM-based classifier from conversation.py — no regex, handles all NL variations.
 
 
 # --- Feedback ----------------------------------------------------------------
@@ -82,19 +51,6 @@ def _match_reason(text: str) -> str | None:
     return None
 
 
-_MILESTONE_MESSAGES = {
-    1:  "First recall. Good start.",
-    7:  "A week in. Lattice is starting to know you.",
-    30: "30 days. You've built something here.",
-}
-
-
-def _milestone_message(streak: int, atom_count: int = 0) -> str | None:
-    """Return a milestone message if streak is a milestone, else None."""
-    if streak == 14:
-        return f"Two weeks of asking and remembering. You have {atom_count} things stored — this is becoming real."
-    return _MILESTONE_MESSAGES.get(streak)
-
 
 def _get_streak_info() -> tuple[int, bool, int]:
     """Fetch (streak, grace_day_active, atom_count) from web API. Returns (0, False, 0) on failure."""
@@ -132,6 +88,110 @@ def _get_topic_depth(subject: str) -> int:
             return json.loads(r.read()).get("count", 0)
     except Exception:
         return 0
+
+
+def _get_related_subjects(subjects: list[str], limit: int = 3) -> list[str]:
+    """Return related subjects via BFS graph expansion. Returns [] on failure."""
+    import json
+    import urllib.request as _ur
+    port = os.environ.get("LATTICE_WEB_PORT", "7337")
+    try:
+        q = ",".join(subjects)
+        url = f"http://127.0.0.1:{port}/api/atoms/related?subjects={q}&limit={limit}"
+        with _ur.urlopen(url, timeout=3) as r:
+            return json.loads(r.read())
+    except Exception:
+        return []
+
+
+def _get_last_question() -> str | None:
+    """Return the most recent question from chat.jsonl across all days and channels."""
+    import json
+    import urllib.request as _ur
+    port = os.environ.get("LATTICE_WEB_PORT", "7337")
+    try:
+        url = f"http://127.0.0.1:{port}/api/chat/recent?limit=1"
+        with _ur.urlopen(url, timeout=3) as r:
+            records = json.loads(r.read())
+            return records[-1].get("question") if records else None
+    except Exception:
+        return None
+
+
+def _get_today_turns(channel: str | None = "telegram") -> list[dict]:
+    """Return today's chat.jsonl entries. channel=None returns all channels."""
+    import json
+    import urllib.request as _ur
+    port = os.environ.get("LATTICE_WEB_PORT", "7337")
+    try:
+        url = f"http://127.0.0.1:{port}/api/chat/today"
+        if channel:
+            url += f"?channel={channel}"
+        with _ur.urlopen(url, timeout=3) as r:
+            return json.loads(r.read())
+    except Exception:
+        return []
+
+
+
+
+def _get_journey_branches(turns: list[dict]) -> list[dict]:
+    """Build journey branch list from today's turns — shared by text tree and opening strip.
+
+    Mirrors web UI _buildJourneyFromTurns exactly: context_reset flag, follow-up
+    detection, possessive folding (label contains existing branch name).
+    """
+    branches: list[dict] = []
+    for t in turns:
+        question      = t.get("question", "")
+        subjects      = t.get("subjects") or []
+        context_reset = t.get("context_reset", None)
+
+        query_topic = t.get("query_topic") or None
+        is_followup = (context_reset is False) or \
+                      (context_reset is None and not query_topic and bool(branches))
+
+        if is_followup and branches:
+            if not query_topic:
+                branches[-1]["queries"].append(question)
+                continue
+            cur = branches[-1]
+            topic_lower = query_topic.lower().strip()
+            cur_lower = cur["subject"].lower().strip()
+            if topic_lower.find(cur_lower) != -1 or cur_lower.find(topic_lower) != -1:
+                cur["queries"].append(question)
+                continue
+            # topic doesn't match current branch — fall through to find/create correct branch
+
+        label = query_topic or (subjects[0] if subjects else None)
+        if not label:
+            continue
+
+        label_lower = label.lower().strip()
+        overlap = next(
+            (b for b in branches if label_lower.find(b["subject"].lower().strip()) != -1),
+            None,
+        )
+        if overlap:
+            overlap["queries"].append(question)
+        else:
+            branches.append({"subject": label, "queries": [question]})
+
+    return branches
+
+
+def _build_journey_text(turns: list[dict]) -> str:
+    """Render today's journey as indented text tree."""
+    branches = _get_journey_branches(turns)
+    if not branches:
+        return ""
+    lines = []
+    for b in branches:
+        lines.append(f"● {b['subject']}")
+        for q in b["queries"]:
+            short = q[:50] + "…" if len(q) > 50 else q
+            lines.append(f"   └── {short}")
+    return "\n".join(lines)
 
 
 _DEPTH_THRESHOLDS = [
@@ -190,11 +250,35 @@ async def _do_capture(update, context, text: str) -> None:
         from lattice.client import DaemonClient
         from lattice.db import LatticeDB
         from lattice.config import Config
+        from lattice.conversation import reformulate_capture
+        cfg = Config.from_env()
+        qa_history = context.chat_data.get("qa_history", [])
+        text_to_ingest = reformulate_capture(text, qa_history, cfg)
         client = DaemonClient()
-        result = client.ingest_full(text, source_id="telegram")
+        result = client.ingest_full(
+            text_to_ingest, source_id="telegram",
+            metadata={"observed_at": __import__("datetime").datetime.now(__import__("datetime").timezone.utc).isoformat()},
+        )
         atom_ids = result.get("atom_ids", [])
         added   = result.get("atoms_new", 0)
         updated = result.get("atoms_updated", 0)
+        # Log to chat.jsonl for audit trail
+        try:
+            import urllib.request as _ur, json as _json
+            port = os.environ.get("LATTICE_WEB_PORT", "7337")
+            payload = _json.dumps({
+                "question": text,
+                "reformulated_query": text_to_ingest if text_to_ingest != text else None,
+                "answer": f"[captured: {added} new, {updated} updated]",
+                "atom_ids": atom_ids,
+                "channel": "telegram",
+                "context_reset": False,
+            }).encode()
+            req = _ur.Request(f"http://127.0.0.1:{port}/api/capture-log",
+                              data=payload, headers={"Content-Type": "application/json"}, method="POST")
+            _ur.urlopen(req, timeout=2)
+        except Exception:
+            pass
         if added == 0 and updated == 0:
             await update.message.reply_text("Got it — nothing new to add, looks like this is already in there.")
         else:
@@ -352,23 +436,25 @@ async def _do_recall(update, context, question: str) -> None:
 
         _append_history(context, "user", question)
         _append_history(context, "assistant", clean)
-        # Q&A buffer for multi-turn reformulation (keyed separately from role history)
+        # Q&A buffer for multi-turn reformulation
+        if body.get("context_reset"):
+            context.chat_data["qa_history"] = []
         context.chat_data.setdefault("qa_history", []).append({"question": question, "answer": clean})
-
-        # Milestone moment — prepend once per milestone day, once per session
-        streak, _, atom_count = _get_streak_info()
-        milestone_key = f"milestone_shown_{streak}"
-        if streak > 0 and not context.bot_data.get(milestone_key):
-            msg = _milestone_message(streak, atom_count)
-            if msg:
-                context.bot_data[milestone_key] = True
-                await update.message.reply_text(msg)
 
         for i in range(0, len(clean), 4096):
             await update.message.reply_text(clean[i:i + 4096])
         cited_ids = [a.get("atom_id") for a in body.get("atoms", []) if a.get("atom_id")]
         context.chat_data["pending_feedback"] = {"question": question, "answer": clean, "atom_ids": cited_ids}
         await update.message.reply_text("Was this helpful? Reply 👍 or 👎")
+
+        # Curiosity footer
+        cited_subjects = [a.get("subject") for a in body.get("atoms", []) if a.get("subject")]
+        cited_subjects = list(dict.fromkeys(cited_subjects))[:5]
+        if cited_subjects:
+            related = _get_related_subjects(cited_subjects, limit=3)
+            if related:
+                chips = " · ".join(related)
+                await update.message.reply_text(f"You also know about: {chips}\n\nUse /ask <topic> to explore.")
     except Exception:
         log.exception("recall error")
         await update.message.reply_text("Lattice is offline right now. Try again in a moment.")
@@ -376,42 +462,60 @@ async def _do_recall(update, context, question: str) -> None:
 
 # --- Handlers ----------------------------------------------------------------
 
-def _spark_question(atom) -> str:
-    subject = atom.subject or "that"
-    if atom.kind == "decision":
-        return f"What did I decide about {subject}?"
-    if atom.kind == "preference":
-        return f"What do I prefer about {subject}?"
-    return f"Tell me about {subject}"
-
 
 async def _handle_start(update, context) -> None:
     if not _is_allowed(update):
         return
-    from lattice.config import Config
-    from lattice.db import LatticeDB
-    cfg = Config.from_env()
-    db = LatticeDB(cfg.lattice_dir)
-    atoms = [a for a in db.all() if not a.is_superseded]
-    if atoms:
-        suggestions = "\n".join(f"· {_spark_question(a)}" for a in atoms[:3])
-        body = (
-            "Hey — just send me anything worth keeping. "
-            "A thought, a decision, something you don't want to forget.\n\n"
-            f"You could ask:\n{suggestions}\n\n"
-            "Or just send me a thought and I'll save it.\n\n"
-            "/ask <question> — recall anything\n"
-            "/save — capture this session\n"
-            "/status — memory count"
-        )
-    else:
-        body = (
-            "Hey, good to have you here.\n\n"
-            "Send me anything worth keeping — a decision you made, something you learned, "
-            "a preference you want to remember. I'll hold onto it and surface it when you need it.\n\n"
-            "What's on your mind?"
-        )
+    body = (
+        "Hey — send me anything worth keeping, or ask about what you've saved.\n\n"
+        "/ask <question> — recall anything\n"
+        "/journey — today's topic path\n"
+        "/reset — clear today's journey\n"
+        "/status — memory count + streak\n"
+        "/sources — sources from last answer"
+    )
     await update.message.reply_text(body)
+    await _send_opening_strip_if_due(update, context)
+
+
+async def _send_opening_strip_if_due(update, context) -> None:
+    """Prepend daily opening strip on first interaction of the day."""
+    from datetime import datetime, timezone as _tz
+    today = datetime.now(_tz.utc).date().isoformat()
+    day_key = f"opening_strip_{today}"
+    if context.bot_data.get(day_key):
+        return
+    context.bot_data[day_key] = True
+
+    streak, _, atom_count = _get_streak_info()
+    today_turns = _get_today_turns(channel=None)  # all channels — one continuous journey
+
+    parts: list[str] = []
+    if streak > 0:
+        parts.append(f"{streak} day{'s' if streak != 1 else ''} deep")
+    if atom_count > 0:
+        parts.append(f"{atom_count} things saved")
+
+    # Topics come from journey branch subjects — same source as /journey command.
+    # This guarantees "Amulya" not "Amulya Gupta" (atom subject vs query extraction).
+    branches = _get_journey_branches(today_turns)
+    seen = [b["subject"] for b in reversed(branches)][:3]
+
+    msg_parts: list[str] = []
+    if parts:
+        msg_parts.append(" · ".join(parts))
+    if seen:
+        msg_parts.append(f"Today you've been thinking about: {', '.join(seen)}")
+    last_q = _get_last_question()
+    if last_q:
+        short = last_q[:70] + "…" if len(last_q) > 70 else last_q
+        msg_parts.append(f'Last: "{short}"')
+    if not msg_parts:
+        return
+    try:
+        await update.message.reply_text("\n".join(msg_parts))
+    except Exception:
+        pass
 
 
 async def _send_weekly_summary_if_due(update, context) -> None:
@@ -444,9 +548,14 @@ async def _handle_message(update, context) -> None:
     if not text:
         return
 
-    # Weekly summary on first Monday interaction (non-critical, never blocks)
+    # Weekly summary on first text interaction (non-critical); opening strip fires on /start
     try:
         await _send_weekly_summary_if_due(update, context)
+    except Exception:
+        pass
+    # Fallback: if user skipped /start, still show opening strip once
+    try:
+        await _send_opening_strip_if_due(update, context)
     except Exception:
         pass
 
@@ -477,34 +586,15 @@ async def _handle_message(update, context) -> None:
             # not a feedback reply — drop pending feedback, process normally
             del context.chat_data["pending_feedback"]
 
-    # Check if we're waiting for a clarification reply
-    pending = context.chat_data.get("pending_text")
-    if pending:
-        reply = text.lower().strip()
-        if reply in ("save", "capture", "s"):
-            del context.chat_data["pending_text"]
-            await _do_capture(update, context, pending)
-            return
-        elif reply in ("ask", "recall", "look up", "a", "r"):
-            del context.chat_data["pending_text"]
-            await _do_recall(update, context, pending)
-            return
-        else:
-            # Not a clarification — treat new message normally, drop pending
-            del context.chat_data["pending_text"]
-
-    intent = _classify(text)
+    from lattice.config import Config
+    from lattice.conversation import classify_intent
+    cfg = Config.from_env()
+    intent = classify_intent(text, cfg)
 
     if intent == "recall":
         await _do_recall(update, context, text)
-    elif intent == "capture":
-        await _do_capture(update, context, text)
     else:
-        # Ambiguous — ask user to clarify
-        context.chat_data["pending_text"] = text
-        await update.message.reply_text(
-            "Save this to memory or look something up?\n\nReply save or ask."
-        )
+        await _do_capture(update, context, text)
 
 
 async def _handle_ask(update, context) -> None:
@@ -569,6 +659,15 @@ async def _handle_status(update, context) -> None:
             if grace:
                 streak_str += " · rest day"
             parts.append(streak_str)
+
+        # Auto-save status
+        try:
+            url = f"http://127.0.0.1:{os.environ.get('LATTICE_WEB_PORT', '7337')}/api/auto-save/status"
+            with _ur.urlopen(url, timeout=2) as r:
+                if _json.loads(r.read()).get("running"):
+                    parts.append("↑ saving")
+        except Exception:
+            pass
 
         await update.message.reply_text(" · ".join(parts))
     except Exception:
@@ -652,6 +751,41 @@ async def _handle_document(update, context) -> None:
         await update.message.reply_text(f"{fname} received. Lattice is offline — I'll process it when it's back. 📥")
 
 
+async def _handle_reset(update, context) -> None:
+    """Clear today's journey — same as the web UI 'Clear' button."""
+    if not _is_allowed(update):
+        return
+    import json as _json
+    import urllib.request as _ur
+    port = os.environ.get("LATTICE_WEB_PORT", "7337")
+    try:
+        req = _ur.Request(
+            f"http://127.0.0.1:{port}/api/chat/clear-today",
+            data=b"{}",
+            method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        with _ur.urlopen(req, timeout=5) as r:
+            data = _json.loads(r.read())
+        context.chat_data["qa_history"] = []
+        context.chat_data["history"] = []
+        await update.message.reply_text("Today's journey cleared. Fresh start.")
+    except Exception:
+        await update.message.reply_text("Couldn't reach Lattice. Is the daemon running?")
+
+
+async def _handle_journey(update, context) -> None:
+    """Show today's topic journey as a text tree (all channels)."""
+    if not _is_allowed(update):
+        return
+    turns = _get_today_turns(channel=None)  # all channels — one continuous journey
+    tree = _build_journey_text(turns)
+    if not tree:
+        await update.message.reply_text("No journey yet today. Ask something with /ask to start exploring.")
+        return
+    await update.message.reply_text(f"Today's journey:\n\n{tree}")
+
+
 async def _handle_non_text(update, context) -> None:
     if not _is_allowed(update):
         return
@@ -674,6 +808,8 @@ def run(token: str) -> None:
     app.add_handler(CommandHandler("ask", _handle_ask))
     app.add_handler(CommandHandler("save", _handle_save))
     app.add_handler(CommandHandler("sources", _handle_sources))
+    app.add_handler(CommandHandler("journey", _handle_journey))
+    app.add_handler(CommandHandler("reset", _handle_reset))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, _handle_message))
     app.add_handler(MessageHandler(filters.Document.ALL, _handle_document))
     app.add_handler(MessageHandler(~filters.TEXT & ~filters.Document.ALL, _handle_non_text))

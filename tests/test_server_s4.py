@@ -137,4 +137,6 @@ def test_lattice_answer_still_works(patched_server):
          patch("server.synthesize", return_value=fake_synthesis):
         result = _run(srv.call_tool("lattice_answer", {"query": "what?"}))
 
-    assert result[0].text == "The answer is 42."
+    import json as _json
+    payload = _json.loads(result[0].text)
+    assert payload["answer"] == "The answer is 42."
