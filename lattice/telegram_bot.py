@@ -497,7 +497,7 @@ async def _send_opening_strip_if_due(update, context) -> None:
         parts.append(f"{atom_count} things saved")
 
     # Topics come from journey branch subjects — same source as /journey command.
-    # This guarantees "Amulya" not "Amulya Gupta" (atom subject vs query extraction).
+    # This guarantees "John" not "John Doe" (atom subject vs query extraction).
     branches = _get_journey_branches(today_turns)
     seen = [b["subject"] for b in reversed(branches)][:3]
 

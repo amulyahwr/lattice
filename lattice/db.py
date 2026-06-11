@@ -25,7 +25,7 @@ _STOPWORDS = {
 
 
 def _query_words(text: str) -> list[str]:
-    # Strip possessive apostrophes before tokenizing ("Shivikas'" → "Shivika", "John's" → "John")
+    # Strip possessive apostrophes before tokenizing ("John's" → "John", "Does'" → "Doe")
     text = re.sub(r"'s\b", "", text)
     text = re.sub(r"s'\b", "s", text)
     return [w for w in re.findall(r"[a-z0-9]{3,}", text.lower()) if w not in _STOPWORDS]

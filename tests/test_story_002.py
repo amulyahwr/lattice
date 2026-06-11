@@ -90,7 +90,7 @@ class TestFullMetadataFlow:
 
         with patch("server.DaemonClient", return_value=mock_client):
             _run(srv.call_tool("lattice_ingest", {
-                "source": "Amulya dislikes mountains.",
+                "source": "John Doe dislikes mountains.",
                 "metadata": {
                     "source": "user",
                     "source_id": "claude-code",
@@ -263,7 +263,7 @@ class TestChatFormatDetection:
 
     def test_plain_fact_inferred_as_plain(self):
         from lattice.parsers import infer_source_type
-        text = "Amulya dislikes mountains."
+        text = "John Doe dislikes mountains."
         assert infer_source_type(text, {}) == "plain"
 
     def test_metadata_source_override_applies_to_plain_atoms(self):
@@ -273,11 +273,11 @@ class TestChatFormatDetection:
         from lattice.parsers import Segment
         from datetime import datetime, timezone
 
-        segment = Segment("s0", "Amulya dislikes mountains.", "plain", 0, 26)
+        segment = Segment("s0", "John Doe dislikes mountains.", "plain", 0, 26)
         ref = datetime(2026, 6, 3, tzinfo=timezone.utc)
         cfg = Config(llm_provider="ollama", llm_model="test-model")
 
-        mock_response = '{"atoms": [{"subject": "mountains", "kind": "preference", "source": "document", "content": "Amulya dislikes mountains.", "valid_from": null, "valid_until": null}]}'
+        mock_response = '{"atoms": [{"subject": "mountains", "kind": "preference", "source": "document", "content": "John Doe dislikes mountains.", "valid_from": null, "valid_until": null}]}'
         with patch("lattice.ingest.complete", return_value=mock_response):
             atoms = extract_atoms([segment], {"source": "user"}, ref, cfg)
 
@@ -334,7 +334,7 @@ class TestPydanticModels:
         import sys; sys.modules.pop("server", None)
         import server as srv
         args = srv._IngestArgs.model_validate({
-            "source": "Amulya dislikes mountains.",
+            "source": "John Doe dislikes mountains.",
             "metadata": {"source": "user", "source_id": "claude-code"},
         })
         assert args.metadata.source == "user"

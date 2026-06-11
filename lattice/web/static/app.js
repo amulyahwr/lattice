@@ -941,7 +941,7 @@ async function loadOpeningStrip() {
 
     // Build journey branches first (same logic as loadJourneyToday) so opening strip
     // topics come from branch subjects — not raw atom subjects which can differ
-    // (e.g. "Amulya Gupta" from atom vs "Amulya" from query extraction).
+    // (e.g. "John Doe" from atom vs "John" from query extraction).
     _buildJourneyFromTurns(todayTurns);
 
     // Topics = the journey branch subjects, most recent first (branches ordered by first-seen)
@@ -1073,7 +1073,7 @@ function updateJourneyTree(question, subjects, contextReset = false, queryTopic 
   const label = queryTopic || (subjects.length ? subjects[0] : null);
   if (!label) return;
 
-  // If the extracted label contains an existing branch name (e.g. "Amulyas' email" → "Amulya"),
+  // If the extracted label contains an existing branch name (e.g. "John Doe's email" → "John Doe"),
   // fold into that branch rather than creating a duplicate.
   const labelLower = label.toLowerCase().trim();
   const overlap = journeyBranches.find(b => labelLower.includes(b.subject.toLowerCase().trim()));

@@ -43,7 +43,7 @@ def test_is_followup_true(query):
     "Tell me about my travel plans to Japan",
     "What is the status of the Lattice project?",
     "How does BM25 ranking work in Lattice?",
-    "What did Amulya say about the database migration?",
+    "What did John Doe say about the database migration?",
 ])
 def test_is_followup_false(query):
     assert is_followup(query) is False

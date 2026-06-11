@@ -107,7 +107,7 @@ async def list_tools() -> list[Tool]:
                 "Returns the number of atoms created and their IDs. "
                 "Two usage modes depending on what is being captured:\n"
                 "MODE A — single isolated fact or preference from the user: pass the fact as source "
-                "and set metadata.source='user'. Example: source='Amulya dislikes mountains', "
+                "and set metadata.source='user'. Example: source='John Doe dislikes mountains', "
                 "metadata.source='user'.\n"
                 "MODE B — a conversation chunk with multiple turns: format source as role-tagged text "
                 "('user: ...\nassistant: ...') and OMIT metadata.source. The pipeline detects the "

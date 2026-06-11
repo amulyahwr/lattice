@@ -141,7 +141,7 @@ def _top_source_is_file(seeds: list[Atom]) -> bool:
 def _source_dominance(seeds: list[Atom]) -> float:
     """Fraction of seeds from the single most common source_id.
 
-    Catches queries like 'What did Shivika study?' where BM25 returns atoms
+    Catches queries like 'What did Jane Doe study?' where BM25 returns atoms
     from two CVs (shared subject 'education') — diversity=2 but one source
     dominates. Those queries should stay POINTED.
     Only meaningful when _top_source_is_file() is True.
