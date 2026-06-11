@@ -24,6 +24,7 @@ _PID_FILE = _LATTICE_DIR / "daemon.pid"
 _SOCKET_PATH = _LATTICE_DIR / "daemon.sock"
 
 _shutdown = threading.Event()
+_auto_save_active = threading.Event()  # set while auto-save sweep is running
 _db: LatticeDB | None = None
 _cfg: Config | None = None
 
@@ -225,6 +226,103 @@ class InboxEventHandler(FileSystemEventHandler):
             self._handle_path(event.dest_path)
 
 
+def _auto_save_chat_threads(cfg: Config) -> None:
+    _auto_save_active.set()
+    try:
+        _auto_save_chat_threads_inner(cfg)
+    finally:
+        _auto_save_active.clear()
+
+
+def _auto_save_chat_threads_inner(cfg: Config) -> None:
+    """Sweep chat.jsonl for completed threads (≥2 turns, last turn >10 min ago) and auto-ingest them."""
+    chat_path = cfg.lattice_dir / "chat.jsonl"
+    if not chat_path.exists():
+        return
+
+    try:
+        lines = chat_path.read_text(encoding="utf-8").splitlines()
+        records: list[dict] = []
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                records.append(json.loads(line))
+            except Exception:
+                continue
+
+        # Group by session_id
+        from collections import defaultdict
+        sessions: dict[str, list[dict]] = defaultdict(list)
+        for r in records:
+            sid = r.get("session_id") or "_nosession"
+            sessions[sid].append(r)
+
+        now_ts = time.time()
+        new_lines: list[str] = []
+        modified = False
+
+        for sid, turns in sessions.items():
+            # Check if session is eligible: ≥2 turns, not already auto_saved, last turn >10 min old
+            unsaved = [t for t in turns if not t.get("auto_saved")]
+            if len(unsaved) < 2:
+                new_lines.extend(json.dumps(t) for t in turns)
+                continue
+            last_ts = max(
+                (datetime.fromisoformat(t["ts"]).timestamp() for t in unsaved if t.get("ts")),
+                default=now_ts,
+            )
+            if now_ts - last_ts < 600:  # 10 min
+                new_lines.extend(json.dumps(t) for t in turns)
+                continue
+
+            # Auto-ingest the thread
+            chunk = "\n\n".join(
+                f"user: {t.get('question', '')}\nassistant: {t.get('answer', '')}"
+                for t in unsaved
+                if t.get("question") and t.get("answer")
+            )
+            if chunk:
+                try:
+                    from lattice.client import DaemonClient
+                    DaemonClient().ingest(chunk, source_id="chat", metadata={"channel": "auto_save"})
+                    log.info("auto-save: ingested thread session=%s turns=%d", sid, len(unsaved))
+                except Exception as exc:
+                    log.warning("auto-save: ingest failed session=%s error=%s", sid, exc)
+                    new_lines.extend(json.dumps(t) for t in turns)
+                    continue
+
+            # Mark all unsaved turns as auto_saved
+            for t in turns:
+                if not t.get("auto_saved"):
+                    t["auto_saved"] = True
+                    modified = True
+                new_lines.append(json.dumps(t))
+
+        if modified:
+            from lattice.util import write_file_atomic
+            write_file_atomic(chat_path, "\n".join(new_lines) + "\n")
+    except Exception as exc:
+        log.warning("auto-save: sweep error: %s", exc)
+
+
+def _start_auto_save_loop(cfg: Config) -> None:
+    """Run auto-save sweep in background — on startup then every 30 minutes.
+
+    Intentionally NOT called synchronously: auto-save can take 30+ seconds
+    when ingesting large threads, which would block web server startup.
+    """
+    def _loop():
+        _auto_save_chat_threads(cfg)  # startup sweep (background)
+        while not _shutdown.is_set():
+            _shutdown.wait(timeout=1800)  # 30 min
+            if not _shutdown.is_set():
+                _auto_save_chat_threads(cfg)
+    t = threading.Thread(target=_loop, daemon=True, name="auto-save")
+    t.start()
+
+
 def _drain_inbox(handler: InboxEventHandler, cfg: Config) -> None:
     """Process any files already sitting in the inbox at startup."""
     existing = [p for p in cfg.inbox_dir.iterdir() if p.is_file()]
@@ -314,10 +412,11 @@ def run():
     log.info("IPC socket listening at %s", cfg.sock_path)
 
     observer = _start_inbox_watcher(_db, cfg)
+    _start_auto_save_loop(cfg)
 
     import uvicorn
     from lattice.web.app import app as web_app, set_config as _set_web_config
-    _set_web_config(cfg)
+    _set_web_config(cfg, db=_db)
     uv_config = uvicorn.Config(web_app, host=cfg.web_host, port=cfg.web_port, log_level="warning")
     web_server = uvicorn.Server(uv_config)
     web_thread = threading.Thread(target=web_server.run, daemon=True)

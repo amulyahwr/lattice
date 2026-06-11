@@ -25,6 +25,9 @@ _STOPWORDS = {
 
 
 def _query_words(text: str) -> list[str]:
+    # Strip possessive apostrophes before tokenizing ("Shivikas'" → "Shivika", "John's" → "John")
+    text = re.sub(r"'s\b", "", text)
+    text = re.sub(r"s'\b", "s", text)
     return [w for w in re.findall(r"[a-z0-9]{3,}", text.lower()) if w not in _STOPWORDS]
 
 
@@ -270,7 +273,7 @@ class LatticeDB:
 
     def find_by_normalized_hash(self, normalized_content_hash: str) -> Atom | None:
         for atom in self.all():
-            if atom.normalized_content_hash == normalized_content_hash:
+            if atom.normalized_content_hash == normalized_content_hash and not atom.is_superseded:
                 return atom
         return None
 

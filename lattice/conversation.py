@@ -90,6 +90,83 @@ def is_followup(query: str) -> bool:
     return False
 
 
+_INTENT_SYSTEM = (
+    "Classify the user message as CAPTURE or RECALL.\n"
+    "CAPTURE: user wants to save, update, correct, or record information.\n"
+    "RECALL: user wants to ask a question or retrieve information.\n"
+    "Reply with exactly one word: CAPTURE or RECALL."
+)
+
+
+def classify_intent(question: str, cfg: "Config") -> str:
+    """Returns 'capture' or 'recall'.
+
+    Fast path: '?' in text → recall immediately (no LLM call).
+    All other cases use a single fast LLM call — handles all natural language
+    variations without regex. Falls back to 'recall' on error (safe default).
+    """
+    if "?" in question:
+        return "recall"
+    model = resolve_model(cfg, cfg.ingest_model)
+    messages = [
+        {"role": "system", "content": _INTENT_SYSTEM},
+        {"role": "user", "content": question.strip()},
+    ]
+    try:
+        result = complete(messages, cfg, model=model).strip().upper()
+        return "capture" if "CAPTURE" in result else "recall"
+    except Exception as exc:
+        import logging as _logging
+        _logging.getLogger("lattice.conversation").warning(
+            "classify_intent LLM failed, defaulting to recall: %s", exc
+        )
+        return "recall"
+
+
+_CAPTURE_REFORMULATION_SYSTEM = (
+    "You are a knowledge capture assistant. "
+    "Given a conversation and a capture statement, rewrite the statement as a clear, "
+    "self-contained factual assertion — resolve all pronouns and references using the "
+    "conversation context. "
+    "Example: 'change his email to foo@bar.com' + context about John Doe → "
+    "'John Doe\\'s email is foo@bar.com'. "
+    "Return ONLY the rewritten statement — no explanation, no commentary."
+)
+
+
+def reformulate_capture(text: str, history: list[dict], cfg: "Config") -> str:
+    """Rewrite a capture statement into a self-contained factual assertion.
+
+    Resolves pronouns/references using conversation history.
+    Returns original text if no history or reformulation fails.
+    """
+    if not history:
+        return text
+
+    context_lines = []
+    for turn in history:
+        context_lines.append(f"User: {turn.get('question', '')}")
+        context_lines.append(f"Assistant: {turn.get('answer', '')}")
+    context_lines.append(f"Capture: {text}")
+
+    model = resolve_model(cfg, cfg.ingest_model)
+    messages = [
+        {"role": "system", "content": _CAPTURE_REFORMULATION_SYSTEM},
+        {"role": "user", "content": "\n".join(context_lines)},
+    ]
+    _REFUSAL_PREFIXES = ("i don't have", "i cannot", "i'm unable", "i am unable",
+                         "insufficient context", "not enough context", "no context")
+    try:
+        result = complete(messages, cfg, model=model).strip().strip('"').strip("'")
+        if not result or result.lower() == text.lower():
+            return text
+        if any(result.lower().startswith(p) for p in _REFUSAL_PREFIXES):
+            return text
+        return result
+    except Exception:
+        return text
+
+
 def reformulate(query: str, history: list[dict], cfg: "Config") -> str:
     """Rewrite a follow-up query into a self-contained question.
 
@@ -136,7 +213,11 @@ def reformulate(query: str, history: list[dict], cfg: "Config") -> str:
 
     try:
         raw = complete(messages, cfg, model=model)
-    except Exception:
+    except Exception as exc:
+        import logging as _logging
+        _logging.getLogger("lattice.conversation").warning(
+            "reformulate LLM failed, using original query: %s", exc
+        )
         return query
 
     result = raw.strip().strip('"').strip("'")

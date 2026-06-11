@@ -38,9 +38,9 @@
     <div class="daemon-status">
       <div class="status-dot" id="status-dot"></div>
       <span id="status-label">Connecting…</span>
+      <span class="auto-save-indicator" id="auto-save-indicator" style="display:none" title="Auto-saving conversations to memory…">↑ saving</span>
     </div>
     <div class="streak-badge" id="streak-badge" title="Consecutive days with at least one query"></div>
-    <button class="save-session-btn" id="save-session" title="Save this session to memory" disabled>Save session</button>
     <button class="theme-toggle" id="theme-toggle" title="Toggle theme" aria-label="Toggle theme"></button>
   </div>
 </header>
@@ -50,6 +50,7 @@
   <div class="chat-panel">
     <div class="chat-history" id="chat-history">
       <div class="empty-state">
+        <div id="opening-strip" class="opening-strip" style="display:none"></div>
         <div class="empty-icon">
           <div class="ei-cube">
             <div class="lc-face ei-front"><span></span><span></span><span></span><span></span></div>
@@ -81,9 +82,12 @@
   </div>
 
   <div class="atoms-panel">
-    <div class="atoms-panel-header">Recent memories <span id="memory-count"></span></div>
-    <div class="atoms-list" id="atoms-list">
-      <div class="atoms-empty">Loading…</div>
+    <div id="journey-panel" style="display:none">
+      <div class="atoms-panel-header journey-header">
+        Today's journey
+        <button class="journey-clear-btn" id="journey-clear" title="Clear today's journey">Clear</button>
+      </div>
+      <div class="journey-tree" id="journey-tree"></div>
     </div>
   </div>
 

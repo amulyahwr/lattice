@@ -24,6 +24,16 @@
         <!-- Your Telegram numeric user ID from @userinfobot (comma-separated for multiple) -->
         <key>LATTICE_TELEGRAM_ALLOWED_IDS</key>
         <string>YOUR-TELEGRAM-USER-ID</string>
+
+        <!-- LLM credentials — must match dev.lattice.daemon.plist -->
+        <key>LLM_PROVIDER</key>
+        <string>openai</string>
+        <key>LLM_BASE_URL</key>
+        <string>https://openrouter.ai/api/v1</string>
+        <key>LLM_MODEL</key>
+        <string>openai/gpt-4o-mini</string>
+        <key>LLM_API_KEY</key>
+        <string>YOUR-OPENROUTER-API-KEY</string>
     </dict>
 
     <key>RunAtLoad</key>

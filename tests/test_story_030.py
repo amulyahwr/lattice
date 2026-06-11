@@ -19,7 +19,7 @@ _compute_streak_with_grace = compute_streak
 def _utc_today():
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).date()
-from lattice.telegram_bot import _milestone_message, _get_streak_info
+from lattice.telegram_bot import _get_streak_info
 
 client = TestClient(app)
 
@@ -152,43 +152,6 @@ class TestUsageSummaryNewFields:
         )
         resp = client.get("/api/usage/summary")
         assert resp.json()["today"] == 1  # grace sentinel not counted
-
-
-# ---------------------------------------------------------------------------
-# _milestone_message
-# ---------------------------------------------------------------------------
-
-class TestMilestoneMessage:
-    # --- positive ---
-    def test_day_1_message(self):
-        msg = _milestone_message(1)
-        assert msg is not None
-        assert "first" in msg.lower() or "good" in msg.lower()
-
-    def test_day_7_message(self):
-        msg = _milestone_message(7)
-        assert msg is not None
-        assert "week" in msg.lower()
-
-    def test_day_14_includes_atom_count(self):
-        msg = _milestone_message(14, atom_count=42)
-        assert "42" in msg
-
-    def test_day_30_message(self):
-        msg = _milestone_message(30)
-        assert msg is not None
-        assert "30" in msg
-
-    # --- negative ---
-    def test_non_milestone_day_returns_none(self):
-        assert _milestone_message(5) is None
-        assert _milestone_message(15) is None
-        assert _milestone_message(0) is None
-
-    # --- edge ---
-    def test_day_14_zero_atoms(self):
-        msg = _milestone_message(14, atom_count=0)
-        assert "0" in msg
 
 
 # ---------------------------------------------------------------------------

@@ -308,7 +308,8 @@ Every fact is a plain `.md` file in `LATTICE_DIR`. Hand-editable, git-trackable.
 | ------------------------------------------------------------------------------ | ---------- |
 | `lattice_capture` MCP tool — explicit session-end capture                      | ✅ shipped |
 | `lc` terminal command — capture + `lc status` memory count                     | ✅ shipped |
-| Telegram bot — capture, `/ask` recall, `/save` session, auto-intent detect     | ✅ shipped |
+| Telegram bot — `classify_intent` routing, `reformulate_capture`, `/journey`, `/reset`, `/start` strip | ✅ shipped |
+| Web UI text capture — `classify_intent` routes to ingest or recall; pronoun resolution | ✅ shipped |
 | Web UI "Save session" button — capture Q&A thread as memory                    | ✅ shipped |
 | `lattice_status` MCP tool — memory count for Claude Code                       | ✅ shipped |
 | Usage telemetry + streak — `usage.jsonl`, streak badge, cross-channel          | ✅ shipped |
@@ -328,6 +329,7 @@ Every fact is a plain `.md` file in `LATTICE_DIR`. Hand-editable, git-trackable.
 | Multi-turn conversation — follow-up queries reformulated, context resets on topic shift, chat.jsonl log | ✅ shipped |
 | VS Code / Cursor extension — capture + recall from the IDE                     | Phase 2B   |
 | Browser extension — right-click selected text → save to Lattice                | ✅ shipped |
+| Channel consistency — multi-supersession, PII fast path, shared DB cache, journey sync | ✅ shipped |
 | Apple Shortcuts — global hotkey capture (iPhone / macOS)                       | Phase 2B   |
 | Menu bar app — macOS status icon + quick capture hotkey                        | Phase 2B   |
 | Cloudflare Tunnel — bridge to Claude mobile, ChatGPT mobile, any cloud AI      | Phase 2B   |
