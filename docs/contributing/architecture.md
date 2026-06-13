@@ -1,6 +1,6 @@
 # Architecture
 
-lattice is a local-first personal memory OS. Raw text is decomposed into typed, timestamped **atoms** and stored as markdown files. A persistent daemon owns all writes, watches an inbox folder for ambient ingest, and serves a local web UI for recall. A graph index connects atoms through provenance, subject, and supersession edges so retrieval can navigate context instead of scanning a flat folder.
+Lattice is a local-first personal memory OS. Raw text is decomposed into typed, timestamped **atoms** and stored as markdown files. A persistent daemon owns all writes, watches an inbox folder for ambient ingest, and serves a local web UI for recall. A graph index connects atoms through provenance, subject, and supersession edges so retrieval can navigate context instead of scanning a flat folder.
 
 MCP integration exposes the atom store to AI coding assistants as a read-mostly interface; the daemon remains the sole writer.
 
@@ -98,7 +98,7 @@ stream_synthesis(query, atoms)
 
 ---
 
-## Module Map
+## Module map
 
 | Module | Role |
 |--------|------|
@@ -121,11 +121,17 @@ stream_synthesis(query, atoms)
 | `lattice/synthesis.py` | Tool-calling agent via OpenAI-compat SDK. `synthesize(query, atoms, cfg)` and `stream_synthesis(query, atoms, cfg)` both require a `Config`. Model from `cfg.synthesis_model` (falls back to `cfg.llm_model`). Tools: `date_diff`, `sum_numbers`. PII redaction: when `cfg.pii_scrub=true` and provider is not Ollama, atom content is redacted via `EntityRedactor` before the LLM call and restored in the response. `synthesize()` → `SynthesisResult`. `stream_synthesis()` → SSE generator; assigns `src_key = "{i+1}"` to atoms, builds `num_map` server-side, emits `pii_protected` flag in `citations_applied` event. `_is_no_answer(text)` — `<<NO_INFO>>` sentinel + fuzzy regex fallback. |
 | `lattice/llm.py` | `make_llm_client(cfg)` — builds an `openai.OpenAI` client from `cfg.llm_base_url` + `cfg.llm_api_key`. Default: Ollama at `localhost:11434`. Works with any OpenAI-compat endpoint. `resolve_model(cfg, override)` — returns model name from override or `cfg.llm_model`; raises `EnvironmentError` with actionable message if neither is set. `complete(messages, cfg) → str` — used by ingest and supersession. `cfg.llm_provider=ollama` adds Ollama-specific `extra_body`; all other values use plain OpenAI-compat API. |
 | `lattice/conversation.py` | Multi-turn reformulation + intent classification. `is_followup(query)` — detects anaphoric/short follow-ups via phrase fast-path, pronoun tokens, no-proper-noun heuristic. `reformulate(query, history, cfg)` — PII redact/restore + single LLM call; logs WARNING on LLM failure. `classify_intent(question, cfg) → 'capture'|'recall'` — fast path on `?` → recall; else single LLM call; falls back to `'recall'` on error. Used by web UI `/api/query` and Telegram `_handle_message` for regex-free intent routing. `reformulate_capture(text, history, cfg) → str` — rewrites imperative captures into self-contained factual assertions with pronoun resolution; `_REFUSAL_PREFIXES` guard catches LLM refusals; falls back to original text. Tests mock `lattice.conversation.complete`. |
+| `lattice/migrations/` | Graph schema migration package. `__init__.py` provides `MigrationRunner`: discovers numbered modules (`m001_base`, `m002_episode_nodes`, …) by convention, runs pending migrations in order, creates `graph.backup.v{N}/` before each, restores on failure, updates `schema_version` in manifest on success. Each module exposes `SCHEMA_VERSION: int`, `DESCRIPTION: str`, `run(db, cfg)`. Migrations run in a background thread after web UI is available; queries fall back to pre-migration graph during run. `migration.log` records every attempt. `CURRENT_SCHEMA_VERSION` defined in `graph.py`. `preload()` triggers runner on version mismatch. `lattice graph rebuild` and `lattice graph status` subcommands in `cli.py`. |
+| `lattice/telemetry_export.py` | Privacy-preserving telemetry + debug bundle. `compute_aggregates(cfg)` — reads `usage.jsonl`, `traces.jsonl`, `feedback.jsonl`; produces rate/distribution metrics with no content fields. `upload_telemetry(aggregates, endpoint)` — stdlib `urllib` POST; once per 24h when `LATTICE_TELEMETRY=true`. `sanitize_feedback_record(record)` — strips `question`/`answer`; replaces `atom_ids` with positional labels. `generate_debug_bundle(cfg) → Path` — stdlib `zipfile`; includes `traces.jsonl` + `usage.jsonl` as-is + sanitised feedback + `system_info.json`. Entry point: `lattice-debug`. Zero new deps. |
+| `lattice/trace.py` | `QueryTrace` dataclass + `TraceWriter`. Captures per-query pipeline trace: BM25 seeds+scores, dense hits, BFS-expanded atoms, cited atoms, latency per stage. Written to `LATTICE_DIR/traces.jsonl` when `LATTICE_TRACE=true` (default false). OTel-compatible span structure. Query hashed (SHA-1), never raw text. Used by `selection.py`, `synthesis.py`, `app.py`. Zero overhead when disabled. |
+| `lattice/archive.py` | `suggest_candidates(db)` — atoms with `quality_score < 0.3` AND `last_recalled_at > 365d` AND not superseded. `LatticeDB.archive(atom_id)` moves `.md` to `archive/`, removes from cache+graph, invalidates BM25. `LatticeDB.unarchive(atom_id)` reverses. Entry point: `lattice-archive`. Never automatic — always user-initiated. |
+| `lattice/consolidation.py` | `check_consolidation(db, subject, cfg)` — called from `ingest.py` after every write. At subject atom count thresholds (3/5/10/20), creates/updates a `kind=synthesis` atom from top-3 episodic atoms by `quality_score × recency` (extractive, zero LLM). `tier=semantic`, `quality_score=1.5`. `supports_semantic` edges written to graph. Optional generative enrichment via `LATTICE_CONSOLIDATE_ENRICH=true` — Ollama only, never cloud providers. |
+| `lattice/serendipity.py` | `SerendipityAgent` — daemon background thread, opt-in (`LATTICE_SERENDIPITY=true`). Top-50 atoms by `recall_count` → dense nearest-neighbor search → filter for zero graph overlap → LLM generates `kind=insight` atom. `leads_to_idea` edges to both source atoms. Max 1 surface/day, max 3 LLM calls/day. Requires fastembed; no-op if absent. |
 | `lattice/privacy.py` | PII round-trip redaction. `is_active()` — returns `True` when `LATTICE_PII_SCRUB=true` (default) and `LLM_PROVIDER != ollama`. `EntityRedactor` — stateless; `redact_batch(texts)` returns `(redacted_texts, entity_map)` where `entity_map = {tag: original}`; consistent entity numbering across all texts in the batch. `redact(text)` / `restore(text, entity_map)` — single-text variants. `_run_ner(text)` — calls `LATTICE_NER_MODEL` Ollama endpoint for person+org extraction; falls back to regex-only (email + phone) if model unset or NER fails. Used by `ingest.py` (redact before cloud LLM extraction, restore in atom content) and `synthesis.py` (redact atom content before cloud LLM call, restore in streamed response). |
 
 ---
 
-## Atom Data Model
+## Atom data model
 
 Every atom is a `.md` file with YAML frontmatter:
 
@@ -149,11 +155,16 @@ source_span          {start, end} byte offsets into original source
 content_hash         SHA256 of exact content (exact dedup)
 normalized_content_hash  SHA256 of lowercased word-tokenized content (fuzzy dedup)
 metadata             passthrough dict from lattice_ingest caller
+quality_score        float (default 1.0); seed score multiplier; updated by feedback loop
+recall_count         int (default 0); incremented each time atom is cited in synthesis
+last_recalled_at     datetime | None; timestamp of most recent citation
+tier                 stm | episodic | semantic; stm = ingested < 48h with recall_count=0
+episode_id           str | None; f"{observed_at.date()}:{session_id}" — used for episode graph nodes
 ```
 
 ---
 
-## Graph Index
+## Graph index
 
 After every atom write, `LatticeGraph` upserts nodes and edges into a `networkx.MultiDiGraph` and writes committed sidecars to `LATTICE_DIR/graph/`.
 
@@ -165,6 +176,8 @@ After every atom write, `LatticeGraph` upserts nodes and edges into a `networkx.
 | `source:<source_id>` | One per unique source document / ingest batch |
 | `segment:<container_id>:<segment_id>` | One per chunk; container = source_id or session_id |
 | `subject:<normalized>` | One per unique normalized subject string |
+| `episode:<date>:<session_id>` | One per (day, session) pair; groups episodic atoms |
+| `insight:<id>` | Serendipity agent connection atoms |
 
 **Edge types:**
 
@@ -176,6 +189,10 @@ After every atom write, `LatticeGraph` upserts nodes and edges into a `networkx.
 | `segment_contains_atom` | segment → atom | When atom has segment_id |
 | `supersedes` | new atom → old atom | Written by `db.supersede()` |
 | `same_hash` | atom → atom | Same `normalized_content_hash` |
+| `episode_contains_atom` | episode → atom | Groups atoms under a temporal episode |
+| `supports_semantic` | episodic atom → synthesis atom | Consolidation pipeline; episodic → semantic tier |
+| `enriches` | companion atom → source atom | Ambient enrichment agent |
+| `leads_to_idea` | atom ↔ insight atom | Serendipity agent cross-domain connection |
 
 **Sidecar files:**
 
@@ -184,14 +201,15 @@ LATTICE_DIR/
   graph/
     nodes.jsonl       one JSON line per node {id, type, …attrs}
     edges.jsonl       one JSON line per edge {src, dst, type, key}
-    manifest.json     {version, atom_count, edge_count, built_at}
+    manifest.json     {version, schema_version, atom_count, edge_count, built_at}
+    migration.log     append-only log — one line per migration attempt {ts, migration, from_version, to_version, duration_ms, status}
 ```
 
 `preload()` loads sidecars when `manifest.atom_count` matches disk atom count; otherwise rebuilds from scratch. All writes are atomic (tempfile + rename).
 
 ---
 
-## Key Design Invariants
+## Key design invariants
 
 - **Local-only.** No hosted service, no external DB. Everything in `LATTICE_DIR`.
 - **Daemon is the sole writer.** Only the daemon writes atom files and graph sidecars. MCP server and web UI are read-only clients. Atom writes are atomic (tempfile + rename), making reads always safe without locking.
@@ -200,49 +218,3 @@ LATTICE_DIR/
 - **Superseded atoms stay on disk** with `is_superseded=true` and bidirectional links. History is preserved, not deleted.
 - **Expensive enrichment is optional.** Embeddings, semantic relation enrichment, and hub labeling must remain off by default for Ollama users.
 - **LLM calls are mockable at the module level.** Ingest/supersession patch `lattice.ingest.complete`. Synthesis patches `lattice.synthesis.make_llm_client` (returns a mock OpenAI client) — not `lattice.llm.complete`. Selection has no LLM calls. Tests construct `Config(lattice_dir=tmp_path, llm_provider="ollama", llm_model="test-model")` directly; no env mutation via `monkeypatch.setenv` needed for function-level tests.
-
----
-
-## Roadmap
-
-**Phase 1 complete.** Daemon, inbox watcher, IPC protocol, MCP read-only refactor, web UI (chat + recent atoms + feedback), streaming synthesis, numbered source citations, markdown rendering, circular ETA ring with localStorage history, dark mode toggle, Anthropic via OpenAI-compat. Feedback collected to `feedback.jsonl`; mock server (`lattice-mock`) ships for GPU-free UI development.
-
-**Phase 2A complete.** `lattice_capture` session-end MCP tool (distinct from `lattice_ingest`; enforces `source=assistant`); `_db` staleness fix (`preload_if_stale()` on select/answer); `POST /api/ingest` HTTP endpoint; Pydantic input validation for MCP tools with mode A/B ingest routing.
-
-**Phase 2B in progress** — capture channel expansion + channel consistency.
-- ✅ `lc` CLI (`lattice/cli.py`) — terminal capture + `lc status` memory count
-- ✅ Telegram bot (`lattice/telegram_bot.py`) — `classify_intent()` routing (no regex); `reformulate_capture()` for pronoun resolution; `/journey` multi-branch tree; `/reset` journey clear; `/start` fires opening strip; `/ask` recall + 👍/👎 feedback; `/save` session-end; inbox fallback
-- ✅ Daemon Power Nap (`ProcessType=Background` in plist) — wakes on macOS Power Nap
-- ✅ Web UI Save session — "Save session" button POSTs Q&A thread as conversation chunk to `/api/ingest`
-- ✅ `lattice_status` MCP tool — memory count for Claude Code parity
-- ✅ Usage telemetry (STORY-013) — `usage.jsonl` written from all recall channels; `GET /api/usage/summary`; streak badge in web UI header; UTC-based streak calculation
-- ✅ Telegram feedback (STORY-027) — 👍/👎 prompt after every recall; reason collection; posts to `feedback.jsonl` with `atom_ids` of cited atoms; web UI thumbs on all answers (no atom_count gate)
-- ✅ Synthesis no-answer cleanup (STORY-028) — `<<NO_INFO>>` sentinel + fuzzy regex replaces verbose LLM non-answers with warm short phrase
-- ✅ Memory Sparks (STORY-029) — ghost queries cycling in input placeholder; spark cards in empty state; Telegram `/start` suggestions; `lc status` topics
-- ✅ Memory Depth (STORY-030) — streak reframe ("N days deep"); grace day logic; milestone cards (Day 1/7/14/30) with cube animation; cross-channel streak in `/status`, `lc status`, `lattice_status`
-- ✅ Rediscovery highlight (STORY-032) — amber glow on citations from atoms ≥30 days old; Telegram appends old-memory note
-- ✅ Weekly report + topic depth (STORY-031) — `GET /api/usage/weekly`, `GET /api/topic/depth`; Monday report card in web UI; topic depth cards at 5/10/20 atoms; cross-channel (Telegram weekly summary, lc topic depth, `notified_depths.json`)
-- ✅ File ingest — all channels (STORY-014 extended) — `extract_file_text()` in `util.py` handles PDF/docx/pptx/xlsx/xls/plain text; daemon inbox accepts all types; web UI multi-file upload with parallel ingest and stacked toasts; `lc path/to/file`; Telegram document attachments; MCP `file_path` parameter. `ingest()` returns `atoms_new`/`atoms_updated`/`duplicates_skipped`; all channels show warm diff messages. `LatticeDB` fully thread-safe via `RLock`.
-- ✅ PII round-trip redaction (STORY-033) — `lattice/privacy.py` `EntityRedactor`; regex (email+phone) + optional NER via `LATTICE_NER_MODEL`; redact before cloud LLM call, restore in atom content + streamed response; `LATTICE_PII_SCRUB` env var; `🔒 PII protected` badge in web UI; no-op for Ollama.
-- ✅ Sources UX — content preview + kind pill + channel + age in web UI sources panel (scrollable); Telegram progressive disclosure: compact footer `📚 N sources · channel` + `/sources` command for full detail
-- ✅ Browser extension (`extras/browser-extension/`) — Manifest V3 Chrome extension; right-click context menu + ⌥+⇧+S keyboard shortcut; sends selected text + page URL + title to `POST /api/ingest`; popup shows daemon status dot + memory count.
-- ✅ Channel consistency + correctness (this batch):
-  - Web UI text capture via `classify_intent()` — same LLM-based routing as Telegram, no regex
-  - `reformulate_capture()` — pronoun resolution for captures on all channels
-  - Multi-supersession (`_SupersessionMultiResult`) — supersedes ALL matching atoms, not just one
-  - PII fast path — phone/email supersession via regex, never sent to cloud LLM
-  - Auto-save skip — `channel=auto_save` bypasses supersession; prevents auto-save overwriting manual captures
-  - Shared `LatticeDB` between daemon and web app — eliminates stale cache reads
-  - Superseded atoms filtered from selection — synthesis never sees stale facts
-  - `find_by_normalized_hash` skips superseded — no false-positive "Already in memory"
-  - BM25 apostrophe normalization — `"John's"` matches `"John"` atoms
-  - Server-side `query_topic` in `chat.jsonl` — consistent journey branch labels across channels
-  - Journey 30s cross-channel poll in web UI — Telegram turns appear without reload
-  - Journey branch fix — `query_topic` mismatch overrides `context_reset=false` merge
-  - Journey clear synced across all channels (`POST /api/chat/clear-today`; `lc clear`; `/reset`)
-  - Telegram plist includes LLM env vars — `classify_intent`/`reformulate` work in launchd context
-- Next: STORY-034 (lattice export/import) → STORY-035 (response stats + cost display) → STORY-036 (memory collage) → STORY-037 (user taste profile) → VS Code extension; STORY-038 (ambient enrichment agent) is Phase 3
-
-See STORIES.md for acceptance criteria and FEATURES.md for rationale.
-
-**Phase 3:** multi-device sync (mDNS discovery, Ed25519 pairing, mTLS delta), native iOS/Android app (on-device inference), Screenpipe integration, Messages/iMessage integration (macOS passive ingest via `~/Library/Messages/chat.db`; iOS/Android via native app Share Sheet).
