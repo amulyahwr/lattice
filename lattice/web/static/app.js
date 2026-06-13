@@ -461,6 +461,8 @@ function appendTurn(question) {
       </div>
       <div class="answer streaming" style="display:none"></div>
       <div class="references-container"></div>
+      <div class="answer-annotations" style="display:none"></div>
+      <div class="curiosity-chips-row" style="display:none"></div>
       <div class="feedback-row" style="display:none">
         <span class="feedback-label">Was this answer helpful?</span>
         <button class="feedback-btn" data-val="up">👍 Yes</button>
@@ -476,8 +478,6 @@ function appendTurn(question) {
         </div>
       </div>
       <div class="error-msg" style="display:none"></div>
-      <div class="answer-annotations" style="display:none"></div>
-      <div class="curiosity-chips-row" style="display:none"></div>
     </div>`;
 
   const empty = history.querySelector('.empty-state');
@@ -711,8 +711,6 @@ async function ask(question) {
             annotationsEl.appendChild(line);
           }
 
-          // Topic depth inline note (replaces card)
-          _checkTopicDepthInline(citedSubjects, annotationsEl);
 
           if (annotationsEl.children.length) annotationsEl.style.display = 'block';
 
@@ -871,37 +869,6 @@ async function _getWeeklyReportLine() {
   }
 }
 
-// ── topic depth ───────────────────────────────────────────────────────────
-
-const _DEPTH_THRESHOLDS = [
-  [20, "This is one of the things you know best."],
-  [10, "You've thought about this a lot."],
-  [5,  "That's a topic you know well."],
-];
-
-// Inline version: appends a quiet annotation line to annotationsEl (no card).
-async function _checkTopicDepthInline(subjects, annotationsEl) {
-  for (const subject of subjects) {
-    if (!subject) continue;
-    const storageKey = `lattice_topic_depth_${subject.toLowerCase().replace(/\s+/g, '_')}`;
-    if (localStorage.getItem(storageKey)) continue;
-    try {
-      const resp = await fetch(`/api/topic/depth?subject=${encodeURIComponent(subject)}`);
-      if (!resp.ok) continue;
-      const { count } = await resp.json();
-      const hit = _DEPTH_THRESHOLDS.find(([t]) => count >= t);
-      if (!hit) continue;
-      localStorage.setItem(storageKey, String(hit[0]));
-      const line = document.createElement('span');
-      line.className = 'answer-annotation topic-depth-note';
-      line.innerHTML = `You've saved ${count} things about <em>${escHtml(subject)}</em>. ${escHtml(hit[1])}`;
-      annotationsEl.appendChild(line);
-      annotationsEl.style.display = 'block';
-    } catch {
-      // non-critical
-    }
-  }
-}
 
 // ── opening strip ─────────────────────────────────────────────────────────
 

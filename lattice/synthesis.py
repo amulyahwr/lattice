@@ -11,6 +11,7 @@ from lattice.privacy import EntityRedactor, is_active as _pii_active
 
 if TYPE_CHECKING:
     from lattice.config import Config
+    from lattice.trace import QueryTrace
 
 
 @dataclass
@@ -231,6 +232,7 @@ def synthesize(
     atoms: list[dict],
     cfg: "Config",
     query_date: date | None = None,
+    trace: "QueryTrace | None" = None,
 ) -> SynthesisResult:
     if not atoms:
         return SynthesisResult(answer="No relevant information found in the lattice.", raw_response="")
@@ -244,7 +246,13 @@ def synthesize(
     raw = resp.choices[0].message.content or ""
     if entity_map:
         raw = EntityRedactor().restore(raw, entity_map)
-    answer = _NO_ANSWER_PHRASE if _is_no_answer(raw) else raw
+    no_ans = _is_no_answer(raw)
+    answer = _NO_ANSWER_PHRASE if no_ans else raw
+    if trace is not None:
+        cited = list({m.group(1) for m in re.finditer(r"\[src:([^\]]+)\]", raw)})
+        trace.cited_atoms = cited
+        trace.no_answer = no_ans
+        trace.pii_protected = bool(entity_map)
     return SynthesisResult(answer=answer, raw_response=raw, tool_calls=tool_calls_log, pii_protected=bool(entity_map))
 
 
@@ -253,6 +261,7 @@ def stream_synthesis(
     atoms: list[dict],
     cfg: "Config",
     query_date: date | None = None,
+    trace: "QueryTrace | None" = None,
 ) -> "Generator[str, None, None]":
     """Stream the final synthesis answer as SSE-formatted strings.
 
@@ -302,7 +311,8 @@ def stream_synthesis(
     assembled = "".join(full_answer)
     if entity_map:
         assembled = _redactor.restore(assembled, entity_map)
-    if _is_no_answer(assembled):
+    no_ans = _is_no_answer(assembled)
+    if no_ans:
         assembled = _NO_ANSWER_PHRASE
     # Build first-appearance number map server-side so client doesn't recompute.
     num_map: dict[str, int] = {}
@@ -311,5 +321,9 @@ def stream_synthesis(
         if m.group(1) not in num_map:
             num_map[m.group(1)] = counter
             counter += 1
+    if trace is not None:
+        trace.cited_atoms = list(num_map.keys())
+        trace.no_answer = no_ans
+        trace.pii_protected = bool(entity_map)
     yield f'data: {json.dumps({"type": "citations_applied", "answer": assembled, "num_map": num_map, "pii_protected": bool(entity_map)})}\n\n'
     yield 'data: {"type": "done"}\n\n'

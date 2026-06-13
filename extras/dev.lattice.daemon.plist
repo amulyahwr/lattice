@@ -67,6 +67,12 @@
              significantly better personal context classification). Omit to use LLM_MODEL. -->
         <!-- <key>INGEST_MODEL</key> -->
         <!-- <string>anthropic/claude-haiku-4-5</string> -->
+
+        <!-- LATTICE_TRACE: write per-query debug traces to LATTICE_DIR/traces.jsonl.
+             Query text is never stored — SHA-1 hash only. Default: false (off).
+             Retrieve a trace: GET http://localhost:7337/api/trace/{trace_id} -->
+        <!-- <key>LATTICE_TRACE</key> -->
+        <!-- <string>true</string> -->
     </dict>
 
     <key>RunAtLoad</key>

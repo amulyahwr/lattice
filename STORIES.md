@@ -460,6 +460,15 @@ Start only after Phase 2A exit criterion is met.
 **Technical notes:**
 - `psutil` for RAM, `platform` for chip, `subprocess` for `ollama list`
 - Extend `lattice/setup.py` from STORY-001
+- Read `LATTICE_DIR/system_info.json` if present (written by daemon on startup — see STORY-048) rather than re-probing hardware at setup time. Fall back to live detection if the file is absent (daemon not yet run).
+- Model tier map (Ollama only — OpenRouter users skip hardware detection entirely, any model works):
+
+| RAM | Recommended model |
+|-----|------------------|
+| ≤8 GB | `gemma2:2b`, `qwen2.5:3b` |
+| 8–16 GB unified (Apple Silicon) | `qwen3:4b`, `phi4-mini` |
+| 16–32 GB unified | `qwen3:8b` |
+| ≥32 GB | `qwen3:14b`, `llama3.1:8b` |
 
 ---
 
@@ -1606,9 +1615,24 @@ Created manually by the user to attach to a GitHub issue. The command prints wha
   - `upload_telemetry(aggregates, endpoint) → bool` — `urllib.request` POST; stdlib only; no new deps
   - `sanitize_feedback_record(record) → dict` — strips `question`, `answer`; replaces atom_ids with positional labels
   - `generate_debug_bundle(cfg) → Path` — creates `.zip` via stdlib `zipfile`; sanitises feedback in-memory before writing
-- `daemon.py`: schedule `upload_telemetry` daily if `LATTICE_TELEMETRY=true`; track last-sent timestamp in `LATTICE_DIR/.telemetry_sent`
+- `daemon.py`: on startup, write `LATTICE_DIR/system_info.json` (stdlib only, no new deps):
+  ```json
+  {
+    "lattice_version": "...",
+    "os": "macOS",
+    "python": "3.12.3",
+    "provider": "ollama",
+    "model_name": "qwen3:4b",
+    "ram_gb": 16,
+    "gpu": "Apple M3 Pro",
+    "atom_count_bucket": "100-500"
+  }
+  ```
+  RAM via `psutil.virtual_memory()` if available, else `None`. GPU via `platform.processor()` (Apple) or `subprocess(['nvidia-smi', ...])` (NVIDIA); fails silently. File is overwritten on each startup — always reflects current hardware.
+  Also schedule `upload_telemetry` daily if `LATTICE_TELEMETRY=true`; track last-sent timestamp in `LATTICE_DIR/.telemetry_sent`
 - `config.py`: `LATTICE_TELEMETRY: bool = False`, `LATTICE_TELEMETRY_ENDPOINT: str = "https://telemetry.lattice.dev"`
 - New `lattice-debug` entry point in `pyproject.toml` → `lattice.telemetry_export:cli`
+- `system_info.json` is consumed by STORY-011 (hardware-aware model selection) to avoid re-probing at setup time
 - **Independent** — no story dependencies; stdlib only
 
 ---
@@ -1799,6 +1823,8 @@ Phase 2B ordering
 ├── STORY-044 (user-initiated archival) — depends on STORY-042
 ├── STORY-048 (anonymous telemetry + debug bundle) — independent, parallel; stdlib only; default off
 ├── STORY-049 (graph schema versioning + migration runner) — depends on STORY-045 (episode nodes define m002 backfill); independent otherwise
+├── STORY-050 (low-friction citation feedback + 👎 expansion) — depends on STORY-042, STORY-027 ✅
+└── STORY-051 (implicit signal harvesting — re-query, follow-up depth, dismissal) — depends on STORY-050
 │
 Phase 3 (deferred)
 ├── STORY-021 (Telegram voice notes)      ← after mobile habit validated
@@ -2024,6 +2050,99 @@ When the oldest cited atom is ≥ 30 days old, add one quiet line below the answ
 - `telegram_bot.py`: `/journey` command handler; opening strip prepend on first daily message; curiosity footer after `/ask`; `qa_history` clear on `context_reset`
 - `cli.py`: extend `lc status` to read today's `chat.jsonl` and append journey summary
 - **Depends on:** STORY-039 ✅ (chat.jsonl, conversationHistory, sessionId, qa_history), STORY-026 ✅ (Save Session), STORY-032 ✅ (rediscovery pattern), STORY-024 ✅ (Telegram /ask)
+
+---
+
+### Epic 27 — Low-friction feedback + implicit signal harvesting (Phase 2B, parallel track)
+
+**Motivation:** Quality scoring (STORY-042) relies on explicit 👍/👎 ratings, but most users never rate answers. Source dismissal exists but requires opening a panel, hovering, and clicking ✕ — too many steps for casual use. The result: the feedback loop barely fires in practice. This epic fixes that by (a) moving feedback to the point of reading and (b) capturing implicit signals that require zero user action.
+
+#### STORY-050 · Low-friction citation-level feedback
+
+**As a** user who got a partially wrong answer,
+**I want** to mark bad sources without leaving the answer,
+**so that** Lattice learns which atoms are unhelpful without me having to hunt through a sources panel.
+
+**Acceptance criteria:**
+
+_Clickable citation numbers (primary)_
+- Citation markers `[1]`, `[2]`, `[3]` in the answer text are clickable toggles
+- Default state: neutral (no highlight)
+- One click → marked unhelpful (red tint, strikethrough on the number)
+- Second click → marked helpful (green tint)
+- Third click → back to neutral
+- On toggle, POST to `POST /api/feedback` with `{atom_id, signal: "helpful"|"unhelpful"|"neutral", source: "citation_toggle"}`
+- Quality score updated: helpful → +0.05, unhelpful → -0.1 (smaller deltas than explicit 👍/👎 since the signal is per-atom not per-answer)
+- Telegram: citation numbers in answer text are rendered as inline keyboard buttons per-source after the answer; user taps 👍/👎 per source
+
+_👎 expansion (secondary — piggybacks on existing flow)_
+- When user clicks answer-level 👎, instead of freeform text field, expand to show cited atoms as a multi-select checklist: "Which sources were wrong?"
+- Each cited atom shown as: `subject — first 60 chars of content`
+- User checks wrong ones, taps Done → each checked atom gets `signal: "unhelpful"` from `POST /api/feedback`
+- Unchecked atoms in the set get `signal: "helpful"` (user reviewed them and kept them)
+- Existing freeform reason field moves below the checklist as optional
+
+_"Wrong sources" escape hatch (tertiary — one click, coarse)_
+- Add a third button next to 👍/👎: **"Wrong sources"** (or ✗ icon)
+- One click → all cited atoms get `signal: "unhelpful", confidence: "low"` (lower weight than explicit per-atom signal)
+- Used when user is in a hurry and can't be specific
+
+**Technical notes:**
+- `POST /api/feedback` extended to accept `{atom_id?, atom_ids?, signal, confidence?, source}` alongside existing schema
+- `quality_score` update logic in `db.py` or new `lattice/feedback.py`: `helpful` → ×1.05, `unhelpful` → ×0.9, `unhelpful+low_confidence` → ×0.95; floor 0.1, cap 2.0
+- Citation toggles rendered in `app.js` after SSE `citations_applied` event — wrap each `[N]` span with a click handler
+- Telegram: after `/ask` answer, bot sends a follow-up message with InlineKeyboardMarkup — one row per cited atom with `👍 Source N` / `👎 Source N` buttons; callback handler POSTs to `/api/feedback`
+- **Depends on:** STORY-042 (quality_score field on atoms), STORY-027 ✅ (feedback.jsonl + POST /api/feedback exists)
+
+---
+
+#### STORY-051 · Implicit signal harvesting — zero-effort quality feedback
+
+**As a** user who never rates answers,
+**I want** Lattice to quietly learn from how I use it,
+**so that** quality scoring improves even when I give no explicit feedback.
+
+**Acceptance criteria:**
+
+_Re-query signal (strongest implicit signal)_
+- When a new query arrives that is NOT a follow-up (`is_followup() = False`) but is semantically similar to a query from the last 10 minutes in `chat.jsonl` (cosine similarity > 0.85 OR keyword overlap > 60%), infer the first answer was insufficient
+- Apply `signal: "unhelpful", confidence: "low"` to all atoms cited in the first answer
+- Log to `traces.jsonl` when `LATTICE_TRACE=true`: `{event: "re_query_signal", first_query_hash, second_query_hash, atoms_penalised}`
+- Does not fire when `is_followup() = True` (follow-ups are engagement, not re-tries)
+
+_Follow-up depth signal (positive engagement)_
+- When a topic accumulates ≥3 follow-up questions in one session, apply `signal: "helpful", confidence: "low"` to atoms cited across those turns
+- Signals that the answer pack was rich enough to sustain a conversation
+
+_Source dismissal (already tracked — wire to quality score)_
+- `dismissed_atom_ids` already recorded in `feedback.jsonl` (STORY-027 ✅)
+- Currently not wired to `quality_score` update — add the update: dismissed atom → ×0.92
+- No UI change needed; just connect the existing signal to the scoring loop
+
+_Clipboard copy signal (web only, opt-in per session)_
+- On first copy of answer text, show a one-time micro-prompt: "Track copied answers to improve recall? [Yes / No thanks]"
+- If Yes (stored in localStorage): copy events fire `signal: "helpful", confidence: "low"` on all cited atoms
+- Default: off (no tracking without consent)
+
+**Technical notes:**
+- Re-query detection in `web/app.py` `POST /api/query`: before running selection, check last 10 min of `chat.jsonl` for semantic similarity; requires fastembed for cosine path, falls back to keyword overlap when embeddings unavailable
+- Follow-up depth: tracked in-session in `app.js` (counter per `query_topic`); fires POST to new `POST /api/feedback/implicit` endpoint when threshold hit
+- Clipboard: `document.addEventListener('copy', ...)` in `app.js`; fires only when user opted in
+- Telegram: re-query and follow-up depth signals handled in `telegram_bot.py` using `qa_history` already in memory
+- All implicit signals use `confidence: "low"` weight — explicit 👍/👎 and citation toggles always override
+- **Depends on:** STORY-042 (quality_score), STORY-027 ✅ (feedback.jsonl), STORY-050 (feedback signal schema), fastembed optional
+
+---
+
+**Dependency map update:**
+
+```
+STORY-027 ✅ (feedback.jsonl + POST /api/feedback)
+└── STORY-042 (quality_score field + explicit 👍/👎 scoring)
+    ├── STORY-050 (citation toggles + 👎 expansion + escape hatch)
+    │   └── STORY-051 (implicit signals wired to same scoring loop)
+    └── STORY-046 (consolidation uses quality_score for atom selection)
+```
 
 ---
 
