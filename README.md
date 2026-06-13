@@ -2,6 +2,8 @@
 
 **Lattice is your second brain — local, structured, private, and omnipresent.**
 
+**[📖 Full documentation → amulyahwr.github.io/lattice](https://amulyahwr.github.io/lattice)**
+
 Your personal memory OS — local, private, always running. Everything you tell it becomes a typed, timestamped fact stored as plain markdown on your own machine. Ask it anything; it answers in prose with citations.
 
 ---
@@ -71,11 +73,13 @@ uv run lc "my first memory"  # capture from terminal
 
 ## Documentation
 
+**→ [amulyahwr.github.io/lattice](https://amulyahwr.github.io/lattice)**
+
 | | |
 |---|---|
-| [Quick Install](docs/getting-started/quick-install.md) | Ollama, OpenRouter, Anthropic setup |
-| [MCP Setup](docs/getting-started/mcp-setup.md) | Wire into Claude Code |
-| [Telegram Bot](docs/how-to/telegram-setup.md) | Capture from your phone |
-| [Config Reference](docs/reference/config.md) | All environment variables |
-| [HTTP API](docs/reference/api.md) | All endpoints |
-| [Architecture](docs/contributing/architecture.md) | Module map, design invariants |
+| [Quick Install](https://amulyahwr.github.io/lattice/getting-started/quick-install/) | Ollama, OpenRouter, Anthropic setup |
+| [MCP Setup](https://amulyahwr.github.io/lattice/getting-started/mcp-setup/) | Wire into Claude Code |
+| [Telegram Bot](https://amulyahwr.github.io/lattice/how-to/telegram-setup/) | Capture from your phone |
+| [Config Reference](https://amulyahwr.github.io/lattice/reference/config/) | All environment variables |
+| [HTTP API](https://amulyahwr.github.io/lattice/reference/api/) | All endpoints |
+| [Architecture](https://amulyahwr.github.io/lattice/contributing/architecture/) | Module map, design invariants |
