@@ -1537,6 +1537,34 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#observability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Observability
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Observability">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#get-apitracetrace_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GET /api/trace/{trace_id}
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#system" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2075,6 +2103,34 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#observability" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Observability
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Observability">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#get-apitracetrace_id" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        GET /api/trace/{trace_id}
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#system" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2280,6 +2336,28 @@
 <a id="__codelineno-9-10" name="__codelineno-9-10" href="#__codelineno-9-10"></a><span class="p">}</span>
 </code></pre></div></p>
 <p><code>rating</code>: <code>1</code> = 👍, <code>-1</code> = 👎, <code>0</code> = dismissed without rating</p>
+<hr />
+<h2 id="observability">Observability<a class="headerlink" href="#observability" title="Permanent link">&para;</a></h2>
+<h3 id="get-apitracetrace_id"><code>GET /api/trace/{trace_id}</code><a class="headerlink" href="#get-apitracetrace_id" title="Permanent link">&para;</a></h3>
+<p>Retrieve a single query trace by ID. Only available when <code>LATTICE_TRACE=true</code>.</p>
+<p><strong>Response:</strong>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="p">{</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="w">  </span><span class="nt">&quot;trace_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;uuid&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="w">  </span><span class="nt">&quot;ts&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;2026-06-13T20:00:00Z&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="w">  </span><span class="nt">&quot;query_hash&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;&lt;sha1-16-chars&gt;&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a><span class="w">  </span><span class="nt">&quot;channel&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;web&quot;</span><span class="p">,</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">  </span><span class="nt">&quot;reformulated_hash&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">null</span><span class="p">,</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="w">  </span><span class="nt">&quot;bm25_seeds&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[{</span><span class="nt">&quot;atom_id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;abc123&quot;</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;score&quot;</span><span class="p">:</span><span class="w"> </span><span class="mf">0.83</span><span class="p">}],</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="w">  </span><span class="nt">&quot;dense_hits&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[],</span>
+<a id="__codelineno-10-9" name="__codelineno-10-9" href="#__codelineno-10-9"></a><span class="w">  </span><span class="nt">&quot;bfs_expanded&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;abc123&quot;</span><span class="p">,</span><span class="w"> </span><span class="s2">&quot;def456&quot;</span><span class="p">],</span>
+<a id="__codelineno-10-10" name="__codelineno-10-10" href="#__codelineno-10-10"></a><span class="w">  </span><span class="nt">&quot;final_atoms&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;abc123&quot;</span><span class="p">],</span>
+<a id="__codelineno-10-11" name="__codelineno-10-11" href="#__codelineno-10-11"></a><span class="w">  </span><span class="nt">&quot;cited_atoms&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">[</span><span class="s2">&quot;abc123&quot;</span><span class="p">],</span>
+<a id="__codelineno-10-12" name="__codelineno-10-12" href="#__codelineno-10-12"></a><span class="w">  </span><span class="nt">&quot;stage_ms&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span><span class="nt">&quot;selection&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">120</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;reformulation&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">0</span><span class="p">,</span><span class="w"> </span><span class="nt">&quot;synthesis&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1400</span><span class="p">},</span>
+<a id="__codelineno-10-13" name="__codelineno-10-13" href="#__codelineno-10-13"></a><span class="w">  </span><span class="nt">&quot;no_answer&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span><span class="p">,</span>
+<a id="__codelineno-10-14" name="__codelineno-10-14" href="#__codelineno-10-14"></a><span class="w">  </span><span class="nt">&quot;pii_protected&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">false</span>
+<a id="__codelineno-10-15" name="__codelineno-10-15" href="#__codelineno-10-15"></a><span class="p">}</span>
+</code></pre></div></p>
+<p>Returns <code>404</code> if <code>LATTICE_TRACE=false</code> or the trace ID is not found. Query text is never stored — SHA-1 hash only.</p>
 <hr />
 <h2 id="system">System<a class="headerlink" href="#system" title="Permanent link">&para;</a></h2>
 <h3 id="get-apihealth"><code>GET /api/health</code><a class="headerlink" href="#get-apihealth" title="Permanent link">&para;</a></h3>
