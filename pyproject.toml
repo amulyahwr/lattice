@@ -1,6 +1,6 @@
 [project]
 name = "lattice"
-version = "0.1.0"
+version = "0.8.0"
 description = "Local-first personal memory OS — daemon, web UI, and MCP server for ambient knowledge capture and recall"
 requires-python = ">=3.11"
 dependencies = [
