@@ -73,6 +73,9 @@ class Config:
     # ── embed ─────────────────────────────────────────────────────────────────
     embed_model: str = "BAAI/bge-small-en-v1.5"
 
+    # ── observability ─────────────────────────────────────────────────────────
+    lattice_trace: bool = False   # LATTICE_TRACE=true → write traces.jsonl
+
     def __post_init__(self) -> None:
         if self.sock_path is None:
             self.sock_path = self.lattice_dir / "daemon.sock"
@@ -122,4 +125,6 @@ class Config:
             ner_model=os.environ.get("LATTICE_NER_MODEL", ""),
             # embed
             embed_model=os.environ.get("LATTICE_EMBED_MODEL", "BAAI/bge-small-en-v1.5"),
+            # observability
+            lattice_trace=os.environ.get("LATTICE_TRACE", "").lower() in ("1", "true"),
         )

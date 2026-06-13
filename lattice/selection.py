@@ -13,6 +13,7 @@ from lattice.query import QueryIntent, QueryShape, parse_query
 
 if TYPE_CHECKING:
     from lattice.config import Config
+    from lattice.trace import QueryTrace
 
 _PROBE_K = 7
 _POINTED_MAX = 14
@@ -163,6 +164,7 @@ def _retrieve(
     cfg: "Config",
     as_of: date | None = None,
     top_k: int = 20,
+    trace: "QueryTrace | None" = None,
 ) -> list[dict]:
     intent = parse_query(query)
     scored_seeds = db.search_scored(query, as_of=as_of, top_k=top_k)
@@ -182,6 +184,9 @@ def _retrieve(
         ]
         scored_seeds.sort(key=lambda x: x[0], reverse=True)
 
+    if trace is not None:
+        trace.bm25_seeds = [{"atom_id": a.atom_id, "score": round(s, 4)} for s, a in scored_seeds[:20]]
+
     seeds = [a for _, a in scored_seeds]
     if not seeds:
         return []
@@ -197,6 +202,8 @@ def _retrieve(
         else:
             from lattice.embed import dense_search
             dense_ids = dense_search(query, db._embed_matrix, db._embed_ids, top_k=cfg.dense_top_k)
+            if trace is not None:
+                trace.dense_hits = [{"atom_id": aid} for aid in dense_ids]
             seed_id_set = {a.atom_id for a in seeds}
             for atom_id in dense_ids:
                 if atom_id not in seed_id_set:
@@ -235,7 +242,7 @@ def _retrieve(
     graph = db.graph
 
     if graph.graph.number_of_nodes() > 0:
-        result = _graph_select(active_seeds, graph, db, as_of, max_atoms)
+        result = _graph_select(active_seeds, graph, db, as_of, max_atoms, trace=trace)
     else:
         result = _fallback_select(active_seeds, db, as_of, max_atoms)
 
@@ -257,7 +264,10 @@ def _retrieve(
                     if fa.atom_id not in seen_ids:
                         result.append(_atom_to_dict(fa))
 
-    return _apply_recommendation_cap(result, cfg, intent)
+    capped = _apply_recommendation_cap(result, cfg, intent)
+    if trace is not None:
+        trace.final_atoms = [a["atom_id"] for a in capped]
+    return capped
 
 
 def _graph_select(
@@ -266,12 +276,15 @@ def _graph_select(
     db: LatticeDB,
     as_of: date | None,
     max_atoms: int,
+    trace: "QueryTrace | None" = None,
 ) -> list[dict]:
     expanded_ids = graph.bfs_expand(
         [s.atom_id for s in seeds],
         max_depth=4,
         max_atoms=max_atoms,
     )
+    if trace is not None:
+        trace.bfs_expanded = list(expanded_ids)
 
     seen_ids: set[str] = set()
     seen_hashes: set[str] = set()
@@ -333,5 +346,6 @@ def select(
     cfg: "Config",
     as_of: date | None = None,
     top_k: int = 20,
+    trace: "QueryTrace | None" = None,
 ) -> list[dict]:
-    return _retrieve(query, db=db, cfg=cfg, as_of=as_of, top_k=top_k)
+    return _retrieve(query, db=db, cfg=cfg, as_of=as_of, top_k=top_k, trace=trace)

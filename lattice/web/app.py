@@ -17,6 +17,7 @@ from lattice.db import LatticeDB
 from lattice.selection import select
 from lattice.synthesis import stream_synthesis, synthesize
 from lattice.telemetry import compute_streak, load_usage, record_grace_day, record_usage
+from lattice.trace import QueryTrace, TraceWriter
 
 _STATIC = Path(__file__).parent / "static"
 
@@ -251,9 +252,16 @@ async def api_query(req: QueryRequest) -> StreamingResponse:
                 yield f'data: {json.dumps({"type": "error", "message": "Save failed — daemon unavailable"})}\n\n'
             return
 
+        trace = QueryTrace.create(req.question, channel="web") if cfg.lattice_trace else None
+        if trace and effective_query != req.question:
+            trace.set_reformulated(effective_query)
+
         t0 = time.monotonic()
-        atoms = select(effective_query, db=db, cfg=cfg)
+        atoms = select(effective_query, db=db, cfg=cfg, trace=trace)
         sel_ms = int((time.monotonic() - t0) * 1000)
+        if trace:
+            trace.stage_ms["selection"] = sel_ms
+
         atom_ids = [a.get("atom_id", "") for a in atoms]
         for i, a in enumerate(atoms):
             a["src_key"] = f"{i + 1}"
@@ -264,10 +272,13 @@ async def api_query(req: QueryRequest) -> StreamingResponse:
         atoms_evt: dict = {"type": "atoms", "atoms": atoms, "context_reset": context_reset}
         if query_topic:
             atoms_evt["query_topic"] = query_topic
+        if trace:
+            atoms_evt["trace_id"] = trace.trace_id
         yield f'data: {json.dumps(atoms_evt)}\n\n'
 
+        t1 = time.monotonic()
         assembled_answer = []
-        for chunk in stream_synthesis(effective_query, atoms, cfg):
+        for chunk in stream_synthesis(effective_query, atoms, cfg, trace=trace):
             yield chunk
             # Collect text from citations_applied event for chat.jsonl
             if chunk.startswith("data:"):
@@ -277,6 +288,10 @@ async def api_query(req: QueryRequest) -> StreamingResponse:
                         assembled_answer.append(evt.get("answer", ""))
                 except Exception:
                     pass
+
+        if trace:
+            trace.stage_ms["synthesis"] = int((time.monotonic() - t1) * 1000)
+            TraceWriter(cfg).write(trace)
 
         cited_subjects = list(dict.fromkeys(a.get("subject", "") for a in atoms if a.get("subject")))
         record_usage(req.question, sel_ms, 0, len(atoms), channel="web", cfg=cfg)
@@ -393,6 +408,17 @@ async def api_feedback(req: FeedbackRequest):
     with feedback_path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(record) + "\n")
     return {"ok": True}
+
+
+@app.get("/api/trace/{trace_id}")
+async def api_get_trace(trace_id: str):
+    cfg = _get_cfg()
+    if not cfg.lattice_trace:
+        return JSONResponse({"error": "Tracing not enabled (set LATTICE_TRACE=true)"}, status_code=404)
+    record = TraceWriter(cfg).read(trace_id)
+    if record is None:
+        return JSONResponse({"error": "Trace not found"}, status_code=404)
+    return record
 
 
 class CaptureLogRequest(BaseModel):

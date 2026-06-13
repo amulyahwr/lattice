@@ -228,6 +228,35 @@ Record thumbs up/down on an answer.
 
 ---
 
+## Observability
+
+### `GET /api/trace/{trace_id}`
+
+Retrieve a single query trace by ID. Only available when `LATTICE_TRACE=true`.
+
+**Response:**
+```json
+{
+  "trace_id": "<uuid>",
+  "ts": "2026-06-13T20:00:00Z",
+  "query_hash": "<sha1-16-chars>",
+  "channel": "web",
+  "reformulated_hash": null,
+  "bm25_seeds": [{"atom_id": "abc123", "score": 0.83}],
+  "dense_hits": [],
+  "bfs_expanded": ["abc123", "def456"],
+  "final_atoms": ["abc123"],
+  "cited_atoms": ["abc123"],
+  "stage_ms": {"selection": 120, "reformulation": 0, "synthesis": 1400},
+  "no_answer": false,
+  "pii_protected": false
+}
+```
+
+Returns `404` if `LATTICE_TRACE=false` or the trace ID is not found. Query text is never stored — SHA-1 hash only.
+
+---
+
 ## System
 
 ### `GET /api/health`
