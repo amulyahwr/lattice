@@ -1,0 +1,2105 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Local-first personal memory OS — structured, private, always running">
+      
+      
+      
+        <link rel="canonical" href="https://amulyahwr.github.io/lattice/contributing/architecture/">
+      
+      
+        <link rel="prev" href="../../reference/graph-schema/">
+      
+      
+        <link rel="next" href="../test-conventions/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Architecture - Lattice</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#architecture" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow md-header--lifted" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Lattice" class="md-header__button md-logo" aria-label="Lattice" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Lattice
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Architecture
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="indigo" data-md-color-accent="indigo"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/amulyahwr/lattice" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    amulyahwr/lattice
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+    
+      
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../getting-started/what-is-lattice/" class="md-tabs__link">
+          
+  
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../concepts/atoms/" class="md-tabs__link">
+          
+  
+  
+  Concepts
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../how-to/telegram-setup/" class="md-tabs__link">
+          
+  
+  
+  How-to Guides
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../reference/cli/" class="md-tabs__link">
+          
+  
+  
+  Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="./" class="md-tabs__link">
+          
+  
+  
+  Contributing
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+    
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Lattice" class="md-nav__button md-logo" aria-label="Lattice" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Lattice
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/amulyahwr/lattice" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    amulyahwr/lattice
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/what-is-lattice/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    What is Lattice?
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/quick-install/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Install
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/first-memory/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    First Memory
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/mcp-setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Setup (Claude Code)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/atoms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Atoms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/daemon/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The Daemon
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/graph/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    The Graph
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/capture-channels/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Capture Channels
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/recall-pipeline/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Recall Pipeline
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../concepts/memory-tiers/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Memory Tiers
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    How-to Guides
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    How-to Guides
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/telegram-setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Set Up Telegram Bot
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/browser-extension/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Set Up Browser Extension
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/launchd-autostart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Auto-start on Login
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/use-with-claude-desktop/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Use with Claude Desktop
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/ingest-files/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Ingest Files
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/export-memories/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Export Your Memories
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../how-to/debug-bad-answer/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Debug a Bad Answer
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/cli/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    CLI Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/mcp-tools/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MCP Tools
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/config/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Config (env vars)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/api/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HTTP API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/atom-schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Atom Schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reference/graph-schema/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Graph Schema
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Contributing
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#write-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Write path
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pipeline
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#module-map" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Module map
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#atom-data-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Atom data model
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#graph-index" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Graph index
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-design-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key design invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../test-conventions/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Test Conventions
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../roadmap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Roadmap
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#write-path" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Write path
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#pipeline" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pipeline
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#module-map" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Module map
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#atom-data-model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Atom data model
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#graph-index" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Graph index
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#key-design-invariants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key design invariants
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="architecture">Architecture<a class="headerlink" href="#architecture" title="Permanent link">&para;</a></h1>
+<p>Lattice is a local-first personal memory OS. Raw text is decomposed into typed, timestamped <strong>atoms</strong> and stored as markdown files. A persistent daemon owns all writes, watches an inbox folder for ambient ingest, and serves a local web UI for recall. A graph index connects atoms through provenance, subject, and supersession edges so retrieval can navigate context instead of scanning a flat folder.</p>
+<p>MCP integration exposes the atom store to AI coding assistants as a read-mostly interface; the daemon remains the sole writer.</p>
+<hr />
+<h2 id="write-path">Write path<a class="headerlink" href="#write-path" title="Permanent link">&para;</a></h2>
+<p>All writes go through the daemon. No caller writes atoms directly.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>inbox/*.txt|*.md   MCP lattice_ingest   MCP lattice_capture   POST /api/ingest
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a>        │                  │                     │                    │
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a>        └──────────────────┴─────────────────────┴────────────────────┘
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a>                                        │
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a>                                        ▼
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a>                                lattice-daemon        ← sole writer; owns LatticeDB instance
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a>                                        │
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a>                                        ▼
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a>                                ingest pipeline (below)
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a>                                        │
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a>                                        ▼
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a>                                LatticeDB.write() → atom .md files + graph sidecars
+</code></pre></div>
+<p>When the daemon is not running: MCP tools and <code>POST /api/ingest</code> fall back to inbox drop (file written to <code>LATTICE_INBOX</code>; picked up when daemon restarts).</p>
+<hr />
+<h2 id="pipeline">Pipeline<a class="headerlink" href="#pipeline" title="Permanent link">&para;</a></h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>lattice_ingest(source, metadata)
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>        │
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>        ▼
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>   Segmentation          lattice/parsers/ — infer_source_type() detects chat/markdown/code;
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>                         parse() returns list[Segment] with role, context, span fields.
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>                         chat.py: window by turn count, role field set when window is
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>                         single-role. markdown.py: split on headings, heading in context.
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>        │
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a>        ▼
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a>   LLM Extraction        source-type-aware prompt (chat/markdown/code addenda);
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>                         one atom per fact: subject, kind, content, valid_from/until;
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a>                         chat: User turns → facts/events/preferences;
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>                         Assistant turns → kind=recommendation only when a specific
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a>                         proper noun (brand/venue/person/title) is named for this user;
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a>                         relative dates resolved to ISO dates using observed_at as reference
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a>        │
+<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a>        ▼
+<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>   Dedup + Supersession  skip exact hash matches; fuzzy subject match via rapidfuzz
+<a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a>                         token_sort_ratio (threshold=80, env-tunable via
+<a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a>                         LATTICE_SUBJECT_FUZZY_THRESHOLD); LLM decides if candidate supersedes
+<a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>        │
+<a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a>        ▼
+<a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a>   LatticeDB.write()     atomic write to LATTICE_DIR/&lt;atom_id&gt;.md
+<a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a>        │
+<a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a>        ▼
+<a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a>   LatticeGraph.add()    incremental update → graph/nodes.jsonl + edges.jsonl + manifest.json
+<a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a>        │
+<a id="__codelineno-1-28" name="__codelineno-1-28" href="#__codelineno-1-28"></a>        ▼
+<a id="__codelineno-1-29" name="__codelineno-1-29" href="#__codelineno-1-29"></a>   embed index update    (if fastembed available) append row to embed_matrix.npy + embed_ids.json
+<a id="__codelineno-1-30" name="__codelineno-1-30" href="#__codelineno-1-30"></a>
+<a id="__codelineno-1-31" name="__codelineno-1-31" href="#__codelineno-1-31"></a>
+<a id="__codelineno-1-32" name="__codelineno-1-32" href="#__codelineno-1-32"></a>select(query, as_of)          ← production path used by web UI, MCP server
+<a id="__codelineno-1-33" name="__codelineno-1-33" href="#__codelineno-1-33"></a>        │
+<a id="__codelineno-1-34" name="__codelineno-1-34" href="#__codelineno-1-34"></a>        ▼
+<a id="__codelineno-1-35" name="__codelineno-1-35" href="#__codelineno-1-35"></a>   _retrieve()           BM25 top-20 (scored, time-decayed) → optional dense NN merge
+<a id="__codelineno-1-36" name="__codelineno-1-36" href="#__codelineno-1-36"></a>        │                 (LATTICE_DENSE_SEEDS; cosine top-20 from embed index,
+<a id="__codelineno-1-37" name="__codelineno-1-37" href="#__codelineno-1-37"></a>        │                 LATTICE_DENSE_TOP_K=20) → combined list re-sorted by decay
+<a id="__codelineno-1-38" name="__codelineno-1-38" href="#__codelineno-1-38"></a>        │                 (skipped for TEMPORAL queries) →
+<a id="__codelineno-1-39" name="__codelineno-1-39" href="#__codelineno-1-39"></a>        │                 drop zero-score seeds (LATTICE_SEED_MIN_SCORE) →
+<a id="__codelineno-1-40" name="__codelineno-1-40" href="#__codelineno-1-40"></a>        │                 source-diversity probe → graph BFS; pointed path
+<a id="__codelineno-1-41" name="__codelineno-1-41" href="#__codelineno-1-41"></a>        │                 (7 seeds, max=14) or expansion path (all seeds, max=60);
+<a id="__codelineno-1-42" name="__codelineno-1-42" href="#__codelineno-1-42"></a>        │                 collapse superseded/dups; recommendation cap (max 5);
+<a id="__codelineno-1-43" name="__codelineno-1-43" href="#__codelineno-1-43"></a>        │                 kind fallback; optional BFS rescore by BM25
+<a id="__codelineno-1-44" name="__codelineno-1-44" href="#__codelineno-1-44"></a>        │                 (LATTICE_BFS_RESCORE)
+<a id="__codelineno-1-45" name="__codelineno-1-45" href="#__codelineno-1-45"></a>        │
+<a id="__codelineno-1-46" name="__codelineno-1-46" href="#__codelineno-1-46"></a>        ▼
+<a id="__codelineno-1-47" name="__codelineno-1-47" href="#__codelineno-1-47"></a>   Return atom dicts     with full provenance fields; 0 LLM calls
+<a id="__codelineno-1-48" name="__codelineno-1-48" href="#__codelineno-1-48"></a>
+<a id="__codelineno-1-49" name="__codelineno-1-49" href="#__codelineno-1-49"></a>
+<a id="__codelineno-1-50" name="__codelineno-1-50" href="#__codelineno-1-50"></a>stream_synthesis(query, atoms)
+<a id="__codelineno-1-51" name="__codelineno-1-51" href="#__codelineno-1-51"></a>        │
+<a id="__codelineno-1-52" name="__codelineno-1-52" href="#__codelineno-1-52"></a>        ▼
+<a id="__codelineno-1-53" name="__codelineno-1-53" href="#__codelineno-1-53"></a>   Tool loop             blocking rounds (up to 5) for date_diff / sum_numbers;
+<a id="__codelineno-1-54" name="__codelineno-1-54" href="#__codelineno-1-54"></a>                         only runs if model calls a tool — most queries skip this
+<a id="__codelineno-1-55" name="__codelineno-1-55" href="#__codelineno-1-55"></a>        │
+<a id="__codelineno-1-56" name="__codelineno-1-56" href="#__codelineno-1-56"></a>        ▼
+<a id="__codelineno-1-57" name="__codelineno-1-57" href="#__codelineno-1-57"></a>   Streaming LLM call    OpenAI-compat API, stream=True; yields token chunks
+<a id="__codelineno-1-58" name="__codelineno-1-58" href="#__codelineno-1-58"></a>        │
+<a id="__codelineno-1-59" name="__codelineno-1-59" href="#__codelineno-1-59"></a>        ▼
+<a id="__codelineno-1-60" name="__codelineno-1-60" href="#__codelineno-1-60"></a>   SSE events            {&quot;type&quot;:&quot;token&quot;,&quot;text&quot;:&quot;...&quot;} per chunk →
+<a id="__codelineno-1-61" name="__codelineno-1-61" href="#__codelineno-1-61"></a>                         {&quot;type&quot;:&quot;citations_applied&quot;,&quot;answer&quot;:&quot;...&quot;,&quot;num_map&quot;:{&quot;1&quot;:1,...},&quot;pii_protected&quot;:false} →
+<a id="__codelineno-1-62" name="__codelineno-1-62" href="#__codelineno-1-62"></a>                         {&quot;type&quot;:&quot;done&quot;}
+</code></pre></div>
+<hr />
+<h2 id="module-map">Module map<a class="headerlink" href="#module-map" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Module</th>
+<th>Role</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>lattice/daemon.py</code></td>
+<td>Persistent daemon. Sole writer to <code>LatticeDB</code>. Watches <code>LATTICE_INBOX</code> via <code>watchdog</code>; accepts any file type — <code>extract_file_text()</code> dispatches by extension (PDF, docx, pptx, xlsx, xls, plain text); binary/unreadable files are moved to <code>processed/</code> with a warning. On startup, drains any pre-existing inbox files (<code>_drain_inbox</code>). After draining a <code>telegram-{chat_id}-{uuid}.txt</code> file, sends a follow-up reply via Telegram HTTP API (<code>_notify_telegram</code>). Binds a Unix domain socket (<code>LATTICE_SOCK</code>) for IPC. Passes its own <code>LatticeDB</code> instance to the web app via <code>set_config(cfg, db=_db)</code> — daemon and web share one in-memory cache, eliminating stale-read bugs. Runs the FastAPI web server inline via <code>uvicorn</code> on <code>LATTICE_WEB_PORT</code> (default 7337). Manages PID file and graceful shutdown on SIGTERM/SIGINT. CLI: <code>lattice-daemon</code> (start), <code>lattice-daemon status</code>.</td>
+</tr>
+<tr>
+<td><code>lattice/cli.py</code></td>
+<td><code>lc</code> entry point. <code>lc "text"</code> or <code>lc path/to/file</code> — if argument is an existing file path, calls <code>extract_file_text()</code> before ingesting; captures via <code>DaemonClient().ingest_full()</code> over Unix socket; exits 1 with actionable message if daemon not running. <code>lc status</code> reads <code>LatticeDB</code> directly (no daemon needed) and prints memory count + top-5 topics + streak ("N days deep") from <code>usage.jsonl</code> + today's journey (grouped branches via <code>_build_journey_text</code> from <code>telegram_bot</code>). <code>lc clear</code> removes today's entries from <code>chat.jsonl</code> — same effect as web UI clear button and Telegram <code>/reset</code>.</td>
+</tr>
+<tr>
+<td><code>lattice/telegram_bot.py</code></td>
+<td>Telegram capture bot. Independent launchd service (<code>dev.lattice.telegram.plist</code>). Polls via <code>python-telegram-bot</code>. <strong>Intent routing:</strong> <code>_handle_message()</code> calls <code>classify_intent()</code> (LLM, no regex) → routes to <code>_do_capture()</code> or <code>_do_recall()</code>; fast path on <code>?</code> → recall. <strong>Capture:</strong> <code>_do_capture()</code> calls <code>reformulate_capture()</code> for pronoun resolution, then <code>DaemonClient().ingest_full()</code>; logs turn to <code>chat.jsonl</code> via <code>POST /api/capture-log</code>. <strong>Recall:</strong> <code>POST /api/answer</code> → numbered citations + compact footer; 👍/👎 feedback prompt. Document attachments: <code>_handle_document()</code> downloads to temp file, calls <code>extract_file_text()</code>. <strong>Journey:</strong> <code>/journey</code> renders multi-branch tree via <code>_get_journey_branches()</code> + <code>_build_journey_text()</code>; branches split by <code>query_topic</code> field (not just <code>context_reset</code>). <strong>Opening strip:</strong> <code>/start</code> fires <code>_send_opening_strip_if_due</code> (streak + topics + last Q from any channel). <strong>Reset:</strong> <code>/reset</code> clears today's journey via <code>POST /api/chat/clear-today</code>. Daemon-down: inbox fallback with chat_id in filename. Commands: <code>/ask</code>, <code>/save</code>, <code>/status</code>, <code>/start</code>, <code>/sources</code>, <code>/journey</code>, <code>/reset</code>. <strong>plist must include LLM env vars</strong> (<code>LLM_PROVIDER</code>, <code>LLM_BASE_URL</code>, <code>LLM_MODEL</code>, <code>LLM_API_KEY</code>) — launchd does not inherit shell environment. Requires <code>uv sync --group telegram</code>.</td>
+</tr>
+<tr>
+<td><code>lattice/client.py</code></td>
+<td><code>DaemonClient</code> — thin IPC client. <code>ingest(text, source_id, metadata) → list[str]</code> (back-compat); <code>ingest_full(text, source_id, metadata) → dict</code> returns full result with <code>atoms_new</code>, <code>atoms_updated</code>, <code>duplicates_skipped</code>, <code>atom_ids</code>. Used by all write channels (server.py, web UI, lc, telegram bot).</td>
+</tr>
+<tr>
+<td><code>lattice/web/app.py</code></td>
+<td>FastAPI web UI. Accepts daemon's shared <code>LatticeDB</code> via <code>set_config(cfg, db)</code>. <code>_best_topic_label()</code> computes word-overlap topic label stored as <code>query_topic</code> in <code>chat.jsonl</code>. Routes: <code>GET /</code> → <code>index.html</code>, <code>POST /api/query</code> (streaming SSE; runs <code>classify_intent()</code> first — CAPTURE path calls <code>reformulate_capture()</code> + <code>DaemonClient.ingest_full()</code>, yields <code>captured</code> event; RECALL path runs <code>is_followup()</code> → <code>reformulate()</code> → synthesize, yields <code>atoms</code>+<code>token</code>+<code>done</code>; writes turn to <code>chat.jsonl</code> for both paths), <code>POST /api/answer</code> (blocking JSON synthesis; Telegram path), <code>POST /api/capture-log</code> (write capture turn to <code>chat.jsonl</code> from external channels), <code>GET /api/chat/recent?limit=</code> (last N turns, all channels; page-reload restore + opening strip "Last Q"), <code>GET /api/chat/today</code> (today's turns, all channels; journey rebuild), <code>POST /api/chat/clear-today</code> (remove today's entries; shared by web, Telegram <code>/reset</code>, <code>lc clear</code>), <code>GET /api/auto-save/status</code>, <code>POST /api/ingest</code> (text), <code>POST /api/ingest-file</code> (multipart), <code>GET /api/usage/summary</code>, <code>GET /api/usage/weekly</code>, <code>GET /api/atoms/recent</code>, <code>GET /api/atoms/related</code>, <code>GET /api/topic/depth</code>, <code>POST /api/feedback</code>, <code>GET /api/health</code>. <code>chat.jsonl</code> schema: <code>{ts, session_id, question, reformulated_query?, answer, atom_ids, subjects, channel, context_reset, query_topic?}</code>; capture turns use <code>answer="[captured: N new, M updated]"</code>. UI: classify_intent text capture, 30s cross-channel journey poll, clear reloads opening strip.</td>
+</tr>
+<tr>
+<td><code>lattice/web/mock.py</code></td>
+<td>GPU-free dev server (<code>uv run lattice-mock</code>). Serves the same static files as <code>app.py</code> but stubs <code>/api/query</code> with canned SSE token stream and <code>/api/atoms/recent</code> with hardcoded atoms. Hot-reloads on file save. Use this to iterate on HTML/CSS/JS without a running daemon or LLM.</td>
+</tr>
+<tr>
+<td><code>lattice/config.py</code></td>
+<td><code>Config</code> dataclass — single source of truth for all env vars. <code>__post_init__</code> derives path fields from <code>lattice_dir</code>. <code>from_env()</code> reads all 21 env vars (paths, LLM, selection tuning, ingest tuning, PII, embed). Tests construct <code>Config(lattice_dir=tmp_path)</code> directly — no env mutation needed.</td>
+</tr>
+<tr>
+<td><code>server.py</code></td>
+<td>MCP stdio entrypoint. Exposes five tools: <code>lattice_ingest</code>, <code>lattice_capture</code> (session-end summary, always <code>source=assistant</code>), <code>lattice_select</code>, <code>lattice_answer</code>, <code>lattice_status</code> (returns non-superseded atom count). Validates ingest args via <code>_IngestArgs</code>/<code>_CaptureArgs</code> Pydantic models — auto-strips <code>metadata.source</code> for chat-formatted input (mode B), enforces <code>_MCP_SESSION_ID</code> (process-level UUID, stable across all calls in one Claude Code session) and precise <code>observed_at</code> (server clock, overrides caller). Calls <code>_db.preload_if_stale()</code> before select/answer/status (O(1) manifest check).</td>
+</tr>
+<tr>
+<td><code>lattice/models.py</code></td>
+<td><code>Atom</code> — Pydantic model with all provenance fields. Serialized to/from YAML frontmatter + markdown body via <code>python-frontmatter</code>.</td>
+</tr>
+<tr>
+<td><code>lattice/db.py</code></td>
+<td><code>LatticeDB</code> — one <code>.md</code> file per atom in <code>LATTICE_DIR</code>. In-memory <code>_atom_cache</code>. <code>subjects.json</code> for O(1) subject lookup. Holds a <code>LatticeGraph</code> instance; updates it on every <code>write()</code> and <code>supersede()</code>. Thread-safe: <code>self._lock = threading.RLock()</code> guards all mutating methods. <code>db.lock</code> exposed so <code>ingest.py</code> can hold it across the atomic check+write sequence. <code>_query_words()</code> strips possessive apostrophes (<code>'s</code>, <code>s'</code>) before BM25 tokenizing — prevents miss on <code>"John's"</code> vs <code>"John"</code> variants. <code>find_by_normalized_hash()</code> skips superseded atoms — prevents false-positive "Already in memory" when re-ingesting a value that was previously superseded. On every <code>write()</code>, appends/updates embed matrix row if fastembed available.</td>
+</tr>
+<tr>
+<td><code>lattice/graph.py</code></td>
+<td><code>LatticeGraph</code> — <code>networkx.MultiDiGraph</code> backed by committed sidecars. Incrementally updated; full rebuild triggered when manifest atom count diverges from disk.</td>
+</tr>
+<tr>
+<td><code>lattice/util.py</code></td>
+<td>Shared helpers: <code>write_file_atomic()</code> (canonical tempfile+rename); <code>_write_json_atomic()</code> delegates to it; <code>extract_file_text(path) → (text, source_id)</code> — dispatches by extension: <code>.pdf</code> via <code>pypdf</code>, <code>.docx</code> via <code>python-docx</code>, <code>.pptx</code> via <code>python-pptx</code>, <code>.xlsx</code> via <code>openpyxl</code>, <code>.xls</code> via <code>xlrd</code>, all others as UTF-8 text. Raises <code>ImportError</code> (missing optional dep) or <code>ValueError</code> (binary/unreadable). Used by daemon inbox watcher, web <code>/api/ingest-file</code>, <code>lc</code> CLI, and Telegram <code>_handle_document</code>.</td>
+</tr>
+<tr>
+<td><code>lattice/parsers/</code></td>
+<td>Source-aware segmentation. <code>infer_source_type()</code> checks <code>metadata["source_id"]</code> prefix/suffix first (<code>pdf:*</code>, <code>*.pptx</code>, <code>*.xlsx</code>), then falls back to content heuristics for chat/markdown/code. <code>parse()</code> returns <code>list[Segment]</code> (frozen dataclass with <code>text</code>, <code>role</code>, <code>source_type</code>, <code>context</code>, <code>start</code>, <code>end</code>). <code>chat.py</code>: windowed turn parsing with role tagging. <code>markdown.py</code>: splits on headings. <code>pdf.py</code>: splits on <code>\f</code> (form feed) page separators, <code>context="page N"</code>. <code>pptx.py</code>: splits on <code>[Slide N]</code> markers, <code>context="Slide N"</code>. <code>xlsx.py</code>: splits on <code>[Sheet: name]</code> markers, <code>context="Sheet: name"</code>.</td>
+</tr>
+<tr>
+<td><code>lattice/ingest.py</code></td>
+<td>Four named pipeline stages, each independently callable and testable. <code>segment_source(source, metadata) → list[Segment]</code> — pure parsing, no LLM. <code>extract_atoms(segments, metadata, ref, cfg) → list[dict]</code> — PII redact (batch) → LLM extraction per segment (optionally parallel) → PII restore; <code>_extract_atoms()</code> is the private per-segment worker. <code>detect_supersession(db, atom, cfg) → list[str]</code> (was <code>str|None</code>) — supersedes ALL matching atoms for a subject; runs in priority order: (1) PII fast path via <code>_pii_content_type()</code> + <code>_pii_supersession()</code> (phone/email matched by regex, no LLM, no cloud exposure); (2) auto-save skip — <code>channel=auto_save</code> atoms return <code>[]</code> unconditionally; (3) LLM multi-supersession via <code>_SupersessionMultiResult</code> — fast path via <code>subjects.json</code>, slow path via <code>by_subject()</code> with word-overlap pre-filter. <code>persist_atoms(atoms_data, db, source_id, observed_at, ref, cfg) → dict</code> — dedup by normalized hash (skipping superseded atoms) + supersession + <code>db.write()</code>/<code>db.supersede()</code>, all inside <code>with db.lock:</code>. <code>ingest()</code> orchestrates all four stages. Returns <code>{atoms_new, atoms_updated, duplicates_skipped, atom_ids, …}</code>. Extraction prompt (<code>_SYSTEM</code>): kind taxonomy — <code>preference</code>, <code>fact</code>, <code>event</code>. Document sources use actual names not "User". People facts rule: each contact/identity detail → separate <code>kind=fact</code> atom per field. Source addendums: <code>_PDF_ADDENDUM</code>, <code>_PPTX_ADDENDUM</code>, <code>_XLSX_ADDENDUM</code>.</td>
+</tr>
+<tr>
+<td><code>lattice/selection.py</code></td>
+<td><code>select()</code> = <code>_retrieve()</code> — BM25 scored seeds → optional dense seed augmentation (top-20 cosine NN hits merged; combined list re-sorted by time decay except for TEMPORAL queries, so fresh atoms lead BFS) → zero-score seed filter → source-diversity probe → graph BFS → optional BFS rescore → <strong>superseded atoms filtered from result</strong> (synthesis never sees stale facts even if BFS expanded into superseded nodes). 0 LLM calls. Env: <code>LATTICE_SEED_MIN_SCORE</code>, <code>LATTICE_BFS_RESCORE</code>, <code>LATTICE_RECOMMENDATION_CAP</code>, <code>LATTICE_DENSE_SEEDS</code>, <code>LATTICE_DENSE_TOP_K</code> (default 20).</td>
+</tr>
+<tr>
+<td><code>lattice/query.py</code></td>
+<td><code>parse_query()</code> — detects query shape (<code>aggregation</code>/<code>temporal</code>/<code>preference</code>/<code>recommendation</code>/<code>factual</code>) and <code>primary_kind</code>. Returns <code>QueryIntent</code>. Used by <code>_retrieve()</code>.</td>
+</tr>
+<tr>
+<td><code>lattice/synthesis.py</code></td>
+<td>Tool-calling agent via OpenAI-compat SDK. <code>synthesize(query, atoms, cfg)</code> and <code>stream_synthesis(query, atoms, cfg)</code> both require a <code>Config</code>. Model from <code>cfg.synthesis_model</code> (falls back to <code>cfg.llm_model</code>). Tools: <code>date_diff</code>, <code>sum_numbers</code>. PII redaction: when <code>cfg.pii_scrub=true</code> and provider is not Ollama, atom content is redacted via <code>EntityRedactor</code> before the LLM call and restored in the response. <code>synthesize()</code> → <code>SynthesisResult</code>. <code>stream_synthesis()</code> → SSE generator; assigns <code>src_key = "{i+1}"</code> to atoms, builds <code>num_map</code> server-side, emits <code>pii_protected</code> flag in <code>citations_applied</code> event. <code>_is_no_answer(text)</code> — <code>&lt;&lt;NO_INFO&gt;&gt;</code> sentinel + fuzzy regex fallback.</td>
+</tr>
+<tr>
+<td><code>lattice/llm.py</code></td>
+<td><code>make_llm_client(cfg)</code> — builds an <code>openai.OpenAI</code> client from <code>cfg.llm_base_url</code> + <code>cfg.llm_api_key</code>. Default: Ollama at <code>localhost:11434</code>. Works with any OpenAI-compat endpoint. <code>resolve_model(cfg, override)</code> — returns model name from override or <code>cfg.llm_model</code>; raises <code>EnvironmentError</code> with actionable message if neither is set. <code>complete(messages, cfg) → str</code> — used by ingest and supersession. <code>cfg.llm_provider=ollama</code> adds Ollama-specific <code>extra_body</code>; all other values use plain OpenAI-compat API.</td>
+</tr>
+<tr>
+<td><code>lattice/conversation.py</code></td>
+<td>Multi-turn reformulation + intent classification. <code>is_followup(query)</code> — detects anaphoric/short follow-ups via phrase fast-path, pronoun tokens, no-proper-noun heuristic. <code>reformulate(query, history, cfg)</code> — PII redact/restore + single LLM call; logs WARNING on LLM failure. <code>classify_intent(question, cfg) → 'capture'|'recall'</code> — fast path on <code>?</code> → recall; else single LLM call; falls back to <code>'recall'</code> on error. Used by web UI <code>/api/query</code> and Telegram <code>_handle_message</code> for regex-free intent routing. <code>reformulate_capture(text, history, cfg) → str</code> — rewrites imperative captures into self-contained factual assertions with pronoun resolution; <code>_REFUSAL_PREFIXES</code> guard catches LLM refusals; falls back to original text. Tests mock <code>lattice.conversation.complete</code>.</td>
+</tr>
+<tr>
+<td><code>lattice/migrations/</code></td>
+<td>Graph schema migration package. <code>__init__.py</code> provides <code>MigrationRunner</code>: discovers numbered modules (<code>m001_base</code>, <code>m002_episode_nodes</code>, …) by convention, runs pending migrations in order, creates <code>graph.backup.v{N}/</code> before each, restores on failure, updates <code>schema_version</code> in manifest on success. Each module exposes <code>SCHEMA_VERSION: int</code>, <code>DESCRIPTION: str</code>, <code>run(db, cfg)</code>. Migrations run in a background thread after web UI is available; queries fall back to pre-migration graph during run. <code>migration.log</code> records every attempt. <code>CURRENT_SCHEMA_VERSION</code> defined in <code>graph.py</code>. <code>preload()</code> triggers runner on version mismatch. <code>lattice graph rebuild</code> and <code>lattice graph status</code> subcommands in <code>cli.py</code>.</td>
+</tr>
+<tr>
+<td><code>lattice/telemetry_export.py</code></td>
+<td>Privacy-preserving telemetry + debug bundle. <code>compute_aggregates(cfg)</code> — reads <code>usage.jsonl</code>, <code>traces.jsonl</code>, <code>feedback.jsonl</code>; produces rate/distribution metrics with no content fields. <code>upload_telemetry(aggregates, endpoint)</code> — stdlib <code>urllib</code> POST; once per 24h when <code>LATTICE_TELEMETRY=true</code>. <code>sanitize_feedback_record(record)</code> — strips <code>question</code>/<code>answer</code>; replaces <code>atom_ids</code> with positional labels. <code>generate_debug_bundle(cfg) → Path</code> — stdlib <code>zipfile</code>; includes <code>traces.jsonl</code> + <code>usage.jsonl</code> as-is + sanitised feedback + <code>system_info.json</code>. Entry point: <code>lattice-debug</code>. Zero new deps.</td>
+</tr>
+<tr>
+<td><code>lattice/trace.py</code></td>
+<td><code>QueryTrace</code> dataclass + <code>TraceWriter</code>. Captures per-query pipeline trace: BM25 seeds+scores, dense hits, BFS-expanded atoms, cited atoms, latency per stage. Written to <code>LATTICE_DIR/traces.jsonl</code> when <code>LATTICE_TRACE=true</code> (default false). OTel-compatible span structure. Query hashed (SHA-1), never raw text. Used by <code>selection.py</code>, <code>synthesis.py</code>, <code>app.py</code>. Zero overhead when disabled.</td>
+</tr>
+<tr>
+<td><code>lattice/archive.py</code></td>
+<td><code>suggest_candidates(db)</code> — atoms with <code>quality_score &lt; 0.3</code> AND <code>last_recalled_at &gt; 365d</code> AND not superseded. <code>LatticeDB.archive(atom_id)</code> moves <code>.md</code> to <code>archive/</code>, removes from cache+graph, invalidates BM25. <code>LatticeDB.unarchive(atom_id)</code> reverses. Entry point: <code>lattice-archive</code>. Never automatic — always user-initiated.</td>
+</tr>
+<tr>
+<td><code>lattice/consolidation.py</code></td>
+<td><code>check_consolidation(db, subject, cfg)</code> — called from <code>ingest.py</code> after every write. At subject atom count thresholds (3/5/10/20), creates/updates a <code>kind=synthesis</code> atom from top-3 episodic atoms by <code>quality_score × recency</code> (extractive, zero LLM). <code>tier=semantic</code>, <code>quality_score=1.5</code>. <code>supports_semantic</code> edges written to graph. Optional generative enrichment via <code>LATTICE_CONSOLIDATE_ENRICH=true</code> — Ollama only, never cloud providers.</td>
+</tr>
+<tr>
+<td><code>lattice/serendipity.py</code></td>
+<td><code>SerendipityAgent</code> — daemon background thread, opt-in (<code>LATTICE_SERENDIPITY=true</code>). Top-50 atoms by <code>recall_count</code> → dense nearest-neighbor search → filter for zero graph overlap → LLM generates <code>kind=insight</code> atom. <code>leads_to_idea</code> edges to both source atoms. Max 1 surface/day, max 3 LLM calls/day. Requires fastembed; no-op if absent.</td>
+</tr>
+<tr>
+<td><code>lattice/privacy.py</code></td>
+<td>PII round-trip redaction. <code>is_active()</code> — returns <code>True</code> when <code>LATTICE_PII_SCRUB=true</code> (default) and <code>LLM_PROVIDER != ollama</code>. <code>EntityRedactor</code> — stateless; <code>redact_batch(texts)</code> returns <code>(redacted_texts, entity_map)</code> where <code>entity_map = {tag: original}</code>; consistent entity numbering across all texts in the batch. <code>redact(text)</code> / <code>restore(text, entity_map)</code> — single-text variants. <code>_run_ner(text)</code> — calls <code>LATTICE_NER_MODEL</code> Ollama endpoint for person+org extraction; falls back to regex-only (email + phone) if model unset or NER fails. Used by <code>ingest.py</code> (redact before cloud LLM extraction, restore in atom content) and <code>synthesis.py</code> (redact atom content before cloud LLM call, restore in streamed response).</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="atom-data-model">Atom data model<a class="headerlink" href="#atom-data-model" title="Permanent link">&para;</a></h2>
+<p>Every atom is a <code>.md</code> file with YAML frontmatter:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>atom_id              UUID (stable, used in supersession links and lattice_answer calls)
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>kind                 free-form: fact | event | decision | preference | belief | count | …
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>source               free-form: user | document | chat | code | …
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>subject              canonical noun phrase — normalized for subject index and graph edges
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a>content              self-contained statement of the fact
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>valid_from/until     optional date bounds; as_of queries exclude atoms outside window
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>is_superseded        true when a newer atom has replaced this one
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a>supersedes           atom_id of the older version this atom replaced
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>superseded_by        atom_id of the newer version that replaced this atom
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a>ingested_at          when the atom was written
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>observed_at          when the fact was observed in the source
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a>source_id            groups all atoms from one ingest call / document
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>session_id           groups atoms from one conversation turn window
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a>segment_id           chunk within a segmented source (s0, s1, …)
+<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a>source_type          markdown | chat | code | plain | pdf | pptx | xlsx | xls
+<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a>source_span          {start, end} byte offsets into original source
+<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a>content_hash         SHA256 of exact content (exact dedup)
+<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a>normalized_content_hash  SHA256 of lowercased word-tokenized content (fuzzy dedup)
+<a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a>metadata             passthrough dict from lattice_ingest caller
+<a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a>quality_score        float (default 1.0); seed score multiplier; updated by feedback loop
+<a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a>recall_count         int (default 0); incremented each time atom is cited in synthesis
+<a id="__codelineno-2-22" name="__codelineno-2-22" href="#__codelineno-2-22"></a>last_recalled_at     datetime | None; timestamp of most recent citation
+<a id="__codelineno-2-23" name="__codelineno-2-23" href="#__codelineno-2-23"></a>tier                 stm | episodic | semantic; stm = ingested &lt; 48h with recall_count=0
+<a id="__codelineno-2-24" name="__codelineno-2-24" href="#__codelineno-2-24"></a>episode_id           str | None; f&quot;{observed_at.date()}:{session_id}&quot; — used for episode graph nodes
+</code></pre></div>
+<hr />
+<h2 id="graph-index">Graph index<a class="headerlink" href="#graph-index" title="Permanent link">&para;</a></h2>
+<p>After every atom write, <code>LatticeGraph</code> upserts nodes and edges into a <code>networkx.MultiDiGraph</code> and writes committed sidecars to <code>LATTICE_DIR/graph/</code>.</p>
+<p><strong>Node types:</strong></p>
+<table>
+<thead>
+<tr>
+<th>ID pattern</th>
+<th>Represents</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>atom:&lt;atom_id&gt;</code></td>
+<td>One per atom (including superseded)</td>
+</tr>
+<tr>
+<td><code>source:&lt;source_id&gt;</code></td>
+<td>One per unique source document / ingest batch</td>
+</tr>
+<tr>
+<td><code>segment:&lt;container_id&gt;:&lt;segment_id&gt;</code></td>
+<td>One per chunk; container = source_id or session_id</td>
+</tr>
+<tr>
+<td><code>subject:&lt;normalized&gt;</code></td>
+<td>One per unique normalized subject string</td>
+</tr>
+<tr>
+<td><code>episode:&lt;date&gt;:&lt;session_id&gt;</code></td>
+<td>One per (day, session) pair; groups episodic atoms</td>
+</tr>
+<tr>
+<td><code>insight:&lt;id&gt;</code></td>
+<td>Serendipity agent connection atoms</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Edge types:</strong></p>
+<table>
+<thead>
+<tr>
+<th>Type</th>
+<th>Direction</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>atom_has_subject</code></td>
+<td>atom → subject</td>
+<td>Always present</td>
+</tr>
+<tr>
+<td><code>same_subject_as</code></td>
+<td>atom ↔ atom</td>
+<td>Bidirectional; same normalized subject</td>
+</tr>
+<tr>
+<td><code>source_contains_segment</code></td>
+<td>source → segment</td>
+<td>When atom has source_id + segment_id</td>
+</tr>
+<tr>
+<td><code>segment_contains_atom</code></td>
+<td>segment → atom</td>
+<td>When atom has segment_id</td>
+</tr>
+<tr>
+<td><code>supersedes</code></td>
+<td>new atom → old atom</td>
+<td>Written by <code>db.supersede()</code></td>
+</tr>
+<tr>
+<td><code>same_hash</code></td>
+<td>atom → atom</td>
+<td>Same <code>normalized_content_hash</code></td>
+</tr>
+<tr>
+<td><code>episode_contains_atom</code></td>
+<td>episode → atom</td>
+<td>Groups atoms under a temporal episode</td>
+</tr>
+<tr>
+<td><code>supports_semantic</code></td>
+<td>episodic atom → synthesis atom</td>
+<td>Consolidation pipeline; episodic → semantic tier</td>
+</tr>
+<tr>
+<td><code>enriches</code></td>
+<td>companion atom → source atom</td>
+<td>Ambient enrichment agent</td>
+</tr>
+<tr>
+<td><code>leads_to_idea</code></td>
+<td>atom ↔ insight atom</td>
+<td>Serendipity agent cross-domain connection</td>
+</tr>
+</tbody>
+</table>
+<p><strong>Sidecar files:</strong></p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>LATTICE_DIR/
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>  graph/
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>    nodes.jsonl       one JSON line per node {id, type, …attrs}
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>    edges.jsonl       one JSON line per edge {src, dst, type, key}
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>    manifest.json     {version, schema_version, atom_count, edge_count, built_at}
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>    migration.log     append-only log — one line per migration attempt {ts, migration, from_version, to_version, duration_ms, status}
+</code></pre></div>
+<p><code>preload()</code> loads sidecars when <code>manifest.atom_count</code> matches disk atom count; otherwise rebuilds from scratch. All writes are atomic (tempfile + rename).</p>
+<hr />
+<h2 id="key-design-invariants">Key design invariants<a class="headerlink" href="#key-design-invariants" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Local-only.</strong> No hosted service, no external DB. Everything in <code>LATTICE_DIR</code>.</li>
+<li><strong>Daemon is the sole writer.</strong> Only the daemon writes atom files and graph sidecars. MCP server and web UI are read-only clients. Atom writes are atomic (tempfile + rename), making reads always safe without locking.</li>
+<li><strong>Human-readable atoms.</strong> <code>.md</code> files can be hand-edited, deleted, or committed to git without breaking the server.</li>
+<li><strong>Committed snapshots.</strong> Selection reads stable graph/BM25 snapshots; it never waits for active ingest.</li>
+<li><strong>Superseded atoms stay on disk</strong> with <code>is_superseded=true</code> and bidirectional links. History is preserved, not deleted.</li>
+<li><strong>Expensive enrichment is optional.</strong> Embeddings, semantic relation enrichment, and hub labeling must remain off by default for Ollama users.</li>
+<li><strong>LLM calls are mockable at the module level.</strong> Ingest/supersession patch <code>lattice.ingest.complete</code>. Synthesis patches <code>lattice.synthesis.make_llm_client</code> (returns a mock OpenAI client) — not <code>lattice.llm.complete</code>. Selection has no LLM calls. Tests construct <code>Config(lattice_dir=tmp_path, llm_provider="ollama", llm_model="test-model")</code> directly; no env mutation via <code>monkeypatch.setenv</code> needed for function-level tests.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/amulyahwr/lattice" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.tabs.sticky", "navigation.sections", "navigation.expand", "navigation.top", "toc.follow", "search.highlight", "search.suggest", "content.code.copy", "content.code.annotate"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

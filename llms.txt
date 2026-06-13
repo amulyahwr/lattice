@@ -1,0 +1,40 @@
+# Lattice documentation index
+# Machine-readable index for AI tools and search crawlers
+
+> Lattice: local-first personal memory OS. Atoms as plain markdown. Daemon as sole writer. BM25 + graph BFS + dense retrieval. MCP tools for Claude Code.
+
+## Getting Started
+- [What is Lattice?](getting-started/what-is-lattice.md)
+- [Quick Install](getting-started/quick-install.md)
+- [First Memory](getting-started/first-memory.md)
+- [MCP Setup (Claude Code)](getting-started/mcp-setup.md)
+
+## Concepts
+- [Atoms](concepts/atoms.md)
+- [The Daemon](concepts/daemon.md)
+- [The Graph](concepts/graph.md)
+- [Capture Channels](concepts/capture-channels.md)
+- [Recall Pipeline](concepts/recall-pipeline.md)
+- [Memory Tiers](concepts/memory-tiers.md)
+
+## How-to Guides
+- [Set Up Telegram Bot](how-to/telegram-setup.md)
+- [Set Up Browser Extension](how-to/browser-extension.md)
+- [Auto-start on Login](how-to/launchd-autostart.md)
+- [Use with Claude Desktop](how-to/use-with-claude-desktop.md)
+- [Ingest Files](how-to/ingest-files.md)
+- [Export Your Memories](how-to/export-memories.md)
+- [Debug a Bad Answer](how-to/debug-bad-answer.md)
+
+## Reference
+- [CLI Reference](reference/cli.md)
+- [MCP Tools](reference/mcp-tools.md)
+- [Config (env vars)](reference/config.md)
+- [HTTP API](reference/api.md)
+- [Atom Schema](reference/atom-schema.md)
+- [Graph Schema](reference/graph-schema.md)
+
+## Contributing
+- [Architecture](contributing/architecture.md)
+- [Test Conventions](contributing/test-conventions.md)
+- [Roadmap](contributing/roadmap.md)
