@@ -564,7 +564,7 @@ Start only after Phase 2A exit criterion is met.
 **I want** Lattice to detect near-duplicate atoms across all sources,
 **so that** my atom store doesn't accumulate semantically identical facts with slightly different wording.
 
-**Background:** Content-hash dedup (exact) and subject-based supersession (same subject, LLM decides) cover common cases. The gap is same-meaning atoms with different wording and different subjects — e.g. "user dislikes mountains" (real-time) and "Amulya expressed strong preference against mountains" (session summary). Subject supersession doesn't fire because subjects differ. This story closes that gap.
+**Background:** Content-hash dedup (exact) and subject-based supersession (same subject, LLM decides) cover common cases. The gap is same-meaning atoms with different wording and different subjects — e.g. "user dislikes mountains" (real-time) and "user expressed strong preference against mountains" (session summary). Subject supersession doesn't fire because subjects differ. This story closes that gap.
 
 **Acceptance criteria:**
 - At ingest time, new atoms are embedded and compared against existing atom embeddings
@@ -1236,6 +1236,525 @@ Something new: Travel planning
 
 ---
 
+---
+
+### Epic 21 — Observability (Phase 2B, parallel track)
+
+#### STORY-041 · End-to-end query trace
+
+**As a** builder debugging why Lattice gave a wrong answer,
+**I want** a structured trace of every query — what was searched, what was found, what was used,
+**so that** I can pinpoint exactly where the pipeline went wrong without reading source code.
+
+**Trace schema (`LATTICE_DIR/traces.jsonl`):**
+```json
+{
+  "trace_id": "<uuid>",
+  "ts": "<ISO>",
+  "query_hash": "<sha1>",
+  "channel": "web|telegram|mcp",
+  "reformulated_hash": "<sha1>|null",
+  "bm25_seeds": [{"atom_id": "...", "score": 0.8}],
+  "dense_hits": [{"atom_id": "...", "score": 0.92}],
+  "bfs_expanded": ["atom_id"],
+  "final_atoms": ["atom_id"],
+  "cited_atoms": ["atom_id"],
+  "stage_ms": {"selection": 120, "reformulation": 0, "synthesis": 1400},
+  "no_answer": false,
+  "pii_protected": false
+}
+```
+
+**Acceptance criteria:**
+- `LATTICE_TRACE=true` → one JSON line appended to `traces.jsonl` per completed query
+- `LATTICE_TRACE=false` (default) → zero overhead; trace object never created
+- Query text is never logged — SHA-1 hash only. Atom IDs stored as-is (not sensitive).
+- OTel-compatible span structure — data is portable if user adds a local collector; no external dep required
+- `trace_id` flows from selection → synthesis; joinable with `feedback.jsonl` (which stores `atom_ids`) post-hoc
+- `GET /api/trace/{trace_id}` returns the matching trace line from `traces.jsonl`
+
+**Technical notes:**
+- New `lattice/trace.py` — `QueryTrace` dataclass + `TraceWriter.write(trace)`
+- `contextvars.ContextVar` for trace propagation through async paths
+- `selection.py`: populate `bm25_seeds`, `dense_hits`, `bfs_expanded`, `final_atoms`
+- `synthesis.py`: populate `cited_atoms` from citation map; set `no_answer` flag
+- `app.py`: generate `trace_id` per request; pass through handlers; write trace after synthesis completes; add `GET /api/trace/{trace_id}`
+- `config.py`: `LATTICE_TRACE: bool = False`
+- **Independent** — no story dependencies
+
+---
+
+#### STORY-043 · Structured failure logging + web UI debug panel
+
+**As a** power user debugging a bad answer,
+**I want** to see what Lattice searched, found, and where it struggled,
+**so that** I understand why an answer missed and can improve my atom store accordingly.
+
+**Named failure events (logged to `daemon.log` as structured JSON):**
+
+| Event | Trigger |
+|-------|---------|
+| `SELECTION_EMPTY` | Zero atoms returned for query |
+| `SYNTHESIS_NO_ANSWER` | `<<NO_INFO>>` sentinel detected |
+| `REFORMULATION_TRIGGERED` | Multi-turn reformulation fired; logs `{original_hash, reformulated_hash}` |
+| `INGEST_LLM_TIMEOUT` | Extraction LLM call took >30s |
+| `DEDUP_COLLISION` | Exact content hash match on ingest |
+| `PII_NER_FAILED` | NER call failed; fell back to regex-only |
+| `CONSOLIDATION_TRIGGERED` | Subject crossed threshold; synthesis atom written |
+
+**Web UI debug panel (`?debug=1` URL param):**
+- Visible only when `LATTICE_TRACE=true`
+- Collapsible section below each answer: `trace_id`, BM25 top-5 seeds with scores, dense hit count, BFS expansion count, final atom count, latency breakdown, reformulation flag, `pii_protected`
+- Fetches from `GET /api/trace/{trace_id}` after `done` SSE event
+
+**Telegram:** `/debug` — stats for last query: `trace_id · 6 atoms · BM25 top 0.82 · 1.4s`
+
+**`lc`:** `lc --verbose "query"` — selection breakdown printed after answer
+
+**Technical notes:**
+- Extend existing `daemon.log` JSON-lines logger with `event_type` field + named event constants
+- `app.js`: on `?debug=1`, after `done` SSE event, `fetch(/api/trace/{trace_id})` → render debug section
+- `telegram_bot.py`: store last `trace_id` in `context.chat_data`
+- **Depends on:** STORY-041
+
+---
+
+### Epic 22 — Self-evolving Lattice (Phase 2B, parallel track)
+
+#### STORY-042 · Atom quality scoring + recall tracking
+
+**As a** user who recalls memories daily,
+**I want** Lattice to learn which memories are genuinely useful and surface them first,
+**so that** the more I use it, the better it gets — without me curating anything.
+
+**New atom fields (all backward-compatible with default values):**
+
+| Field | Type | Default | Meaning |
+|-------|------|---------|---------|
+| `quality_score` | `float` | `1.0` | Seed score multiplier; floor `0.1`, cap `2.0` |
+| `recall_count` | `int` | `0` | Times cited in a synthesis response |
+| `last_recalled_at` | `datetime\|None` | `None` | Most recent citation timestamp |
+| `tier` | `str` | `"episodic"` | `stm \| episodic \| semantic` |
+
+**Quality signal rules (applied async after feedback resolves):**
+
+| Signal | Delta |
+|--------|-------|
+| Cited + rating 👍 | `+0.1` |
+| Retrieved but not cited (repeated pattern) | `−0.05` |
+| Cited + rating 👎 + reason "wrong sources" | `−0.2` |
+
+**STM tier:**
+- Atom written with `ingested_at < 48h` AND `recall_count == 0` → `tier=stm`
+- STM atoms get ×0.9 multiplier in seed scoring
+- Upgraded to `tier=episodic` on first citation in a synthesis response
+
+**Acceptance criteria:**
+- New atoms start `quality_score=1.0`, `tier=stm` if fresh
+- After first 👍 citation: `quality_score=1.1`, `tier=episodic`, `recall_count=1`
+- `quality_score` floor of `0.1` — atom never fully excluded from retrieval
+- Selection uses `bm25_score × quality_score` for seed ranking
+- Old atoms without the new fields read as defaults — no migration needed
+
+**Technical notes:**
+- `models.py`: add four fields with defaults
+- `db.py`: `update_quality(atom_id, delta)` and `record_recall(atom_id)` — both behind `self._lock`
+- `synthesis.py`: after citation map built, call `db.record_recall(atom_id)` for each cited atom
+- `app.py`: `POST /api/feedback` handler resolves `atom_ids` → calls `db.update_quality()`
+- **Depends on:** STORY-041 (trace provides `cited_atoms` for quality update path)
+
+---
+
+### Epic 23 — Memory hygiene (Phase 2B, parallel track)
+
+#### STORY-044 · User-initiated archival
+
+**As a** user with years of captured memories,
+**I want** to archive atoms that no longer feel relevant without deleting them,
+**so that** active recall stays clean while my full history is always recoverable.
+
+**Design principles:**
+- Archival is always user-initiated — never automatic
+- Archived atoms move to `LATTICE_DIR/archive/` — excluded from BM25, graph, and selection
+- Archived atoms remain on disk, included in `lattice export --all`, fully recoverable via `unarchive`
+- System only suggests; user decides
+
+**Commands:**
+- `lattice archive <atom_id>` — archive one atom
+- `lattice archive --suggest` — candidates: `quality_score < 0.3` AND `last_recalled_at > 365 days ago` AND not superseded
+- `lattice archive --subject <subject>` — archive all atoms for a subject (prompts confirmation)
+- `lattice unarchive <atom_id>` — restore to active store
+
+**Web UI:** right-click atom in "Recent memories" → "Archive"
+
+**`lc`:** `lc archive <atom_id>`
+
+**Acceptance criteria:**
+- Archived atom: moved to `archive/`, removed from `_atom_cache`, BM25 cache invalidated, graph nodes/edges removed
+- Unarchived atom: restored to `LATTICE_DIR`, re-added to cache and graph
+- `lattice export` excludes archive by default; `--all` includes it
+- `--suggest` output sorted by lowest `quality_score` first; shows `last_recalled_at` and `kind` per atom
+
+**Technical notes:**
+- `LatticeDB.archive(atom_id)` and `LatticeDB.unarchive(atom_id)` — both behind `self._lock`
+- New `lattice/archive.py` — `suggest_candidates(db)`, `batch_archive(db, atom_ids)`
+- New `lattice-archive` entry point in `pyproject.toml`
+- **Depends on:** STORY-042 (`quality_score` + `last_recalled_at` for suggestion heuristic)
+
+---
+
+### Epic 24 — Biological memory model (Phase 3)
+
+#### STORY-045 · Episode nodes — episodic memory grouping
+
+**As a** user who remembers "that conversation last Tuesday about the database decision",
+**I want** to ask "what was I thinking about last Tuesday?" and get a coherent answer,
+**so that** I can recall by context and time, not just by subject.
+
+**New graph elements:**
+- Node type: `episode:<date>:<session_id>` — one per (session, day) pair
+- Node attributes: `{date, session_id, source_id, atom_count, subjects: list[str]}`
+- Edge type: `episode_contains_atom` (episode → atom)
+- New atom field: `episode_id: str | None` — derived as `f"{observed_at.date()}:{session_id}"`
+
+**Episode formation:**
+- Atoms sharing the same `session_id` AND `observed_at.date()` → same episode node
+- Episode node created on first atom write for a session/day; updated incrementally thereafter
+
+**Episodic query path:**
+- `query.py`: `QueryIntent` gains `episodic: bool` flag
+- Detection: query contains date references ("last Tuesday", "yesterday", "last week", "that conversation")
+- `selection.py`: `_episode_retrieve(date_ref, db)` finds matching episode nodes → `episode_contains_atom` edges → atom pack → synthesis
+- Falls back to standard BM25 path if no episode matches
+
+**Acceptance criteria:**
+- Atoms from same session/day linked to shared episode node in graph
+- "What was I thinking about last Tuesday?" returns atoms from that date's episode(s)
+- Episode nodes persist in `nodes.jsonl` across graph rebuilds
+- Old atoms without `episode_id` default to `None` — no migration needed
+
+**Technical notes:**
+- `graph.py`: `add_episode_atom(episode_id, atom_id, date, session_id, subjects)` — idempotent
+- `ingest.py`: derive `episode_id` post-extraction; pass to graph
+- `models.py`: `episode_id: str | None = None`
+- **Depends on:** nothing new — extends existing graph infrastructure
+
+---
+
+#### STORY-046 · Consolidation pipeline — semantic memory emergence
+
+**As a** user who has captured many things about the same topic over months,
+**I want** Lattice to distill what I know into a richer, layered understanding,
+**so that** asking about a familiar topic gives a better answer than asking about something I've touched once.
+
+**Core constraint: LLM-free by default. Zero background credit consumption for cloud users.**
+
+**Trigger (event-driven, not cron):**
+- Called from `ingest.py` after every `db.write()` — checks if subject crossed a threshold
+- Thresholds: 3 atoms → create; 5, 10, 20 atoms → update
+- Threshold state tracked in `subjects.json` metadata to avoid re-triggering
+
+**Default path — extractive (zero LLM):**
+1. Sort subject's episodic atoms by `quality_score × recency_weight`; take top-3
+2. Join their `content` fields: `"{c1}. {c2}. {c3}."`
+3. Write `kind=synthesis` atom: `subject`, `source_id="lattice-consolidation"`, `tier=semantic`, `quality_score=1.5`
+4. Supersede previous synthesis atom for same subject (normal supersession path)
+5. Create `supports_semantic` edges: episodic atoms → synthesis atom
+
+**Opt-in generative path (Ollama only):**
+- `LATTICE_CONSOLIDATE_ENRICH=true` (default `false`)
+- Only runs when `LLM_PROVIDER=ollama` — skipped for all cloud providers with a log warning
+- LLM rewrites extractive content into coherent prose using `INGEST_MODEL`
+
+**In selection:** `kind=synthesis` atoms get `quality_score × 1.5` boost. Sources panel label: "consolidated memory · N sources".
+
+**Acceptance criteria:**
+- At 3 episodic atoms for a subject → synthesis atom created with `tier=semantic`
+- Cloud provider: zero LLM calls from consolidation regardless of any setting
+- `LATTICE_CONSOLIDATE_ENRICH=true` on cloud → warning logged, extractive path used silently
+- Synthesis atom updates (supersedes previous) at each threshold crossing
+
+**Technical notes:**
+- New `lattice/consolidation.py` — `check_consolidation(db, subject, cfg)` — synchronous, cheap
+- Called from `persist_atoms()` in `ingest.py` after each successful write
+- `graph.py`: new `supports_semantic` edge type
+- `models.py`: `tier=semantic`, `kind=synthesis` new values
+- `config.py`: `LATTICE_CONSOLIDATE_ENRICH: bool = False`
+- **Depends on:** STORY-042 (`quality_score` for atom ranking), STORY-045 (episode context)
+
+---
+
+#### STORY-047 · Serendipity agent — cross-domain connection discovery
+
+**As a** user with memories across many different areas of life,
+**I want** Lattice to surface unexpected connections between things I know from different domains,
+**so that** my second brain helps me notice patterns I couldn't see alone.
+
+**Algorithm:**
+1. Take top-50 atoms by `recall_count` (atoms you actually use)
+2. Find K nearest neighbors in dense embedding space (`cosine_similarity > 0.75`)
+3. Filter: keep only pairs with zero graph overlap (no shared subjects via 3-hop BFS)
+4. For qualifying pairs: generate `kind=insight` atom via LLM: *"These two memories share an unexpected link: ..."*
+5. Link both source atoms via bidirectional `leads_to_idea` edges
+
+**Surface:**
+- Web UI: "Lattice found a connection" card (same visual pattern as Memory Sparks)
+- Telegram: prepended to first message of the day when new insight available
+- Max 1 connection surfaced per day per channel
+
+**Constraints:**
+- `LATTICE_SERENDIPITY=true` to enable (default `false`)
+- Requires `fastembed` — silently disabled if absent
+- Max 3 LLM calls per day for insight generation (cloud or Ollama)
+- `kind=synthesis` atoms excluded from seeds — too broad for specific insights
+- Lowest-priority daemon thread; never runs during active ingest or synthesis
+
+**Technical notes:**
+- New `lattice/serendipity.py` — `SerendipityAgent`; spawned as daemon background thread
+- `embed.py`: extend with `nearest_neighbors_batch(atom_ids, top_k, threshold)`
+- `graph.py`: new `leads_to_idea` edge type; `insight:<id>` node type
+- `models.py`: `kind=insight` new value
+- `config.py`: `LATTICE_SERENDIPITY: bool = False`
+- `app.py`: new `GET /api/insights/latest`
+- **Depends on:** STORY-042 (`recall_count`), STORY-046 (semantic atoms excluded), fastembed
+
+---
+
+### Epic 25 — Privacy-preserving telemetry (Phase 2B, parallel track)
+
+#### STORY-048 · Anonymous aggregate telemetry + debug bundle
+
+**As a** Lattice developer,
+**I want** opt-in performance signal from real users — failure rates, latency distributions, rating patterns —
+**so that** I can prioritise fixes and improvements without ever seeing user content.
+
+**As a** Lattice user filing a bug report,
+**I want** a single command that produces a sanitised debug bundle,
+**so that** I can share enough context for the developer to diagnose the issue without sharing my personal memories.
+
+---
+
+**Tier 0 — default: nothing leaves the machine.**
+All three files (`usage.jsonl`, `traces.jsonl`, `feedback.jsonl`) remain local. No network calls. No change to existing behaviour.
+
+---
+
+**Tier 1 — opt-in: anonymous aggregate telemetry**
+
+Enabled by `LATTICE_TELEMETRY=true` (default `false`). Shown once as a prompt in `lattice setup`:
+
+> *"Help improve Lattice — share anonymous performance metrics: query counts, latency, failure rates, rating distributions. No query text. No atom content. No personal data. Disable anytime with `LATTICE_TELEMETRY=false`."*
+
+**What is sent (computed locally, sent as a single JSON object):**
+```json
+{
+  "lattice_version": "...",
+  "os": "macOS",
+  "model_name": "qwen3:4b",
+  "provider": "ollama",
+  "atom_count_bucket": "100-500",
+  "queries_last_7d": 23,
+  "avg_selection_ms": 140,
+  "avg_synthesis_ms": 1800,
+  "selection_empty_rate": 0.04,
+  "no_answer_rate": 0.12,
+  "rating_up_rate": 0.78,
+  "failure_reasons": {"wrong_sources": 3, "inaccurate": 1},
+  "channel_breakdown": {"web": 15, "telegram": 6, "mcp": 2},
+  "reformulation_rate": 0.09
+}
+```
+
+**What is never sent:** query text, answer text, atom content, atom IDs, API keys, file paths.
+
+**Mechanics:**
+- Daemon computes aggregates from `usage.jsonl`, `traces.jsonl`, and stripped `feedback.jsonl` on startup
+- Sends once per day at most; skips if no new queries since last send
+- `LATTICE_TELEMETRY_ENDPOINT` env var overrides the default endpoint (for self-hosted or air-gapped deployments)
+- The receiving endpoint (Cloudflare Worker) is open source and verifiable — users can inspect what it accepts
+
+---
+
+**Tier 2 — explicit, per-incident: sanitised debug bundle**
+
+`lattice debug export` → `lattice-debug-{YYYY-MM-DD}.zip`
+
+Created manually by the user to attach to a GitHub issue. The command prints what will be included and requires confirmation before writing.
+
+**Bundle contents:**
+
+| File | Treatment |
+|------|-----------|
+| `traces.jsonl` | Included as-is — query hashed, atom IDs only, no content |
+| `usage.jsonl` | Included as-is — query hashed, no content |
+| `feedback_sanitised.jsonl` | `question` and `answer` fields removed; `atom_ids` replaced with positional hashes (`atom_0`, `atom_1`…); `rating`, `reason`, `ts`, `channel` kept |
+| `system_info.json` | OS, Python version, model name, provider, atom count bucket, Lattice version |
+
+**What is never included:** atom `.md` files, `.env` / config with API keys, LATTICE_DIR contents, raw query or answer text.
+
+**Acceptance criteria:**
+- `LATTICE_TELEMETRY=false` (default) → zero network calls from daemon; no change to any existing behaviour
+- `LATTICE_TELEMETRY=true` → aggregate JSON sent at most once per 24h; fails silently if network unavailable (no retry storm)
+- Aggregate computation is deterministic — same inputs always produce same output
+- `lattice debug export` prints bundle path on completion; confirms what will be included before writing
+- Bundle can be generated without the daemon running
+- `feedback_sanitised.jsonl` contains zero raw text fields — verified by unit test
+
+**Technical notes:**
+- New `lattice/telemetry_export.py`:
+  - `compute_aggregates(cfg) → dict` — reads all three files; bucket atom count; compute rates and distributions
+  - `upload_telemetry(aggregates, endpoint) → bool` — `urllib.request` POST; stdlib only; no new deps
+  - `sanitize_feedback_record(record) → dict` — strips `question`, `answer`; replaces atom_ids with positional labels
+  - `generate_debug_bundle(cfg) → Path` — creates `.zip` via stdlib `zipfile`; sanitises feedback in-memory before writing
+- `daemon.py`: schedule `upload_telemetry` daily if `LATTICE_TELEMETRY=true`; track last-sent timestamp in `LATTICE_DIR/.telemetry_sent`
+- `config.py`: `LATTICE_TELEMETRY: bool = False`, `LATTICE_TELEMETRY_ENDPOINT: str = "https://telemetry.lattice.dev"`
+- New `lattice-debug` entry point in `pyproject.toml` → `lattice.telemetry_export:cli`
+- **Independent** — no story dependencies; stdlib only
+
+---
+
+### Epic 26 — Graph schema versioning + safe migration (Phase 2B, parallel track)
+
+#### STORY-049 · Graph schema versioning + migration runner
+
+**As a** Lattice developer shipping new node types, edge types, or atom fields,
+**I want** a versioned migration system that upgrades users' local graphs automatically on startup,
+**so that** new graph capabilities work correctly for historical atoms without corrupting existing data.
+
+**As a** Lattice user upgrading to a new version,
+**I want** my memory graph to update itself transparently,
+**so that** I never see corrupted state, broken queries, or data loss after an upgrade.
+
+---
+
+**Background — three categories of graph change:**
+
+| Category | Example | Risk | Handled by |
+|----------|---------|------|-----------|
+| New atom field with default | `quality_score`, `tier` | Zero — Pydantic defaults | Nothing needed |
+| New node/edge type | `episode_contains_atom` | Incomplete (old atoms lack new edges) | Optional backfill migration |
+| Structural change to existing records | Renamed node attribute | Corruption if unhandled | Mandatory migration |
+
+**The safety invariant:** atoms (`.md` files) are ground truth. The graph is a derived index. It can always be fully rebuilt from atoms — unlike a traditional database, no information lives only in the graph sidecars.
+
+---
+
+**Schema versioning:**
+
+`manifest.json` gains `schema_version: int`:
+```json
+{
+  "version": "1",
+  "schema_version": 2,
+  "atom_count": 1243,
+  "edge_count": 4891,
+  "built_at": "..."
+}
+```
+
+`graph.py` defines `CURRENT_SCHEMA_VERSION: int`. On `db.preload()`, if `manifest.schema_version < CURRENT_SCHEMA_VERSION` → `MigrationRunner.run_pending(db, cfg)`.
+
+---
+
+**Migration modules (`lattice/migrations/`):**
+
+Each module exposes:
+```python
+SCHEMA_VERSION = 2           # the version this migration produces
+DESCRIPTION = "backfill episode nodes"
+def run(db: LatticeDB, cfg: Config) -> None: ...
+```
+
+Initial migrations shipped with this story:
+
+| Module | Version | What it does |
+|--------|---------|-------------|
+| `m001_base.py` | 1 | No-op; establishes v1 baseline for existing installs |
+| `m002_episode_nodes.py` | 2 | Reads all atoms; groups by `(observed_at.date, session_id)`; creates episode graph nodes + `episode_contains_atom` edges for historical atoms |
+
+Future migrations (written when the relevant story ships):
+- `m003_consolidation.py` — runs consolidation pipeline over all subjects with ≥3 atoms; creates `kind=synthesis` atoms and `supports_semantic` edges
+
+---
+
+**Migration principles (all enforced in `MigrationRunner`):**
+1. **Additive only** — migrations never remove nodes, edges, or atom fields
+2. **Idempotent** — running a migration twice produces the same result as running it once
+3. **Pre-migration backup** — `graph/` copied to `graph.backup.v{N}/` before each migration; restored automatically on failure
+4. **Non-fatal** — failed migration logged to `migration.log`; daemon starts in degraded mode with a warning; never blocks startup indefinitely
+5. **No network** — all migrations derive from local atom `.md` files only
+6. **Lazy atom field migration** — never rewrite `.md` files during migration; Pydantic defaults handle reading old atoms; new fields land on disk only when the atom is next updated naturally
+
+---
+
+**Large store handling:**
+- Migrations run in a background thread after the web UI is available
+- During migration: queries fall back to the pre-migration graph (correct, just missing new edges)
+- After migration completes: daemon reloads graph; web UI picks up new structure on next query
+- Progress logged to `migration.log` every 100 atoms: `"m002: 743/1243 atoms processed (60%)"`
+
+---
+
+**CLI commands:**
+
+`lattice graph rebuild`
+- Force full graph rebuild from all atom `.md` files
+- Ignores existing sidecars; re-derives everything from scratch
+- Always safe (atoms are ground truth); slow for large stores
+- Use after: failed migration, hand-edited atoms, imported atoms from another instance
+- Prints: `"Rebuilt graph from 1,243 atoms in 8.4s. 4,891 edges."`
+
+`lattice graph status`
+- Prints: schema version, atom count, edge count, pending migrations (if any)
+- Does not require daemon to be running (reads sidecars directly)
+
+---
+
+**User experience during migration:**
+```
+Lattice v0.8.0 starting...
+Memory graph needs updating (schema v1 → v2)...
+  Backed up graph/ → graph.backup.v1/
+  Running m002_episode_nodes (background)...
+Web UI ready at http://localhost:7337
+  [m002] 1,243 atoms processed — 847 episode nodes created (4.2s)
+  Graph updated to schema v2.
+```
+
+---
+
+**Versioning policy going forward:**
+
+| Change | Schema bump? | Migration type |
+|--------|-------------|---------------|
+| New optional atom field with default | No | None — Pydantic handles |
+| New node/edge type | Minor (x.y → x.y+1) | Optional backfill |
+| New attribute on existing node/edge type | Minor | Backfill attribute |
+| Renamed field / structural change | Major (x → x+1) | Mandatory; announced in release notes |
+
+Major schema bumps should be rare and explicitly announced. Minor bumps are transparent to users.
+
+---
+
+**Acceptance criteria:**
+- Fresh install: `manifest.schema_version` written as `CURRENT_SCHEMA_VERSION` on first graph write
+- Existing install upgrading: migrations run automatically; `graph.backup.v{N}/` created before each
+- Failed migration: graph restored from backup; daemon starts in degraded mode; warning shown in web UI header and logged to `migration.log`
+- `lattice graph rebuild` produces identical graph structure as a fresh ingest of the same atoms
+- `lattice graph status` works without daemon running
+- `m002_episode_nodes` is idempotent — running twice creates no duplicate episode nodes
+- Atom `.md` files are never modified by any migration
+
+**Technical notes:**
+- New `lattice/migrations/__init__.py` — `MigrationRunner`: discovers numbered modules by convention, runs pending in order, handles backup/restore, updates `schema_version` in manifest on success
+- `graph.py`: add `CURRENT_SCHEMA_VERSION = 2`; `preload()` calls `MigrationRunner.run_pending()` when version mismatch detected
+- `manifest.json`: add `schema_version` field; `preload()` defaults to `1` if field absent (existing installs)
+- New `LATTICE_DIR/migration.log` — append-only, one line per migration attempt: `{ts, migration, from_version, to_version, duration_ms, status, error}`
+- `lattice/cli.py`: add `graph rebuild` and `graph status` subcommands
+- **Depends on:** STORY-045 (episode nodes — defines what `m002` backfills). Independent otherwise.
+
+---
+
 ## Dependency map
 
 ```
@@ -1273,10 +1792,19 @@ Phase 2B ordering
 ├── STORY-037 (user taste profile) — depends on STORY-013 ✅, STORY-027 ✅
 ├── STORY-038 (ambient enrichment agent) — depends on STORY-037; Phase 3
 ├── STORY-039 (multi-turn reformulation) — depends on STORY-024 ✅; independent otherwise
-└── STORY-040 (full context management) — depends on STORY-039; Phase 3
-
+├── STORY-040 (full context management) — depends on STORY-039; Phase 3
+├── STORY-041 (end-to-end query trace) — independent, parallel; LATTICE_TRACE=false default
+├── STORY-042 (atom quality scoring + recall tracking) — depends on STORY-041
+├── STORY-043 (structured failure logging + debug panel) — depends on STORY-041
+├── STORY-044 (user-initiated archival) — depends on STORY-042
+├── STORY-048 (anonymous telemetry + debug bundle) — independent, parallel; stdlib only; default off
+├── STORY-049 (graph schema versioning + migration runner) — depends on STORY-045 (episode nodes define m002 backfill); independent otherwise
+│
 Phase 3 (deferred)
-└── STORY-021 (Telegram voice notes)      ← after mobile habit validated
+├── STORY-021 (Telegram voice notes)      ← after mobile habit validated
+├── STORY-045 (episode nodes — episodic recall) — extends graph; independent otherwise
+├── STORY-046 (consolidation pipeline — semantic memory) — depends on STORY-042, STORY-045
+└── STORY-047 (serendipity agent — cross-domain connections) — depends on STORY-042, STORY-046; requires fastembed
 ```
 
 ---
@@ -1324,7 +1852,7 @@ When the user asks a self-contained question (`is_followup = False`), the server
 
 - Server: when `is_followup(query) = False`, include `"context_reset": true` in the SSE `atoms` event
 - Client: on receiving `context_reset`, clear `conversationHistory` silently — no toast, no UI change
-- Effect: "What do I know about Postgres?" after a Shivika conversation automatically resets context. The next follow-up ("when did I start using it?") correctly resolves to Postgres, not Shivika.
+- Effect: "What do I know about Postgres?" after a Alex conversation automatically resets context. The next follow-up ("when did I start using it?") correctly resolves to Postgres, not Alex.
 - `conversationHistory` is topic-scoped, not time-scoped
 
 ---
@@ -1345,7 +1873,7 @@ When the user asks a self-contained question (`is_followup = False`), the server
 On first page load, show what's been happening — no buttons to click:
 
 ```
-14 days deep  ·  5 new things saved  ·  You've been thinking about: Postgres, Shivika Garg
+14 days deep  ·  5 new things saved  ·  You've been thinking about: Postgres, Alex Chen
 ```
 
 - Single quiet strip above spark cards — not a card with choices
@@ -1364,7 +1892,7 @@ The sidebar "Recent memories" panel gains a **"Today's journey"** section at the
 ```
 Today's journey
 
-  ● Shivika Garg
+  ● Alex Chen
   │  ├── her email address        8m ago
   │  ├── colleges attended        5m ago
   │  └── work 2019–2021          2m ago
@@ -1389,7 +1917,7 @@ Recent memories
 - New endpoint: `GET /api/chat/today` — returns today's `chat.jsonl` entries for web channel (used on page load to rebuild tree from prior turns in the same day)
 
 **Why graph-derived beats chronological:**
-A flat list shows *when* — the tree shows *where you went*. Depth (3 questions under Shivika) signals engagement. Branches signal topic shifts. The structure emerges from the graph, not from manual categorisation. No other memory app can do this because none have a subject graph underneath.
+A flat list shows *when* — the tree shows *where you went*. Depth (3 questions under Alex) signals engagement. Branches signal topic shifts. The structure emerges from the graph, not from manual categorisation. No other memory app can do this because none have a subject graph underneath.
 
 ---
 
@@ -1440,8 +1968,8 @@ When the oldest cited atom is ≥ 30 days old, add one quiet line below the answ
 |---|---|---|---|---|---|
 | Context reset on topic shift | ✅ `context_reset` SSE signal clears JS history | ✅ server already skips reformulation; `qa_history` in `chat_data` cleared when `is_followup=False` | — (atomic, no context) | — (Claude owns context) | — (capture only) |
 | Auto-save threads | ✅ daemon sweep of `chat.jsonl` | ✅ same sweep covers telegram channel entries | — | — | — |
-| Opening strip | ✅ on page load | ✅ first message of day: `"Today you've explored: Shivika Garg, Postgres. 5 new things saved."` prepended before reply | ✅ `lc status` appends: `"Today's journey: Shivika Garg (3 questions), Postgres (1 question)"` | — | — |
-| Journey path / tree | ✅ graph-derived CSS tree in sidebar | ✅ `/journey` command: text-format tree `"● Shivika Garg\n  └── email, colleges\n● Postgres\n  └── connection pooling"` | — | — | — |
+| Opening strip | ✅ on page load | ✅ first message of day: `"Today you've explored: Alex Chen, Postgres. 5 new things saved."` prepended before reply | ✅ `lc status` appends: `"Today's journey: Alex Chen (3 questions), Postgres (1 question)"` | — | — |
+| Journey path / tree | ✅ graph-derived CSS tree in sidebar | ✅ `/journey` command: text-format tree `"● Alex Chen\n  └── email, colleges\n● Postgres\n  └── connection pooling"` | — | — | — |
 | Curiosity chips | ✅ clickable chips below answer | ✅ after `/ask` answer: `"You also know about: PgBouncer, connection pooling — reply /ask <topic> to explore"` | — | ✅ `related_subjects` field added to `lattice_answer` return value — Claude can optionally follow up | — |
 | Rediscovery timestamp | ✅ quiet line below answer | ✅ already shipped (STORY-032 ✅) | — | — | — |
 

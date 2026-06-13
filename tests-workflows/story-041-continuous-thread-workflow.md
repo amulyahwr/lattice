@@ -227,14 +227,14 @@ In the web UI, run a two-topic conversation:
 
 1. Ask: `Tell me about my Postgres decisions`
 2. Ask: `when did I make that call?` ← follow-up, no reset
-3. Ask: `What do I know about Shivika Garg?` ← topic shift, should reset
+3. Ask: `What do I know about Alex Chen?` ← topic shift, should reset
 
 After step 3, open DevTools → Console:
 ```javascript
 conversationHistory
 ```
 
-Expected: array has only the Shivika Garg turn (the Postgres turns were cleared silently when
+Expected: array has only the Alex Chen turn (the Postgres turns were cleared silently when
 `context_reset: true` arrived in the SSE atoms event).
 
 Also confirm in `chat.jsonl`:
@@ -242,7 +242,7 @@ Also confirm in `chat.jsonl`:
 tail -5 ~/.lattice/chat.jsonl | python3 -m json.tool
 ```
 
-All 3 turns should be recorded. No entry for "reformulated_query" on the Shivika question
+All 3 turns should be recorded. No entry for "reformulated_query" on the Alex question
 (it was self-contained, not a follow-up).
 
 ---
@@ -261,7 +261,7 @@ After Phase 6 (3 queries made), look at the left sidebar (atoms panel).
   │   └── Tell me about my Postgr…    5m ago
   │   └── when did I make that ca…    4m ago
 
-  ● Shivika Garg
+  ● Alex Chen
       └── What do I know about Sh…    2m ago
   ```
 - Clicking a branch label (`● Postgres`) → pre-fills `"Tell me about Postgres"` in input
@@ -372,7 +372,7 @@ Send any message to the bot (first interaction of the day).
 - Bot sends an extra message first, before the normal response:
   ```
   14 days deep · 284 things saved
-  Today you've been thinking about: Postgres, Shivika Garg
+  Today you've been thinking about: Postgres, Alex Chen
   ```
 - Only shown once per day (tracked via `bot_data["opening_strip_YYYY-MM-DD"]`)
 - On subsequent messages the same day: no strip prepended
@@ -390,7 +390,7 @@ lc status
 **Expected output includes:**
 ```
 284 memories · Topics: Postgres, React · 14 days deep
-Today's journey: Postgres (2 questions), Shivika Garg (1 question)
+Today's journey: Postgres (2 questions), Alex Chen (1 question)
 ```
 
 The "Today's journey" line only appears if chat.jsonl has entries for today's date.

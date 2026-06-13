@@ -1,0 +1,94 @@
+site_name: Lattice
+site_description: Local-first personal memory OS — structured, private, always running
+site_url: https://amulyahwr.github.io/lattice
+repo_url: https://github.com/amulyahwr/lattice
+repo_name: amulyahwr/lattice
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.tabs.sticky
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - toc.follow
+    - search.highlight
+    - search.suggest
+    - content.code.copy
+    - content.code.annotate
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+  - tables
+  - attr_list
+  - md_in_html
+  - def_list
+  - footnotes
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - What is Lattice?: getting-started/what-is-lattice.md
+    - Quick Install: getting-started/quick-install.md
+    - First Memory: getting-started/first-memory.md
+    - MCP Setup (Claude Code): getting-started/mcp-setup.md
+  - Concepts:
+    - Atoms: concepts/atoms.md
+    - The Daemon: concepts/daemon.md
+    - The Graph: concepts/graph.md
+    - Capture Channels: concepts/capture-channels.md
+    - Recall Pipeline: concepts/recall-pipeline.md
+    - Memory Tiers: concepts/memory-tiers.md
+  - How-to Guides:
+    - Set Up Telegram Bot: how-to/telegram-setup.md
+    - Set Up Browser Extension: how-to/browser-extension.md
+    - Auto-start on Login: how-to/launchd-autostart.md
+    - Use with Claude Desktop: how-to/use-with-claude-desktop.md
+    - Ingest Files: how-to/ingest-files.md
+    - Export Your Memories: how-to/export-memories.md
+    - Debug a Bad Answer: how-to/debug-bad-answer.md
+  - Reference:
+    - CLI Reference: reference/cli.md
+    - MCP Tools: reference/mcp-tools.md
+    - Config (env vars): reference/config.md
+    - HTTP API: reference/api.md
+    - Atom Schema: reference/atom-schema.md
+    - Graph Schema: reference/graph-schema.md
+  - Contributing:
+    - Architecture: contributing/architecture.md
+    - Test Conventions: contributing/test-conventions.md
+    - Roadmap: contributing/roadmap.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/amulyahwr/lattice
